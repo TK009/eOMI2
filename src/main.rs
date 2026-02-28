@@ -10,16 +10,18 @@ use esp_idf_svc::{
 };
 use log::{info, warn};
 
-// Wi-Fi credentials — compile-time constants for now.
-// TODO: move to NVS or a config portal
-const WIFI_SSID: &str = "YOUR_SSID";
-const WIFI_PASS: &str = "YOUR_PASSWORD";
+const WIFI_SSID: &str = env!("WIFI_SSID");
+const WIFI_PASS: &str = env!("WIFI_PASS");
 
 fn main() -> Result<()> {
     // Link ESP-IDF patches and initialize logging
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
+    println!("\n\n========================================");
+    println!("  Reconfigurable Device v0.1.0");
+    println!("  Serial port OK!");
+    println!("========================================\n");
     info!("Reconfigurable device starting...");
 
     // Initialize peripherals

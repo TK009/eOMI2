@@ -9,7 +9,7 @@ use super::value::{RingBuffer, Value};
 /// An InfoItem in the O-DF object tree.
 ///
 /// Holds a named measurement or control point with a history of timestamped values.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "json", derive(Serialize, Deserialize))]
 pub struct InfoItem {
     #[cfg_attr(feature = "json", serde(rename = "type", skip_serializing_if = "Option::is_none"))]

@@ -8,7 +8,7 @@ use super::item::InfoItem;
 /// An Object node in the O-DF hierarchy.
 ///
 /// Contains child Objects and InfoItems. Mirrors the OMI-Lite JSON structure.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "json", derive(Serialize, Deserialize))]
 pub struct Object {
     pub id: String,

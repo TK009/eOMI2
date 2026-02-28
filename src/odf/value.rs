@@ -6,7 +6,7 @@ use serde::ser::SerializeSeq;
 use super::OmiValue;
 
 /// A timestamped value in the OMI data model.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "json", derive(Serialize, Deserialize))]
 pub struct Value {
     pub v: OmiValue,
@@ -34,7 +34,7 @@ impl Value {
 ///
 /// Overwrites oldest entries when full. Provides efficient O(1) insertion
 /// and query methods returning newest-first ordering as the OMI spec requires.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RingBuffer {
     buf: Vec<Value>,
     /// Index where the next push will write. When `len == capacity`, this

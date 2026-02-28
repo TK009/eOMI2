@@ -5,11 +5,13 @@ use super::item::InfoItem;
 use super::object::Object;
 use super::OmiValue;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum TreeError {
     NotFound(String),
     Forbidden(String),
     InvalidPath(String),
+    #[cfg(feature = "json")]
+    SerializationError(String),
 }
 
 impl fmt::Display for TreeError {
@@ -18,6 +20,8 @@ impl fmt::Display for TreeError {
             TreeError::NotFound(msg) => write!(f, "Not found: {}", msg),
             TreeError::Forbidden(msg) => write!(f, "Forbidden: {}", msg),
             TreeError::InvalidPath(msg) => write!(f, "Invalid path: {}", msg),
+            #[cfg(feature = "json")]
+            TreeError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
         }
     }
 }
@@ -25,6 +29,7 @@ impl fmt::Display for TreeError {
 impl std::error::Error for TreeError {}
 
 /// Immutable reference to a resolved path target.
+#[derive(Debug)]
 pub enum PathTarget<'a> {
     Root(&'a BTreeMap<String, Object>),
     Object(&'a Object),
@@ -39,6 +44,13 @@ pub enum PathTargetMut<'a> {
 }
 
 /// Parse a path string into segments. Validates the path.
+///
+/// - The path must start with `/`.
+/// - `".."` segments are rejected.
+/// - Empty segments (from double slashes or trailing slashes) are rejected.
+///   Note: trailing slashes like `"/DeviceA/"` produce an empty last segment
+///   and will return `InvalidPath`. Callers should strip trailing slashes
+///   before calling this function if they want to tolerate them.
 fn parse_path(path: &str) -> Result<Vec<&str>, TreeError> {
     if !path.starts_with('/') {
         return Err(TreeError::InvalidPath(
@@ -58,7 +70,7 @@ fn parse_path(path: &str) -> Result<Vec<&str>, TreeError> {
     for seg in &segments {
         if seg.is_empty() {
             return Err(TreeError::InvalidPath(
-                "Empty segment (double slash)".into(),
+                "Empty segment (double slash or trailing slash)".into(),
             ));
         }
         if *seg == ".." {
@@ -74,12 +86,25 @@ fn parse_path(path: &str) -> Result<Vec<&str>, TreeError> {
 /// The root object tree. Entry point for path-based operations.
 pub struct ObjectTree {
     pub objects: BTreeMap<String, Object>,
+    /// Default ring buffer capacity for auto-created InfoItems.
+    pub default_capacity: usize,
 }
+
+/// Default ring buffer capacity for auto-created InfoItems.
+const DEFAULT_ITEM_CAPACITY: usize = 100;
 
 impl ObjectTree {
     pub fn new() -> Self {
         Self {
             objects: BTreeMap::new(),
+            default_capacity: DEFAULT_ITEM_CAPACITY,
+        }
+    }
+
+    pub fn with_capacity(default_capacity: usize) -> Self {
+        Self {
+            objects: BTreeMap::new(),
+            default_capacity,
         }
     }
 
@@ -100,11 +125,15 @@ impl ObjectTree {
             return Ok(PathTarget::Object(obj));
         }
 
-        self.resolve_from_object(obj, &segments[1..])
+        Self::resolve_from_object(obj, &segments[1..])
     }
 
+    /// Walk from an object through remaining path segments.
+    ///
+    /// When resolving the **last** segment, InfoItems take precedence over
+    /// child Objects if both share the same name. This matches the common
+    /// case where leaf paths target sensor values rather than sub-objects.
     fn resolve_from_object<'a>(
-        &'a self,
         obj: &'a Object,
         segments: &[&str],
     ) -> Result<PathTarget<'a>, TreeError> {
@@ -114,7 +143,7 @@ impl ObjectTree {
 
         let name = segments[0];
 
-        // Last segment: check for InfoItem first, then child Object
+        // Last segment: InfoItem takes precedence over child Object
         if segments.len() == 1 {
             if let Some(item) = obj.get_item(name) {
                 return Ok(PathTarget::InfoItem(item));
@@ -133,7 +162,7 @@ impl ObjectTree {
             TreeError::NotFound(format!("Object '{}' not found in '{}'", name, obj.id))
         })?;
 
-        self.resolve_from_object(child, &segments[1..])
+        Self::resolve_from_object(child, &segments[1..])
     }
 
     /// Resolve a mutable reference from a path.
@@ -156,6 +185,8 @@ impl ObjectTree {
         Self::resolve_from_object_mut(obj, &segments[1..])
     }
 
+    /// Mutable version of [`resolve_from_object`]. Same precedence rules apply:
+    /// InfoItems take precedence over child Objects for the last segment.
     fn resolve_from_object_mut<'a>(
         obj: &'a mut Object,
         segments: &[&str],
@@ -167,7 +198,7 @@ impl ObjectTree {
         let name = segments[0];
         let obj_id = obj.id.clone();
 
-        // Last segment: check for InfoItem first, then child Object
+        // Last segment: InfoItem takes precedence over child Object
         if segments.len() == 1 {
             // Check existence first to avoid borrow issues
             let has_item = obj.get_item(name).is_some();
@@ -199,6 +230,8 @@ impl ObjectTree {
 
     /// Write a single value to a path. Auto-creates objects/items as needed.
     /// Returns true if the path was newly created (201), false if it existed (200).
+    ///
+    /// Auto-created InfoItems use `self.default_capacity` as the ring buffer size.
     pub fn write_value(
         &mut self,
         path: &str,
@@ -246,7 +279,7 @@ impl ObjectTree {
         // Now current is the parent object. Add or get the InfoItem.
         let has_item = current.get_item(&item_name).is_some();
         if !has_item {
-            current.add_item(item_name.clone(), InfoItem::new(100));
+            current.add_item(item_name.clone(), InfoItem::new(self.default_capacity));
             created = true;
         }
 
@@ -257,6 +290,9 @@ impl ObjectTree {
     }
 
     /// Merge an object tree at the given path.
+    ///
+    /// Each object is inserted using its `obj.id` field as the key, ensuring
+    /// consistency between map keys and object identities.
     pub fn write_tree(
         &mut self,
         path: &str,
@@ -266,7 +302,8 @@ impl ObjectTree {
 
         if segments.is_empty() {
             // Merge at root
-            for (id, obj) in objects {
+            for (_, obj) in objects {
+                let id = obj.id.clone();
                 self.objects.insert(id, obj);
             }
             return Ok(());
@@ -288,7 +325,7 @@ impl ObjectTree {
         }
 
         // Merge children into the target object
-        for (_id, obj) in objects {
+        for (_, obj) in objects {
             current.add_child(obj);
         }
 
@@ -358,6 +395,7 @@ impl ObjectTree {
     }
 
     /// Read a subtree as JSON with an optional depth limit.
+    #[cfg(feature = "json")]
     pub fn read(
         &self,
         path: &str,
@@ -370,8 +408,10 @@ impl ObjectTree {
                 let mut map = serde_json::Map::new();
                 for (id, obj) in objects {
                     let val = match depth {
-                        Some(d) => obj.serialize_with_depth(d),
-                        None => serde_json::to_value(obj).unwrap_or_default(),
+                        Some(d) => obj.serialize_with_depth(d)
+                            .map_err(|e| TreeError::SerializationError(e.to_string()))?,
+                        None => serde_json::to_value(obj)
+                            .map_err(|e| TreeError::SerializationError(e.to_string()))?,
                     };
                     map.insert(id.clone(), val);
                 }
@@ -379,13 +419,16 @@ impl ObjectTree {
             }
             PathTarget::Object(obj) => {
                 let val = match depth {
-                    Some(d) => obj.serialize_with_depth(d),
-                    None => serde_json::to_value(obj).unwrap_or_default(),
+                    Some(d) => obj.serialize_with_depth(d)
+                        .map_err(|e| TreeError::SerializationError(e.to_string()))?,
+                    None => serde_json::to_value(obj)
+                        .map_err(|e| TreeError::SerializationError(e.to_string()))?,
                 };
                 Ok(val)
             }
             PathTarget::InfoItem(item) => {
-                Ok(serde_json::to_value(item).unwrap_or_default())
+                serde_json::to_value(item)
+                    .map_err(|e| TreeError::SerializationError(e.to_string()))
             }
         }
     }
@@ -435,6 +478,11 @@ mod tests {
     #[test]
     fn parse_rejects_dotdot() {
         assert!(parse_path("/A/../B").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_trailing_slash() {
+        assert!(parse_path("/A/B/").is_err());
     }
 
     // --- Resolve tests ---
@@ -502,10 +550,10 @@ mod tests {
     #[test]
     fn resolve_not_found() {
         let tree = sample_tree();
-        assert!(matches!(
-            tree.resolve("/Missing"),
-            Err(TreeError::NotFound(_))
-        ));
+        assert_eq!(
+            tree.resolve("/Missing").unwrap_err(),
+            TreeError::NotFound("Object 'Missing' not found".into())
+        );
     }
 
     // --- Write value tests ---
@@ -563,10 +611,28 @@ mod tests {
     #[test]
     fn write_value_to_root_rejected() {
         let mut tree = ObjectTree::new();
-        assert!(matches!(
-            tree.write_value("/", OmiValue::Null, None),
-            Err(TreeError::InvalidPath(_))
-        ));
+        assert_eq!(
+            tree.write_value("/", OmiValue::Null, None).unwrap_err(),
+            TreeError::InvalidPath("Cannot write a value to root".into())
+        );
+    }
+
+    #[test]
+    fn write_value_uses_custom_capacity() {
+        let mut tree = ObjectTree::with_capacity(5);
+        // Write 10 values — only last 5 should survive
+        for i in 0..10 {
+            tree.write_value("/D/S", OmiValue::Number(i as f64), Some(i as f64))
+                .unwrap();
+        }
+        match tree.resolve("/D/S").unwrap() {
+            PathTarget::InfoItem(item) => {
+                assert_eq!(item.values.len(), 5);
+                let newest = item.query_values(Some(1), None, None, None);
+                assert_eq!(newest[0].v, OmiValue::Number(9.0));
+            }
+            _ => panic!("expected InfoItem"),
+        }
     }
 
     // --- Write tree tests ---
@@ -598,15 +664,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn write_tree_uses_obj_id_as_key() {
+        let mut tree = ObjectTree::new();
+        let mut objects = BTreeMap::new();
+        // Deliberately use a different map key than obj.id
+        let obj = Object::new("RealId");
+        objects.insert("wrong_key".into(), obj);
+
+        tree.write_tree("/", objects).unwrap();
+        // Should be stored under obj.id, not the map key
+        assert!(tree.objects.contains_key("RealId"));
+        assert!(!tree.objects.contains_key("wrong_key"));
+    }
+
     // --- Delete tests ---
 
     #[test]
     fn delete_root_rejected() {
         let mut tree = ObjectTree::new();
-        assert!(matches!(
-            tree.delete("/"),
-            Err(TreeError::Forbidden(_))
-        ));
+        assert_eq!(
+            tree.delete("/").unwrap_err(),
+            TreeError::Forbidden("Cannot delete root".into())
+        );
     }
 
     #[test]
@@ -639,44 +719,63 @@ mod tests {
     #[test]
     fn delete_not_found() {
         let mut tree = sample_tree();
-        assert!(matches!(
-            tree.delete("/DeviceA/Missing"),
-            Err(TreeError::NotFound(_))
-        ));
+        assert_eq!(
+            tree.delete("/DeviceA/Missing").unwrap_err(),
+            TreeError::NotFound("'Missing' not found in 'DeviceA'".into())
+        );
     }
 
     // --- Read tests ---
 
-    #[test]
-    fn read_root() {
-        let tree = sample_tree();
-        let val = tree.read("/", None).unwrap();
-        assert!(val["DeviceA"].is_object());
-    }
+    #[cfg(feature = "json")]
+    mod json {
+        use super::*;
 
-    #[test]
-    fn read_object() {
-        let tree = sample_tree();
-        let val = tree.read("/DeviceA", None).unwrap();
-        assert_eq!(val["id"], "DeviceA");
-    }
+        #[test]
+        fn read_root() {
+            let tree = sample_tree();
+            let val = tree.read("/", None).unwrap();
+            assert!(val["DeviceA"].is_object());
+        }
 
-    #[test]
-    fn read_info_item() {
-        let tree = sample_tree();
-        let val = tree.read("/DeviceA/Temperature", None).unwrap();
-        let values = val["values"].as_array().unwrap();
-        assert_eq!(values.len(), 1);
-        assert_eq!(values[0]["v"], 22.5);
-    }
+        #[test]
+        fn read_object() {
+            let tree = sample_tree();
+            let val = tree.read("/DeviceA", None).unwrap();
+            assert_eq!(val["id"], "DeviceA");
+        }
 
-    #[test]
-    fn read_with_depth_limit() {
-        let tree = sample_tree();
-        let val = tree.read("/DeviceA", Some(0)).unwrap();
-        assert_eq!(val["id"], "DeviceA");
-        assert!(val.get("items").is_none());
-        assert!(val.get("objects").is_none());
+        #[test]
+        fn read_info_item() {
+            let tree = sample_tree();
+            let val = tree.read("/DeviceA/Temperature", None).unwrap();
+            let values = val["values"].as_array().unwrap();
+            assert_eq!(values.len(), 1);
+            assert_eq!(values[0]["v"], 22.5);
+        }
+
+        #[test]
+        fn read_with_depth_limit() {
+            let tree = sample_tree();
+            let val = tree.read("/DeviceA", Some(0)).unwrap();
+            assert_eq!(val["id"], "DeviceA");
+            assert!(val.get("items").is_none());
+            assert!(val.get("objects").is_none());
+        }
+
+        #[test]
+        fn full_scenario_read() {
+            let mut tree = ObjectTree::new();
+            tree.write_value("/Sensor1/Temperature", OmiValue::Number(20.0), Some(100.0))
+                .unwrap();
+            tree.write_value("/Sensor1/Humidity", OmiValue::Number(45.0), Some(100.0))
+                .unwrap();
+
+            let obj_json = tree.read("/Sensor1", None).unwrap();
+            assert_eq!(obj_json["id"], "Sensor1");
+            assert!(obj_json["items"]["Temperature"].is_object());
+            assert!(obj_json["items"]["Humidity"].is_object());
+        }
     }
 
     // --- Full scenario test ---
@@ -695,11 +794,14 @@ mod tests {
         tree.write_value("/Sensor1/Humidity", OmiValue::Number(45.0), Some(100.0))
             .unwrap();
 
-        // Read the object
-        let obj_json = tree.read("/Sensor1", None).unwrap();
-        assert_eq!(obj_json["id"], "Sensor1");
-        assert!(obj_json["items"]["Temperature"].is_object());
-        assert!(obj_json["items"]["Humidity"].is_object());
+        // Verify tree structure via resolve
+        match tree.resolve("/Sensor1").unwrap() {
+            PathTarget::Object(obj) => {
+                assert!(obj.get_item("Temperature").is_some());
+                assert!(obj.get_item("Humidity").is_some());
+            }
+            _ => panic!("expected Object"),
+        }
 
         // Query values
         match tree.resolve("/Sensor1/Temperature").unwrap() {
@@ -714,10 +816,10 @@ mod tests {
 
         // Delete an item
         tree.delete("/Sensor1/Humidity").unwrap();
-        assert!(matches!(
-            tree.resolve("/Sensor1/Humidity"),
-            Err(TreeError::NotFound(_))
-        ));
+        assert_eq!(
+            tree.resolve("/Sensor1/Humidity").unwrap_err(),
+            TreeError::NotFound("'Humidity' not found in object 'Sensor1'".into())
+        );
 
         // Temperature still there
         assert!(matches!(

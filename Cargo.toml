@@ -9,6 +9,7 @@ rust-version = "1.77"
 [[bin]]
 name = "reconfigurable-device"
 harness = false # do not use the built-in cargo test harness -> resolve rust-analyzer errors
+required-features = ["esp"]
 
 [profile.release]
 opt-level = "s"
@@ -18,9 +19,10 @@ debug = true    # Symbols are nice, and they don't increase the size on Flash
 opt-level = "z"
 
 [features]
-default = ["std", "esp"]
+default = ["std", "esp", "json"]
 std = []
 esp = ["dep:esp-idf-svc", "dep:embuild"]
+json = ["dep:serde", "dep:serde_json"]
 
 experimental = ["esp-idf-svc/experimental"]
 
@@ -28,8 +30,11 @@ experimental = ["esp-idf-svc/experimental"]
 log = "0.4"
 esp-idf-svc = { version = "0.51", features = ["critical-section"], optional = true }
 anyhow = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
 
 [build-dependencies]
 embuild = { version = "0.33", features = ["espidf"], optional = true }
+
+[dev-dependencies]
+object = { version = "0.36", default-features = false, features = ["read", "elf"] }

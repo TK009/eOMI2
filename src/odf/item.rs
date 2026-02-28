@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+#[cfg(feature = "json")]
 use serde::{Deserialize, Serialize};
 
 use super::OmiValue;
@@ -8,18 +9,19 @@ use super::value::{RingBuffer, Value};
 /// An InfoItem in the O-DF object tree.
 ///
 /// Holds a named measurement or control point with a history of timestamped values.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "json", derive(Serialize, Deserialize))]
 pub struct InfoItem {
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json", serde(rename = "type", skip_serializing_if = "Option::is_none"))]
     pub type_uri: Option<String>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
     pub desc: Option<String>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
     pub meta: Option<BTreeMap<String, OmiValue>>,
 
-    #[serde(skip_serializing_if = "RingBuffer::is_empty")]
+    #[cfg_attr(feature = "json", serde(skip_serializing_if = "RingBuffer::is_empty"))]
     pub values: RingBuffer,
 }
 
@@ -122,49 +124,6 @@ mod tests {
     }
 
     #[test]
-    fn serialize_empty_item() {
-        let item = InfoItem::new(10);
-        let json = serde_json::to_value(&item).unwrap();
-        // Empty item should have no values key (skip_serializing_if)
-        assert!(json.get("values").is_none());
-        assert!(json.get("type").is_none());
-        assert!(json.get("desc").is_none());
-        assert!(json.get("meta").is_none());
-    }
-
-    #[test]
-    fn serialize_with_values() {
-        let mut item = InfoItem::new(10);
-        item.type_uri = Some("omi:temperature".into());
-        item.desc = Some("Room temperature".into());
-        item.add_value(OmiValue::Number(22.5), Some(1000.0));
-
-        let json = serde_json::to_value(&item).unwrap();
-        assert_eq!(json["type"], "omi:temperature");
-        assert_eq!(json["desc"], "Room temperature");
-        let values = json["values"].as_array().unwrap();
-        assert_eq!(values.len(), 1);
-        assert_eq!(values[0]["v"], 22.5);
-        assert_eq!(values[0]["t"], 1000.0);
-    }
-
-    #[test]
-    fn deserialize_item() {
-        let json = r#"{
-            "type": "omi:temperature",
-            "desc": "Sensor reading",
-            "values": [
-                {"v": 23.0, "t": 1001.0},
-                {"v": 22.5, "t": 1000.0}
-            ]
-        }"#;
-        let item: InfoItem = serde_json::from_str(json).unwrap();
-        assert_eq!(item.type_uri.as_deref(), Some("omi:temperature"));
-        assert_eq!(item.desc.as_deref(), Some("Sensor reading"));
-        assert_eq!(item.values.len(), 2);
-    }
-
-    #[test]
     fn query_with_time_range() {
         let mut item = InfoItem::new(100);
         for i in 0..10 {
@@ -172,5 +131,53 @@ mod tests {
         }
         let result = item.query_values(None, None, Some(300.0), Some(600.0));
         assert_eq!(result.len(), 4); // timestamps 300, 400, 500, 600
+    }
+
+    #[cfg(feature = "json")]
+    mod json {
+        use super::*;
+
+        #[test]
+        fn serialize_empty_item() {
+            let item = InfoItem::new(10);
+            let json = serde_json::to_value(&item).unwrap();
+            // Empty item should have no values key (skip_serializing_if)
+            assert!(json.get("values").is_none());
+            assert!(json.get("type").is_none());
+            assert!(json.get("desc").is_none());
+            assert!(json.get("meta").is_none());
+        }
+
+        #[test]
+        fn serialize_with_values() {
+            let mut item = InfoItem::new(10);
+            item.type_uri = Some("omi:temperature".into());
+            item.desc = Some("Room temperature".into());
+            item.add_value(OmiValue::Number(22.5), Some(1000.0));
+
+            let json = serde_json::to_value(&item).unwrap();
+            assert_eq!(json["type"], "omi:temperature");
+            assert_eq!(json["desc"], "Room temperature");
+            let values = json["values"].as_array().unwrap();
+            assert_eq!(values.len(), 1);
+            assert_eq!(values[0]["v"], 22.5);
+            assert_eq!(values[0]["t"], 1000.0);
+        }
+
+        #[test]
+        fn deserialize_item() {
+            let json = r#"{
+                "type": "omi:temperature",
+                "desc": "Sensor reading",
+                "values": [
+                    {"v": 23.0, "t": 1001.0},
+                    {"v": 22.5, "t": 1000.0}
+                ]
+            }"#;
+            let item: InfoItem = serde_json::from_str(json).unwrap();
+            assert_eq!(item.type_uri.as_deref(), Some("omi:temperature"));
+            assert_eq!(item.desc.as_deref(), Some("Sensor reading"));
+            assert_eq!(item.values.len(), 2);
+        }
     }
 }

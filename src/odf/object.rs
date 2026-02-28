@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+#[cfg(feature = "json")]
 use serde::{Deserialize, Serialize};
 
 use super::item::InfoItem;
@@ -7,20 +8,21 @@ use super::item::InfoItem;
 /// An Object node in the O-DF hierarchy.
 ///
 /// Contains child Objects and InfoItems. Mirrors the OMI-Lite JSON structure.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "json", derive(Serialize, Deserialize))]
 pub struct Object {
     pub id: String,
 
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json", serde(rename = "type", skip_serializing_if = "Option::is_none"))]
     pub type_uri: Option<String>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
     pub desc: Option<String>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
     pub items: Option<BTreeMap<String, InfoItem>>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
     pub objects: Option<BTreeMap<String, Object>>,
 }
 
@@ -83,7 +85,8 @@ impl Object {
     /// Depth 0 = only id/type/desc, no items or child objects.
     /// Depth 1 = include direct items and child object shells (depth 0).
     /// etc.
-    pub fn serialize_with_depth(&self, depth: usize) -> serde_json::Value {
+    #[cfg(feature = "json")]
+    pub fn serialize_with_depth(&self, depth: usize) -> Result<serde_json::Value, serde_json::Error> {
         let mut map = serde_json::Map::new();
         map.insert("id".into(), serde_json::Value::String(self.id.clone()));
 
@@ -96,15 +99,15 @@ impl Object {
 
         if depth > 0 {
             if let Some(ref items) = self.items {
-                let items_val = serde_json::to_value(items).unwrap_or_default();
                 if !items.is_empty() {
+                    let items_val = serde_json::to_value(items)?;
                     map.insert("items".into(), items_val);
                 }
             }
             if let Some(ref objects) = self.objects {
                 let mut objs_map = serde_json::Map::new();
                 for (k, obj) in objects {
-                    objs_map.insert(k.clone(), obj.serialize_with_depth(depth - 1));
+                    objs_map.insert(k.clone(), obj.serialize_with_depth(depth - 1)?);
                 }
                 if !objs_map.is_empty() {
                     map.insert("objects".into(), serde_json::Value::Object(objs_map));
@@ -112,7 +115,7 @@ impl Object {
             }
         }
 
-        serde_json::Value::Object(map)
+        Ok(serde_json::Value::Object(map))
     }
 }
 
@@ -196,62 +199,67 @@ mod tests {
         assert_eq!(obj.get_item("Temp").unwrap().values.len(), 1);
     }
 
-    #[test]
-    fn serialize_basic() {
-        let mut obj = Object::new("DeviceA");
-        obj.type_uri = Some("omi:device".into());
-        obj.add_item("Temperature".into(), make_temp_item());
+    #[cfg(feature = "json")]
+    mod json {
+        use super::*;
 
-        let json = serde_json::to_value(&obj).unwrap();
-        assert_eq!(json["id"], "DeviceA");
-        assert_eq!(json["type"], "omi:device");
-        assert!(json["items"]["Temperature"].is_object());
-    }
+        #[test]
+        fn serialize_basic() {
+            let mut obj = Object::new("DeviceA");
+            obj.type_uri = Some("omi:device".into());
+            obj.add_item("Temperature".into(), make_temp_item());
 
-    #[test]
-    fn depth_limited_serialization() {
-        let mut root = Object::new("Root");
-        let mut child = Object::new("Child");
-        child.add_item("Temp".into(), make_temp_item());
-        root.add_child(child);
+            let json = serde_json::to_value(&obj).unwrap();
+            assert_eq!(json["id"], "DeviceA");
+            assert_eq!(json["type"], "omi:device");
+            assert!(json["items"]["Temperature"].is_object());
+        }
 
-        // Depth 0: no items or objects
-        let d0 = root.serialize_with_depth(0);
-        assert_eq!(d0["id"], "Root");
-        assert!(d0.get("items").is_none());
-        assert!(d0.get("objects").is_none());
+        #[test]
+        fn depth_limited_serialization() {
+            let mut root = Object::new("Root");
+            let mut child = Object::new("Child");
+            child.add_item("Temp".into(), make_temp_item());
+            root.add_child(child);
 
-        // Depth 1: includes child shells
-        let d1 = root.serialize_with_depth(1);
-        assert!(d1["objects"]["Child"].is_object());
-        // Child at depth 0 has no items
-        assert!(d1["objects"]["Child"].get("items").is_none());
+            // Depth 0: no items or objects
+            let d0 = root.serialize_with_depth(0).unwrap();
+            assert_eq!(d0["id"], "Root");
+            assert!(d0.get("items").is_none());
+            assert!(d0.get("objects").is_none());
 
-        // Depth 2: full tree
-        let d2 = root.serialize_with_depth(2);
-        assert!(d2["objects"]["Child"]["items"]["Temp"].is_object());
-    }
+            // Depth 1: includes child shells
+            let d1 = root.serialize_with_depth(1).unwrap();
+            assert!(d1["objects"]["Child"].is_object());
+            // Child at depth 0 has no items
+            assert!(d1["objects"]["Child"].get("items").is_none());
 
-    #[test]
-    fn deserialize_object() {
-        let json = r#"{
-            "id": "DeviceA",
-            "type": "omi:device",
-            "items": {
-                "Temperature": {
-                    "type": "omi:temperature",
-                    "values": [{"v": 22.5, "t": 1000.0}]
+            // Depth 2: full tree
+            let d2 = root.serialize_with_depth(2).unwrap();
+            assert!(d2["objects"]["Child"]["items"]["Temp"].is_object());
+        }
+
+        #[test]
+        fn deserialize_object() {
+            let json = r#"{
+                "id": "DeviceA",
+                "type": "omi:device",
+                "items": {
+                    "Temperature": {
+                        "type": "omi:temperature",
+                        "values": [{"v": 22.5, "t": 1000.0}]
+                    }
+                },
+                "objects": {
+                    "SubDevice": {
+                        "id": "SubDevice"
+                    }
                 }
-            },
-            "objects": {
-                "SubDevice": {
-                    "id": "SubDevice"
-                }
-            }
-        }"#;
-        let obj: Object = serde_json::from_str(json).unwrap();
-        assert_eq!(obj.id, "DeviceA");
-        assert!(obj.get_item("Temperature").is_some());
-        assert!(obj.get_child("SubDevice").is_some());
+            }"#;
+            let obj: Object = serde_json::from_str(json).unwrap();
+            assert_eq!(obj.id, "DeviceA");
+            assert!(obj.get_item("Temperature").is_some());
+            assert!(obj.get_child("SubDevice").is_some());
+        }
     }
 }

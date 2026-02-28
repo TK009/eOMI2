@@ -9,4 +9,5 @@
 pub mod html;
 pub mod js;
 pub mod device;
+#[cfg(feature = "std")]
 pub mod odf;

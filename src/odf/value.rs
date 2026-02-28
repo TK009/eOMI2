@@ -1,13 +1,16 @@
+#[cfg(feature = "json")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+#[cfg(feature = "json")]
 use serde::ser::SerializeSeq;
 
 use super::OmiValue;
 
 /// A timestamped value in the OMI data model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "json", derive(Serialize, Deserialize))]
 pub struct Value {
     pub v: OmiValue,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
     pub t: Option<f64>,
 }
 
@@ -33,21 +36,27 @@ impl Value {
 /// and query methods returning newest-first ordering as the OMI spec requires.
 #[derive(Debug, Clone)]
 pub struct RingBuffer {
-    buf: Vec<Option<Value>>,
+    buf: Vec<Value>,
+    /// Index where the next push will write. When `len == capacity`, this
+    /// also points to the oldest element (which will be overwritten).
     head: usize,
     len: usize,
+    capacity: usize,
 }
 
 impl RingBuffer {
     pub fn new(capacity: usize) -> Self {
         assert!(capacity > 0, "RingBuffer capacity must be > 0");
-        let mut buf = Vec::with_capacity(capacity);
-        buf.resize_with(capacity, || None);
-        Self { buf, head: 0, len: 0 }
+        Self {
+            buf: Vec::with_capacity(capacity),
+            head: 0,
+            len: 0,
+            capacity,
+        }
     }
 
     pub fn capacity(&self) -> usize {
-        self.buf.len()
+        self.capacity
     }
 
     pub fn len(&self) -> usize {
@@ -60,45 +69,56 @@ impl RingBuffer {
 
     /// Push a value, overwriting the oldest if at capacity.
     pub fn push(&mut self, value: Value) {
-        self.buf[self.head] = Some(value);
-        self.head = (self.head + 1) % self.capacity();
-        if self.len < self.capacity() {
+        if self.len < self.capacity {
+            // Still growing — append
+            self.buf.push(value);
             self.len += 1;
+            self.head = self.len % self.capacity;
+        } else {
+            // Full — overwrite oldest
+            self.buf[self.head] = value;
+            self.head = (self.head + 1) % self.capacity;
         }
     }
 
     pub fn clear(&mut self) {
-        for slot in self.buf.iter_mut() {
-            *slot = None;
-        }
+        self.buf.clear();
         self.head = 0;
         self.len = 0;
     }
 
+    /// Index of the oldest element. Only valid when `len > 0`.
+    fn oldest_index(&self) -> usize {
+        if self.len < self.capacity { 0 } else { self.head }
+    }
+
+    /// Get element by logical index (0 = oldest, len-1 = newest).
+    fn get(&self, logical: usize) -> &Value {
+        let idx = (self.oldest_index() + logical) % self.capacity;
+        &self.buf[idx]
+    }
+
     /// Iterate from oldest to newest.
     fn iter_oldest_to_newest(&self) -> impl Iterator<Item = &Value> {
-        let cap = self.capacity();
-        // Start index is where the oldest element lives
-        let start = if self.len < cap { 0 } else { self.head };
         let len = self.len;
-        (0..len).map(move |i| {
-            let idx = (start + i) % cap;
-            self.buf[idx].as_ref().unwrap()
-        })
+        (0..len).map(move |i| self.get(i))
     }
 
     /// Return up to `n` newest values, newest first.
     pub fn newest(&self, n: usize) -> Vec<Value> {
-        let all: Vec<&Value> = self.iter_oldest_to_newest().collect();
-        let take = n.min(all.len());
-        all[all.len() - take..].iter().rev().map(|v| (*v).clone()).collect()
+        let take = n.min(self.len);
+        (0..take)
+            .map(|i| self.get(self.len - 1 - i).clone())
+            .collect()
     }
 
     /// Return up to `n` oldest values, newest first (per spec ordering).
     pub fn oldest(&self, n: usize) -> Vec<Value> {
-        let all: Vec<&Value> = self.iter_oldest_to_newest().collect();
-        let take = n.min(all.len());
-        all[..take].iter().rev().map(|v| (*v).clone()).collect()
+        let take = n.min(self.len);
+        (0..take)
+            .rev()
+            .map(|i| self.get(i).clone())
+            .collect()
     }
 
     /// Return values with timestamp in [begin, end], newest first.
@@ -156,18 +176,19 @@ impl RingBuffer {
     }
 }
 
+#[cfg(feature = "json")]
 impl Serialize for RingBuffer {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let values: Vec<&Value> = self.iter_oldest_to_newest().collect();
-        let mut seq = serializer.serialize_seq(Some(values.len()))?;
+        let mut seq = serializer.serialize_seq(Some(self.len))?;
         // Serialize newest first (spec ordering)
-        for v in values.iter().rev() {
-            seq.serialize_element(v)?;
+        for i in (0..self.len).rev() {
+            seq.serialize_element(self.get(i))?;
         }
         seq.end()
     }
 }
 
+#[cfg(feature = "json")]
 impl<'de> Deserialize<'de> for RingBuffer {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let values: Vec<Value> = Vec::deserialize(deserializer)?;
@@ -316,33 +337,38 @@ mod tests {
         assert_eq!(result[0].v, OmiValue::Number(2.0));
     }
 
-    #[test]
-    fn serde_roundtrip() {
-        let mut rb = RingBuffer::new(5);
-        rb.push(val(1.0, 100.0));
-        rb.push(val(2.0, 200.0));
-        rb.push(val(3.0, 300.0));
+    #[cfg(feature = "json")]
+    mod json {
+        use super::*;
 
-        let json = serde_json::to_string(&rb).unwrap();
-        let rb2: RingBuffer = serde_json::from_str(&json).unwrap();
+        #[test]
+        fn serde_roundtrip() {
+            let mut rb = RingBuffer::new(5);
+            rb.push(val(1.0, 100.0));
+            rb.push(val(2.0, 200.0));
+            rb.push(val(3.0, 300.0));
 
-        assert_eq!(rb2.len(), 3);
-        let newest = rb2.newest(3);
-        assert_eq!(newest[0].v, OmiValue::Number(3.0));
-        assert_eq!(newest[1].v, OmiValue::Number(2.0));
-        assert_eq!(newest[2].v, OmiValue::Number(1.0));
-    }
+            let json = serde_json::to_string(&rb).unwrap();
+            let rb2: RingBuffer = serde_json::from_str(&json).unwrap();
 
-    #[test]
-    fn serialize_newest_first() {
-        let mut rb = RingBuffer::new(5);
-        rb.push(val(1.0, 100.0));
-        rb.push(val(2.0, 200.0));
-        let json = serde_json::to_string(&rb).unwrap();
-        let arr: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
-        // First element should be newest
-        assert_eq!(arr[0]["v"], 2.0);
-        assert_eq!(arr[1]["v"], 1.0);
+            assert_eq!(rb2.len(), 3);
+            let newest = rb2.newest(3);
+            assert_eq!(newest[0].v, OmiValue::Number(3.0));
+            assert_eq!(newest[1].v, OmiValue::Number(2.0));
+            assert_eq!(newest[2].v, OmiValue::Number(1.0));
+        }
+
+        #[test]
+        fn serialize_newest_first() {
+            let mut rb = RingBuffer::new(5);
+            rb.push(val(1.0, 100.0));
+            rb.push(val(2.0, 200.0));
+            let json = serde_json::to_string(&rb).unwrap();
+            let arr: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+            // First element should be newest
+            assert_eq!(arr[0]["v"], 2.0);
+            assert_eq!(arr[1]["v"], 1.0);
+        }
     }
 
     #[test]

@@ -11,3 +11,7 @@ pub mod js;
 pub mod device;
 #[cfg(feature = "std")]
 pub mod odf;
+#[cfg(feature = "std")]
+pub mod omi;
+#[cfg(feature = "std")]
+pub mod pages;

@@ -1,0 +1,98 @@
+<omiEnvelope xmlns="http://www.opengroup.org/xsd/omi/2.0/" ttl="10.0"
+  version="2.0">
+  <response>
+    <result msgformat="odf">
+      <return returnCode="200"/>
+      <msg>
+        <Objects xmlns="http://www.opengroup.org/xsd/odf/2.0/" 
+          version="2.0">
+          <Object>
+            <id>Device</id>
+            <InfoItem name="ChipModel">
+              <value unixTime="20">ESP32-S2</value>
+            </InfoItem>
+            <InfoItem name="ChipRevision">
+              <value unixTime="20" type="xs:int">0</value>
+            </InfoItem>
+            <InfoItem name="FirmwareCoreVersion">
+              <value unixTime="20">2.0.0-alpha1-25-ga1d8b959</value>
+            </InfoItem>
+            <InfoItem name="SdkVersion">
+              <value unixTime="20">v4.4-dev-960-gcf457d412</value>
+            </InfoItem>
+            <InfoItem name="FirmwareBuildVersion">
+              <value unixTime="20">ed579a0-dirty</value>
+            </InfoItem>
+            <InfoItem name="FirmwareBuildDate">
+              <value unixTime="20">2021-05-23</value>
+            </InfoItem>
+            <InfoItem name="FirmwareBuildTime">
+              <value unixTime="20">14:53:40</value>
+            </InfoItem>
+            <InfoItem name="ChipTemperature">
+              <value unixTime="33080" type="xs:float">43.9208</value>
+            </InfoItem>
+            <Object>
+              <id>Memory</id>
+              <InfoItem name="FirmwareSize">
+                <value unixTime="18" type="xs:int">1225472</value>
+              </InfoItem>
+              <InfoItem name="FirmwareSizeFree">
+                <value unixTime="18" type="xs:int">1310720</value>
+              </InfoItem>
+              <InfoItem name="PSRAMMinFree">
+                <value unixTime="33060" type="xs:int">1894471</value>
+              </InfoItem>
+              <InfoItem name="PSRAMTotal">
+                <value unixTime="20" type="xs:int">2094171</value>
+              </InfoItem>
+              <InfoItem name="PSRAMFree">
+                <value unixTime="33060" type="xs:int">1926951</value>
+              </InfoItem>
+              <InfoItem name="PSRAMLargestFreeBlock">
+                <value unixTime="33060" type="xs:int">1048564</value>
+              </InfoItem>
+              <InfoItem name="HeapTotal">
+                <value unixTime="20" type="xs:int">157727</value>
+              </InfoItem>
+              <InfoItem name="HeapMinFree">
+                <value unixTime="33060" type="xs:int">18143</value>
+              </InfoItem>
+              <InfoItem name="HeapFree">
+                <value unixTime="33060" type="xs:int">25983</value>
+              </InfoItem>
+              <InfoItem name="HeapLargestFreeBlock">
+                <value unixTime="33060" type="xs:int">8180</value>
+              </InfoItem>
+            </Object>
+          </Object>
+          <Object>
+            <id>Dht11</id>
+            <InfoItem name="RelativeHumidity">
+              <MetaData>
+                <InfoItem name="UnitOfMeasurement">
+                  <value unixTime="20">%</value>
+                </InfoItem>
+              </MetaData>
+              <value unixTime="33080" type="xs:float">42.056316</value>
+            </InfoItem>
+            <InfoItem name="Temperature">
+              <MetaData>
+                <InfoItem name="UnitOfMeasurement">
+                  <value unixTime="20">%*°*)C</value>
+                </InfoItem>
+              </MetaData>
+              <value unixTime="33080" type="xs:float">24.000004</value>
+            </InfoItem>
+          </Object>
+          <Object>
+            <id>RgbLed</id>
+            <InfoItem name="ColorRGB">
+              <value unixTime="20" type="xs:int">0</value>
+            </InfoItem>
+          </Object>
+        </Objects>
+      </msg>
+    </result>
+  </response>
+</omiEnvelope>

@@ -1,0 +1,82 @@
+%! TEX root = tuomas_keyrilainen_masters_thesis.tex
+% Muista: those viittaa tuleviin ja these jo mainittuihin asioihin!
+\chapter{Introduction}
+\label{chapter:intro}
+
+Internet of Things (IoT) has been an aspiring discussion topic in the software and electronics industry for a long time. It is a broad concept regarding networked devices, that contains sensors, actuators, software and other technologies, for the purpose of communicating with other devices and systems across the Internet. Over the past decade, there has been a surge in the development of new \emph{smart} devices that can connect to the Internet and be controlled using applications remotely. This network of devices together with other appliances embedded with sensors, electronics, software and connectivity is called the Internet of Things (IoT).
+
+Smart home enables intelligent control of home appliances to automate common tasks or to provide other value, such as energy savings. The system involves monitoring of sensors and acting based on their values. It can control heating, ventilation and air conditioning, lighting or media devices. These examples are presented in Figure~\ref{fig:smarthome}. However, smart home automation has not gained much popularity. Specifically, barriers to home automation have included the high cost of devices, inflexibility, difficulty of management and security concerns~\cite{Home_Automation_in_the_Wild}. This work proposes a solution based on Internet of Things.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\textwidth, trim=0 3cm 0 1cm, clip]{images/dippa-smarthome.pdf}
+  \caption{Smart home overview}
+  \label{fig:smarthome}
+\end{figure}
+
+
+\section{Problem statement}
+
+% FIXME: any citations for problems?
+
+Such smart devices can be examined through two major problems. The first is that the setup of such devices and their connections often involves a complicated integration work, which includes a case-specific custom configuration. The second is that after an IoT system has been in use some time, one of the components in the system will inevitably be replaced, broken or otherwise reach end-of-life. The component might be anything from a simple IoT device or network equipment failure to a server or cloud service being decommissioned. Unless the failed component is a simple network connection that can automatically be routed via a different path, the fix typically requires an expert understanding the problem and the original system configuration. As IoT systems often have many components, including external services, it leads to systems that are unreliable or expensive to build and maintain. Therefore, these problems need solutions to increase IoT attractiveness and sustainability.
+%A proper handling of a failure case has two requirements: ways to detect the problem and then ways of fixing or replacing the component. Unless the failed component is a simple network connection that can be automatically routed via a different path, the fix usually requires an expert understanding the problem and the original system configuration. As IoT systems often have many components, including external services, it leads to systems that are unreliable or expensive to maintain.
+
+In order to address these problems in this work, IoT is approached in the \emph{Thing} viewpoint rather than the \emph{Internet} viewpoint. Thus, rather than focusing on things using Internet services that run in cloud environments, focus is on local devices that connect to each other in the local network and provide services locally. Such devices are usually called \emph{smart objects}~\cite{Smart_objects_as_building_blocks_for_the_Internet_of_things}. As a result, the devices can continue working without Internet access and with lower latency, as they communicate in the same network without round-trips to the Internet. However, with the current consumer electronics segment, device-to-device connections are usually limited to within the same vendor or has specific proprietary communication protocol. Connections between these vendor silos work mostly with cloud service APIs, but are often limited to simple connections, while transformations between different data formats are too complicated for the average consumer to solve. An easy-to-use solution would greatly enhance the value of IoT devices, since combining the products of different vendors would vastly increase the possible combinations of devices, choices for replacements and lower the risk of vendor-lock-in. For the reasons mentioned above, the term \emph{Smart Objects} (SO) assumes a broader meaning in this work as it can be a more generic building block, which can be used in creative ways, instead of a product designed to be used in one way only.
+
+
+
+
+% SCOPE
+% GOAL
+% OUTCOME
+
+%\ixme{Add higher level addressed problems/challenges near the beginning (maybe from "Internet of things : concepts and system design")}
+
+
+
+%ADDED TO ENVIRONMENT: \ixme{"Home Automation in the Wild": barriers for entry is cost, inflexibility, poor managebility (interoperability) and difficulty in security. This work will improve mast of them}
+
+\subsection*{Research Methodology}
+
+The objective of this work is to advance the possibility that devices of different vendors work together, of which the web offers a successful example. The web is enabled by standardized languages and protocols. Most importantly, HyperText Markup Language (HTML) represents the content data to render for the user, JavaScript (JS) provides client-side software extension possibility, and Cascading Style Sheets (CSS) provides style rules to change the appearance of the data. They are transferred as payload with the HTTP protocol from servers to the requesting clients. IoT has slightly different requirements than the web, so different options to fill similar application level roles are investigated. Especially two standards are designed to fit some of these roles: Open Messaging Interface (O-MI)~\cite{o-mi} provides transferring capabilities like HTTP and Open Data Format (O-DF)~\cite{o-df} provides content format similar to HTML. The CSS equivalent language could apply the same device or sensor metadata to many items with one statement, but this is not within the scope of this work. Instead, this study focuses on the scripting equivalent of the web, and an extension proposal is made and implemented to extend O-DF/O-MI with scripting capabilities, which are requirements to open possibilities for automating configuration and improving peer-to-peer (P2P) interoperability.
+
+IoT gateways are a common way to facilitate services for local IoT devices by providing data processing and creating connections, either from a device to an external IoT application or a device to another device. Like JavaScript in browsers, scripting could be adopted to implement these features in smart objects instead of IoT gateways. As a result, the functionality is distributed instead of creating a single weak link, and versions of the features are easier to manage. When using a gateway, the device and service interfaces must be backwards compatible, otherwise a new gateway needs to be installed next to the old one, in case of device updates. If scripting is enabled on smart devices, most gateway features can be implemented in a script, which can be tailored for each version of the API of the device directly.
+
+% tip: substantiated
+For the scripting capability of devices to be useful, a method of script loading is needed. In contrast to scripts in web browsers that run on computers, IoT devices often lack sufficient physical input and output facilities to select scripts, and a common use case involves connecting different devices together, so a separate application for this functionality is reasonable. Such an application could discover all local devices and their metadata, which would then be applied to search and fetch any scripts fitting to these devices and their combinations. Furthermore, this kind of configurator application would enable automating many cases of new device configuration with different strategies.
+
+
+In short, the present investigation asks the following questions: %\ixme{improve this section?}
+\begin{enumerate}
+%  \item Validate the technical feasibility of using open standards with device functionality extension in embedded systems.
+  \item Is it feasible to implement an embedded system using interoperable open standards, in addition to runtime functionality extension capabilities with scripting?
+%  \item Implementing and evaluating the system in real testing scenario of smart home automation.
+  \item Does the designed system work in real smart home automation scenario?
+\end{enumerate}
+These research questions are answered by designing a system architecture around these ideas, implementing a prototype of the embedded system and testing 
+two use cases in a real home setting. For concision and readability, this study will hereon apply the concept of Reconfigurable Smart Object System and the related acronym RSOS to refer to the system architecture proposed in the current work.
+
+
+\subsection*{Contributions}
+
+This study offers the following four key contributions:
+
+%\ixme{new numberless section? three or four list items of contributions of this thesis}
+\begin{enumerate}
+  \item It builds a candidate architecture for more interoperable smart object based Internet of Things.
+  \item It proposes a novel combination of a configurator application and on-device computation with scripts, to allow reconfiguration of device functionality.
+  \item It provides the first open source implementation of O-DF and O-MI standards for embedded devices, and includes an extension for scripting support.
+  \item It evaluates whether the proposed system can be operated in a real home.
+\end{enumerate}
+
+
+
+
+
+\section{Structure of the Thesis}
+\label{section:structure} 
+
+The rest of this thesis is organized as follows. First, related work on smart objects is reviewed in Chapter~\ref{chapter:background}, examining similar commercial systems, related protocols and required technologies. In Chapter~\ref{chapter:environment}, the environment of the implementation is defined in terms of hardware and physical aspects. Chapter~\ref{chapter:methods} describes the design of the RSOS, while the details of the implementation are provided in Chapter~\ref{chapter:implementation}. The success of the implementation is tested in a real world setting and the results analyzed in Chapter~\ref{chapter:evaluation}. Finally, implications, limitations and future work will be discussed in Chapter~\ref{chapter:discussion}, and the thesis is concluded with a summary in Chapter~\ref{chapter:conclusions}.
+
+

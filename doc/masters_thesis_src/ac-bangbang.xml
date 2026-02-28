@@ -1,0 +1,56 @@
+<?xml version="1.0"?>
+<omiEnvelope xmlns="http://www.opengroup.org/xsd/omi/2.0/" version="2.0"
+  ttl="20">
+  <write msgformat="odf">
+    <msg>
+      <Objects xmlns="http://www.opengroup.org/xsd/odf/2.0/" version="2.0">
+        <Object>
+          <id>Relay</id>
+          <InfoItem name="Switch">
+            <MetaData>
+              <InfoItem name="onwrite">
+                <value unixTime="1621611193">
+var sleep = function (ms) {
+  const date = Date.now();
+  let now = null;
+  do {
+    now = Date.now();
+  } while (now - date &lt; ms);
+};
+// stop initial write for triggering
+if (global.hasOwnProperty("triggered")) {
+  odf.writeItem(true, "Objects/Relay/State");
+  sleep(1000);
+  odf.writeItem(false, "Objects/Relay/State");
+}
+                </value>
+              </InfoItem>
+            </MetaData>
+            <value type="xs:boolean">0</value>
+          </InfoItem>
+        </Object>
+        <Object>
+          <id>Dht11</id>
+          <InfoItem name="Temperature">
+            <MetaData>
+              <InfoItem name="onwrite">
+                <value unixTime="1621611193">
+if (!global.hasOwnProperty("triggered")) global.triggered = false;
+if (event.value &gt; 27 &amp;&amp; !global.triggered) {
+  global.triggered = true;
+  odf.writeItem(true, "Objects/Relay/Switch");
+}
+if (event.value &lt; 25 &amp;&amp; global.triggered) {
+  global.triggered = false;
+  odf.writeItem(false, "Objects/Relay/Switch");
+}
+                </value>
+              </InfoItem>
+            </MetaData>
+            <value type="xs:float">21</value>
+          </InfoItem>
+        </Object>
+      </Objects>
+    </msg>
+  </write>
+</omiEnvelope>

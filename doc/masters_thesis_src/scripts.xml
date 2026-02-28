@@ -1,0 +1,52 @@
+<?xml version="1.0"?>
+<omiEnvelope xmlns="http://www.opengroup.org/xsd/omi/2.0/" 
+  version="2.0" ttl="20">
+  <write msgformat="odf">
+    <msg>
+      <Objects xmlns="http://www.opengroup.org/xsd/odf/2.0/" version="2.0">
+        <Object>
+          <id>Dht11</id>
+          <InfoItem name="RelativeHumidity">
+            <MetaData>
+              <InfoItem name="onwrite" type="javascript">
+                <value unixTime="1621611193">
+if (!global.hasOwnProperty("triggered")) global.triggered = false;
+if (event.value &gt; 46 &amp;&amp; !global.triggered) {
+  global.triggered = true;
+  odf.writeItem(true, "Objects/Servo/Switch");
+}
+if (event.value &lt; 35 &amp;&amp; global.triggered) {
+  global.triggered = false;
+  odf.writeItem(false, "Objects/Servo/Switch");
+}
+                </value>
+              </InfoItem>
+            </MetaData>
+          </InfoItem>
+        </Object>
+        <Object>
+          <id>Servo</id>
+          <InfoItem name="Switch">
+            <MetaData>
+              <InfoItem name="onwrite" type="javascript">
+                <value unixTime="1621611193">
+var sleep = function (milliseconds) {
+  const date = Date.now();
+  let curDate = null;
+  do {
+    curtDate = Date.now();
+  } while (curtDate - date &lt; milliseconds);
+};
+odf.writeItem(0, "Objects/Servo/SetDegrees");
+sleep(2000);
+odf.writeItem(180, "Objects/Servo/SetDegrees");
+                </value>
+              </InfoItem>
+            </MetaData>
+            <value unixTime="1" type="xs:boolean">false</value>
+          </InfoItem>
+        </Object>
+      </Objects>
+    </msg>
+  </write>
+</omiEnvelope>

@@ -1,0 +1,151 @@
+%! TEX root = tuomas_keyrilainen_masters_thesis.tex
+\chapter{Results}
+\label{chapter:evaluation}
+
+%\fixme{\\
+%  Results; evaluation of how well the implementation works.\\
+%  Show tests in presentable form: \\
+%  combined measurement graphs.\\
+%  image with sensor values overlaid \\
+%%  Interoperability and reliability are hard to measure, maybe a comparison of interoperability and reliability features, and then focus on easiness of use and maintainability. Usability can be measured by an usability test, but comparison might require buying some proprietary devices also. Easier metric is to calculate the required number of actions needed for accomplishing usual tasks like setup and configuration of a new device or making a new connection between two devices.\\
+%%  I could also measure latency vs. cloud, but it would focus more on performance quality, which would of course also be important but not currently included in this work.
+%}
+
+%\section{Implementation}
+
+The Reconfigurable Smart Object System (RSOS) for home automation was designed in this study, fulfilling the SO requirements reported in prior literature, as described in Section~\ref{section:so-requirements-fulfilled}. The system architecture was designed to consist of the service layer, the management layer, and the device layer. Of these, the device layer consists of an embedded system, which was implemented. It contains an open source implementation of O-DF and O-MI standards with scripting support, and it is available on \url{https://github.com/TK009/embedded-o-mi}.
+
+From the proposed components, not all were implemented and tested as they were not in the scope of this study. Specifically, the functionality of configurator app was only simulated, without the proposed script and adapter combination system. It might reveal unforeseen problems when more thoroughly implemented and tested. Also, some features specified in the RSOS were ignored or malfunctioned, but enough was implemented to run the test cases. Furthermore, the overall RSOS architecture design did not cover all required components to be commercially ready. The security features are lacking as anyone who has access to the LAN has full control of the devices.
+
+In Case A, the system was tested in a bathroom when taking a shower and then waiting until the bathroom dried, while collecting all data to the O-MI-Node server for visualization. The device was correctly found with an mDNS service query and a subsequent mDNS host name resolving query. Furthermore, the device accepted the O-MI write request of the scripts and subscriptions. Visualization of humidity and the fan switch can be seen in Figure~\ref{fig:humidity-fan-graph}. The fan correctly turned on around 46\% relative humidity and off at 35\%. The showering ended before the sensor could reach its highest value of around 61\%, but the fan was able to reduce the humidity and finally dry the bathroom floor.
+
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{images/humidity-fan-graph}
+  \caption{Collected data during and after a shower. The blue line shows the humidity on left y-axis and the green line shows the fan switch actions on the right y-axis.}%
+  \label{fig:humidity-fan-graph}
+\end{figure}
+
+Case B results of the air conditioning machine and temperature from a five-days period are shown in Figure~\ref{fig:ac-results-graph}. The low accuracy of the temperature sensor can be seen as a staircase pattern; however, the sensor was precise and successfully kept the temperature below 28 degrees Celsius. The largest heat increase was observed during sunny mornings, as the test room resides on east side of the building. The final day was warmer than others, and the A/C was run five times. In conclusion, Case B could use almost the same setup as Case A, with only modifications to the thresholds and the data source.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{images/ac-results.png}
+  \caption{Five days of collected data. The red line shows the temperature sensor readings and the blue shows when the A/C is switched on.}%
+  \label{fig:ac-results-graph}
+\end{figure}
+
+Most of the programmed memory allocations in the embedded system are static and the compiler toolset reported static RAM use of 117 KB which is only 36\% of the total RAM of 320 KB. However, in this case the chip architecture limitations allow a maximum of half of the RAM for the heap, and once the system is booted, various kernel and library code allocations were measured only 26 KB of free space in the heap. Furthermore, the minimum amount of free space during execution was 19 KB. The main reason for low memory is that the communication part of the code is poorly memory optimized, and the leftover memory was intentionally used to support more concurrent connections to reach the maximum of six connections. Hence, some room of improvement was left for future versions. Finally, the external PSRAM is mostly empty at $9.5\%$ usage, because it is only used for string values of the O-DF tree, like scripts and descriptions, in addition to script engine memory. None of them were used much in the test. Further performance was measured by how long the device took to process and respond to requests. The read \emph{Objects} request took approximately 36 ms to fetch all 22 items in the response. See Appendix~\ref{chapter:appendixA} for the items. Moreover, it took 199 ms to parse and store the scripts in Listing~\ref{lst:scripts}. In conclusion, the device resources and performance are adequate for real world use of the proposed system.
+%FIXME: consider using a table?
+
+
+
+
+% FIXME: Multicast DNS is not enabled or supported by all devices and especially browsers
+
+All in all, the main result is that using heavier but more interoperable and human-readable protocols are feasible on a modern Wi-Fi SoC, even with a minimal scripting engine. This is the foundation for the rest of the proposed smart home system and was tested to work successfully in a real home setting.
+
+
+
+
+
+% Stats without psram script engine
+%/Device/SoftwareBuildDate : ['2021-05-25 20']
+%/Device/SoftwareBuildTime : ['21:34:42 20']
+%/Device/SoftwareBuildVersion : ['e3fd6a5-dirty 20']
+%/Device/Memory/HeapFree : ['26491 300']
+%/Device/Memory/HeapLargestFreeBlock : ['8180 20']
+%/Device/Memory/HeapMinFree : ['26623 20']
+%/Device/Memory/HeapTotal : ['157583 20']
+%/Device/Memory/PSRAMFree : ['1928707 20']
+%/Device/Memory/PSRAMLargestFreeBlock : ['1048564 20']
+%/Device/Memory/PSRAMMinFree : ['1926771 20']
+%/Device/Memory/PSRAMTotal : ['2094147 20']
+%/Device/Memory/SoftwareSize : ['1231440 20']
+%/Device/Memory/SoftwareSizeFree : ['1310720 20']
+%/Dht11/RelativeHumidity : ['22.000000 20']
+%/Dht11/Temperature : ['24.000000 20']
+%/RgbLed/ColorRGB : ['0 20']
+%/Servo/SetDegrees : ['0.000000 20']
+
+% FROM ACTUAL RESULTS RUN (script engine in ram)
+%Objects/Device/SoftwareBuildDate	2021-05-23
+%Objects/Device/SoftwareBuildVersion	ed579a0-dirty
+%Objects/Device/SoftwareBuildTime	14:53:40
+%Objects/Device/Memory/PSRAMMinFree	1895159
+%Objects/Device/Memory/PSRAMTotal	2094171
+%Objects/Device/Memory/PSRAMLargestFreeBlock	1048564
+%Objects/Device/Memory/HeapTotal	157763
+%Objects/Device/Memory/HeapMinFree	18647
+%Objects/Device/Memory/HeapFree	26259
+%Objects/Device/Memory/HeapLargestFreeBlock	8180
+%Objects/Device/Memory/PSRAMFree	1927639
+%Objects/Dht11/RelativeHumidity	55.61695
+%Objects/Dht11/Temperature	25.009426
+%Objects/OMI-Service/Settings/num-latest-values-stored	100000
+%Objects/RgbLed/ColorRGB	0
+%Objects/Servo/SetDegrees	180.0
+%Objects/Servo/Switch	1
+
+% PSRAM script engine, boot:
+%/Device/SoftwareBuildDate : ['2021-05-25 20']
+%/Device/SoftwareBuildTime : ['21:55:32 20']
+%/Device/SoftwareBuildVersion : ['e3fd6a5-dirty 20']
+%/Device/Memory/HeapFree : ['26891 20']
+%/Device/Memory/HeapLargestFreeBlock : ['8180 20']
+%/Device/Memory/HeapMinFree : ['26475 20']
+%/Device/Memory/HeapTotal : ['157583 20']
+%/Device/Memory/PSRAMFree : ['1928707 20']
+%/Device/Memory/PSRAMLargestFreeBlock : ['1048564 20']
+%/Device/Memory/PSRAMMinFree : ['1924255 20']
+%/Device/Memory/PSRAMTotal : ['2094147 20']
+%/Device/Memory/SoftwareSize : ['1231456 20']
+%/Device/Memory/SoftwareSizeFree : ['1310720 20']
+%/Dht11/RelativeHumidity : ['22.187500 60']
+%/Dht11/Temperature : ['24.000000 60']
+%/RgbLed/ColorRGB : ['0 20']
+%/Servo/SetDegrees : ['0.000000 20']
+
+% after script loading:
+%/Device/SoftwareBuildDate : ['2021-05-25 20']
+%/Device/SoftwareBuildTime : ['21:55:32 20']
+%/Device/Memory/HeapFree : ['26475 440']
+%/Device/Memory/HeapLargestFreeBlock : ['8180 440']
+%/Device/Memory/HeapMinFree : ['19259 440']
+%/Device/Memory/HeapTotal : ['157583 20']
+%/Device/Memory/PSRAMFree : ['1928295 440']
+%/Device/Memory/PSRAMLargestFreeBlock : ['1048564 440']
+%/Device/Memory/PSRAMMinFree : ['1905095 440']
+%/Device/Memory/PSRAMTotal : ['2094147 20']
+%/Device/Memory/SoftwareSize : ['1231456 20']
+%/Device/Memory/SoftwareSizeFree : ['1310720 20']
+%/Dht11/RelativeHumidity : ['22.656940 450']
+%/Dht11/Temperature : ['24.000000 450']
+%/RgbLed/ColorRGB : ['0 20']
+%/Servo/SetDegrees : ['180.000000 449']
+%/Servo/Switch : ['0 1']
+
+
+% MOVED TO DISCUSSION
+%% (Can be combined with discussion.)
+
+%You also need to evaluate how well your implementation works.  The
+%nature of the evaluation depends on your problem, your method, and
+%your implementation that are all described in the thesis before this
+%chapter.  If you have created a program for exact-text matching, then
+%you measure how long it takes for your implementation to search for
+%different patterns, and compare it against the implementation that was
+%used before.  If you have designed a process for managing software
+%projects, you perhaps interview people working with a waterfall-style
+%management process, have them adapt your management process, and
+%interview them again after they have worked with your process for some
+%time. See what's changed.
+%
+%The important thing is that you can evaluate your success somehow.
+%Remember that you do not have to succeed in making something spectacular; a
+%total implementation failure may still give grounds for a very good master's
+%thesis---if you can analyze what went wrong and what should have been
+%done. 
+
+ 

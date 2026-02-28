@@ -1,0 +1,66 @@
+%! TEX root = tuomas_keyrilainen_masters_thesis.tex
+\chapter{Environment}
+\label{chapter:environment}
+
+%  Smart buildings: Homes, maybe offices? Describe average home environment: Bad WiFi or Internet connectivity (router freezes common) vs cloud environment, (bad security), many different manufacturers. Cheap price is required.
+
+In this chapter the environment of the implementation is specified. It can be divided into three categories: physical test environment, hardware environment and programming environment.
+
+%\{Test house: good WiFi coverage, power supplies available (battery changing is too much work when there are many IoT devices)}
+
+\subsubsection*{Physical environment}
+As the physical environment, a modern household is selected. It has good WLAN coverage and power sockets available, so no mesh networking or other radio protocols for power saving are needed. Batteries are avoided as much as possible as they present an extra chore for the user and might lead to a reliability problem if the user does not notice or neglects to change the battery.
+
+Despite the Wi-Fi signal being good, the Internet connectivity was measured from ping packet loss to well-known DNS servers for 5 months resulting to availability of 99.84\%. Usual connection loss was because of home router, 5G mobile network or Internet service provider issues. Availability might be a lot worse in average home. In a 2013 study~\cite{Peeking_behind_the_NAT}, the sampled median availability of a US home router was 98.27\%. Hence, Internet availability should not be relied on for functionally critical parts. Since homes are the target environment, the IoT device user experience should be consumer-grade, such that non-programmer users could use the device and would also be willing to pay for them. 
+%Specifically, barriers for home automation have been the cost of devices, inflexibility, difficulty of management and security concerns~\cite{Home_Automation_in_the_Wild}. 
+
+Although homes are the target in this work, small offices also fit the constraints, if they have a single LAN without restrictions to broadcast packets, like too strict firewall or network split into many Virtual Local Area Networks (VLAN).
+
+
+% HOME NETWORK AVAILABILITY
+%One key reason to have local business logic and connections for IoT devices is the availability of cloud services. Although cloud might have 99.999\% or more availability in a year, in the viewpoint of an IoT device, there must also be a working home network and working Internet path up to the cloud data center. Internet can usually route around broken routers, but there are still critical links, especially in the home network and its connection to the first outside router. Indeed, in a 2013 study~\cite{Peeking_behind_the_NAT}, the sampled median availability of an US home router was 98.27\%
+%, and even worse in India 76.01\% and South Africa 85.57\%, which is somewhat due to users switching off their routers when not needed. In conclusion, cloud services might not be always available for the device and it should not have critical functions relying on cloud services.
+
+%\ixme{Cloud services also have some uncertainty in the long term. They will have updates or other disruptions, e.g.\ especially free cloud services might take actions to clean out old inactive users.}
+
+
+\subsubsection*{Hardware environment}
+%\{Hardware environment: Embedded device: ESP32-S2: hardware limits, software platform is Arduino because it has simple API, hw energy optimization is not needed}
+The selected hardware environment is an embedded system with Espressif ESP32-S2~\cite{esp32-s2-datasheet} System-on-chip (SoC), due to cheap price, small size and extensive features. It provides Wi-Fi subsystem, supporting IEEE 802.11b/g/n Wi-Fi standards. In case battery is needed, it has typically low power usage ranging from 19 mA to 190 mA at 3.3 V, depending on networking activity, but there are also power saving features to temporarily reach three orders of magnitude lower values of 20 to \SI{450}{\uA}.
+
+The computing specifications are listed in table~\ref{table:esp32-s2-cpu}. The processor is single-core 32-bit, with a high 240 MHz max clock frequency for its category. Internal memory is only 320 KB, which can be limiting for this complicated project, but the selected WROVER-module~\cite{esp32-s2-wrover} has extra 2 MB of external PSRAM (Pseudo Static Random Access Memory), which is better, but still less than in personal computers or smartphones. Furthermore, the external PSRAM chip competes with flash memory of serial bus capacity. Flash memory size is 4 MB and is used for long term cold storage of the program code and optional file system. Furthermore, the WROVER-module is embedded into a development board Saola-1, which includes primarily the USB-to-UART interface for programming and debugging, as well as power regulator, RGB LED, two buttons and pin headers for all 47 GPIO (General Purpose Input/Output) pins~\cite{esp32-s2-saola1-schematics}. 
+
+\bgroup
+\def\arraystretch{1.2}
+\begin{table}[H]
+  \centering
+  \caption{ESP32-S2 Computing specifications~\cite{esp32-s2-datasheet} in WROVER module~\cite{esp32-s2-wrover}.}
+  \smallskip
+  \label{table:esp32-s2-cpu}
+  \begin{tabular}{|l|l|} \hline
+    %Description & value \\ \hline
+    CPU & Xtensa\textregistered~32-bit LX7 \\ \hline
+    CPU cores & 1 \\ \hline
+    Max CPU frequency & 240 MHz \\ \hline
+    Co-processor & Ultra-low-power RISC-V \\ \hline
+    ROM & 128 KB \\ \hline
+    SRAM & 320 KB \\ \hline
+    RTC SRAM & 16 KB \\ \hline
+    Flash memory \footnotemark & 4 MB \\ \hline
+    PSRAM \footnotemark[\value{footnote}] & 2 MB \\ \hline
+  \end{tabular}
+\end{table}
+\egroup
+\footnotetext{From external components of the selected WROVER module.}
+
+%saola-1r: WROVER&
+% Programming environment
+
+\subsubsection*{Programming environment}
+Finally, the programming environment with ESP32-S2 can be either manufacturer supplied ESP-IDF environment in C programming language or with Arduino C++ environment, by using Arduino-esp32~\cite{arduino-esp32}. Some scripting environments are also available, but Arduino environment is used in this prototype to have possibility to write memory efficient code, have a broader code library selection available, and have larger developer community to find information for development. Arduino uses the gcc compiler, which can be used separately from its Integrated Development Environment (IDE) with the {\it make} build system. Another option is to use PlatformIO~\cite{what-is-platformio}, which enables interoperability between many IDEs and embedded hardware platforms, and provides platform independent features such as debugging, testing and code analysis. Arduino also supports over-the-air (OTA) updates if the flash memory has room for the new version simultaneously with the old version.
+
+Embedded system environment means that there is no operating system. For instance, it implies that there is no process abstraction, so no process scheduler or separate memory spaces, which means that such features need to be either added by a library or considered in the program code. For example, Wi-Fi and some other network protocols require periodical communication, which are handled as a timed task.
+
+%\fixme{conclusion?}
+
+

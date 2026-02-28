@@ -1,0 +1,397 @@
+%! TEX root = tuomas_keyrilainen_masters_thesis.tex
+\chapter{Background}
+\label{chapter:background} 
+
+
+%\section{Related work}
+
+
+Designing an interoperable IoT system with autonomous smart objects induces a few requirements. These requirements have been investigated under different terminology and contexts. In the context of smart object IoT, the most important need is to have a software platform for applications, which connects the applications to the device data sources. It is often called a \emph{middleware}. For example, earlier researchers~\cite{Role_Of_Middleware_For_Internet_Of_Things_A_Study} have described middleware to provide abstractions of the heterogeneous components to bind them together, creating common APIs (Application Programming Interfaces) and services for the applications. They propose that a middleware for IoT would consist of four functional blocks: Interoperation, security \& privacy, context detection, device discovery \& management and managing data volume. Middleware are often implemented in some form of a gateway device between the network of sensors and actuators and the internet. The RSOS is fundamentally a middleware but does not require a gateway device to function.
+%, but for this work, some of the more relevant 
+%\ixme{\url{https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.1071.5409&rep=rep1&type=pdf}} IoT middleware challenges and comparison (requirements can be extracted). Defines middleware and the reason for the need for it (PnP). components added to middleware: interoperation, security/privacy, context detection, device discovery & management, managing data volume.
+
+
+%\ixme{\url{https://link-springer-com.libproxy.aalto.fi/chapter/10.1007/978-3-030-41346-0_1} IoT system design. Maybe move to introduction or methods?} Differences in IoT systems: No convention of data format, search, net topology, continuous data streams, distributed function placement. Placement of functions is essential design in distributed system. Affects processing, storage, latency, connectivity, bandwidth and cost. Latency and local autonomy (connectivity?) are specific to IoT cloud availability. Data flow can be reduced if processed near data source. Issues and challenges: Technology and standards, security and privacy, business value and adoption.
+
+The remainder of this chapter presents a few
+existing proprietary and open middleware solutions.
+Further,
+IoT protocols required for such middleware are described.
+Then, 
+smart object requirements and existing work for smart object middlewares are explored, in addition to proposals for providing plug-and-play (PnP) style connectivity between the devices.
+Finally,
+earlier work on IoT system implementations are presented, focusing on systems that adopt scripting.
+
+
+
+\section{Existing proprietary and open solutions}
+
+
+IoT platforms provide a collection of interoperable tools required for implementing large IoT systems. Some examples of IoT platforms are KAA platform, ThingSpeak, Microsoft Azure IoT, ThingsBoard and AWS IoT. They include features like device management, scalability, storage of data, availability, plug and play, data processing and data abstraction.~\cite{A_Survey_of_IoT_Platform_Comparison_for_Building_Cyber-Physical_System_Architecture} Thus, they also serve as middleware. IoT platforms often focus on providing the features via cloud services, and are directed towards developers of IoT systems, which accounts for vertical silos in companies. It means that all the data of certain products are collected and stored inside one company, and are not straight forward or possible to use in third party applications or products. %More end user oriented services are explored next.
+
+As an example of more end user oriented services,
+IFTTT\footnote{\url{https://ifttt.com}} aims to bridge the gap between companies by providing applets that trigger actions in one service based on the events of another service. The difficulty of service integration can be seen in the limitations of the service. It only allows simple ``if this, then that'' logic, and all service integrations require programming an adapter between IFTTT and the service~\cite{ifttt_docs}.
+
+OpenHAB~\cite{openhab} (open Home Automation Bus) is an open source home automation software. It is intended to be run on a local computer to manage connections and data processing of local devices. OpenHAB itself is not a proprietary system, but provides a repository of \emph{bindings}, which provide support to different proprietary systems and protocols of devices. The system also provides a cloud service to provide remote control and to be able to connect easily to online services that require a server, for instance, IFTTT and mobile push notifications services. OpenHAB is to some extent usable for a technically oriented consumer, but advanced features might require deep expertise in OpenHAB or programming.
+
+All in all, in the context of the RSOS, the problems of proprietary systems are that data are collected into vertical silos, which limits innovation in third-party applications and requires a reliable Internet connection and service availability. OpenHAB runs locally, but has a centralized server architecture, which causes downtime for the entire system in case of centralized server problems or maintenance. The reliability problem might limit using the system on critical use cases which require continuous control or reliable immediate reaction to an event.
+
+% KAA Platform, Thingspeak, Azure Iot, Thingsboard.}
+
+%\ixme{
+%  Explore the following existing systems, and describe why they are different/worse:
+%\begin{enumerate}
+%  \item Microsoft Plug-and-Play IoT: Similarities to O-MI/O-DF but only cloud supported and not intended for homes.
+%  \item If-this-then-that and similar integration services: Needs less tecnical skills but very limited and very unreliable
+%  \item OpenHab: Hobby home IoT platform, might need some technical skills.
+%  \item Philips Hue (ZigBee): Has simple gateway device with authorization and read/write
+%  \item Other Proprietary? Google, Amazon, Samsung, etc.: Usually has good discovery but no configurability or interoperability; mostly personal assistant integrations.
+%\end{enumerate}
+%}
+
+\section{Open standards and specifications}
+
+\subsection{Existing protocol limitations}
+
+%In order to be able to compare related work, 
+An overview of standards and protocols relevant to IoT is provided in this section. This work focuses on Wireless Local Area Network (WLAN) with Wi-Fi, making the selection of the protocols of physical, link and network layers irrelevant, so they are not further considered in the design of the RSOS. Thus, the selection of the application level protocols in the stack remains to be specified.
+
+Some commonly used protocols in IoT are MQTT, CoAP, HTTP and WebSockets, since they are found in large IoT platforms~\cite{A_Survey_of_IoT_Platform_Comparison_for_Building_Cyber-Physical_System_Architecture}. HTTP is used as it is easy to interface with existing software and servers, but it only provides a request-response model for communication; each request results in exactly one response. However, continuous data streams from sensors are usually needed, thus a request-response model results in large overhead, latency and small throughput.
+
+The Constrained Application Protocol (CoAP)~\cite{The_Constrained_Application_Protocol_RFC7252} improves HTTP in this context, by providing a subset of its features and some machine-to-machine related features in a more compact and lightweight protocol, which is intended for memory- and performance-constrained devices or networks. It keeps the request-response requirement of HTTP to support the stateless protocol requirement of Representational State Transfer (REST) style communication, which is popular in the Web. Web servers do not typically support CoAP directly; however, it can be transformed into HTTP requests and responses effortlessly.
+
+ WebSocket~\cite{WebSocket_RFC6455} is an extension to HTTP, which provides a different solution to the large overhead of HTTP requests by lifting the request-response requirement and providing a two-way channel for a stream of messages, similar to TCP. WebSocket is useful in user interfaces as it is an efficient way to create a data stream to a web browser, especially because browsers have strict limits on what protocols are allowed in client-side scripts. Additionally, WebSocket can also be secured easily as it can be used with HTTPS to share the same underlying secure channel. Although WebSocket is suited for IoT use, it lacks payload specifications for the IoT domain, such as actuator control or time series data related requests.
+
+ In IoT, time series data often need to be transferred in real time from sensing devices to services or devices, which need to act based on the data. For example, a service could send notifications if interesting sensor values are detected, or if an actuator needs to be activated to keep sensor values within a predetermined range. Then, to allow different parties to construct interoperable implementations, a standardized way to create ad-hoc data streams is needed, which leads to a publish-subscribe (pub/sub) pattern, where participating agents can either publish data or subscribe to it to receive notifications of published data. In IoT and other networked domains, the model usually involves a specialized data broker server, which has a method for publishing or subscribing the data. One example of such a model is in the MQTT protocol, which is an application level protocol and is payload-agnostic, which is why it needs no specific payload data format~\cite{MQTT}. Since both the data producers and consumers need to be configured to communicate with the broker server, a common server is often used for many devices and agents. The use of a common data broker server creates an additional critical link, which causes additional costs and difficulties to construct a reliable infrastructure for the IoT agents. For example, it would need a fallback server to be able to handle updates or failures of the main server. Although the required infrastructure would be easy to implement in a cloud environment, it is difficult or costly to implement on-site, for example in households.
+
+%\ixme{AMQP?}
+
+
+%UPnP
+% 1. Discovery
+% 2. description: XML: urls for control, eventing and presentation. Service commands and arguments, variables
+% 3. control: SOAP commands
+% 4. eventing: publish-subscribe with the variables
+% 5. presentation: web page
+In addition to data transfers, discovery protocols are used to find devices and their IP address in a LAN. Discovery protocols typically use multicast to advertise or query other devices. Three well known examples are: Universal Plug and Play (UPnP), Link-Local Multicast Name Resolution (LLMNR) and multicast DNS (mDNS) with its DNS Service Discovery (DNS-SD) companion mechanism.
+
+Universal Plug and Play (UPnP)~\cite{UPnP_Device_Architecture} defines a full device architecture to allow plug-and-play connectivity. It contains five steps: discovery, description, control, eventing and presentation. Discovery operates by devices advertising themselves with multicast version of HTTP (HTTPMU). Description step defines how to fetch more information about discovered devices. The information is used in the rest of the steps and contains control interfaces, variables and an optional presentation URL. Device controls are defined with SOAP. Eventing allows subscribing to variables. Presentation URL can provide a web app to show a user interface for a device.
+
+LLMNR~\cite{Link-Local_Multicast_Name_Resolution_RFC4795} and mDNS~\cite{Multicast_DNS_RFC6762} provide only hostname resolution using multicast packets. LLMNR is not standardized, whereas mDNS is in the \emph{Proposed Standard} phase. Furthermore, extension DNS-SD~\cite{DNS-Based_Service_Discovery_RFC6763} can be used with mDNS to provide service discovery, which is application protocol agnostic  unlike UPnP.
+
+
+Table~\ref{tab:protocols} lists a short comparison and summary of protocols described in this section. O-MI and O-DF are presented in more detail in the Section~\ref{section:omiodf}.
+
+\bgroup
+\def\arraystretch{1.3} % increase table padding, (top too close)
+\begin{table}[H]
+  \centering
+  \caption{Summary of related protocols}
+  \smallskip
+  \label{tab:protocols}
+  \fontfamily{cmr}\selectfont % fix bold looking font
+  \small
+  \begin{tabular}{|p{0.14\textwidth}|p{0.18\textwidth}|p{0.13\textwidth}|p{0.4\textwidth}|}
+    \hline
+    Name & Transfer \newline protocol & Payload & Purpose (simplified) \\ \hline
+    \hline
+    HTTP & TCP & Any & Request/response. Transfer files and call API functions \\ \hline
+    WebSockets & HTTP/TCP & Any & Allows TCP-like connection to browsers. \\ \hline
+    CoAP & UDP & Any & Similar to HTTP, but fewer features and more performance \\ \hline
+    MQTT & Any TCP-like & Any & Publish/subscribe \\ \hline
+    UPnP & (multicast) UDP & XML, SOAP & LAN service discovery, Pub/sub XML events and call functions \\ \hline
+    LLMNR & multicast UDP & (modified DNS) & LAN hostname resolution, any application protocol can be used \\ \hline
+    mDNS, DNS-SD & multicast UDP & (modified DNS) & LAN service discovery, any application protocol can be used\\ \hline
+    O-MI & Any TCP-like & O-DF (or any text) & Interoperable IoT data CRUD, functions and Pub/sub. \\ \hline
+  \end{tabular}
+\end{table}
+\egroup
+%\footnote[1]
+%\footnotetext[1]{Initiated with HTTP}
+
+%\ixme{
+%  Focus on application level protocols that are used with IoT, focusing on features that would be needed for device-to-device communications. A comparison table?\\
+%\\
+%Some options:
+%\begin{enumerate}
+%  \item HTTP REST APIs, Websocket - Not enough application level constraints $\rightarrow$ results in different incompatible proprietary APIs
+%  \item MQTT, MQTT-SN - Good publish and subscribe protocol but nothing else and requires a server.
+%  \item CoAP - Lighter weight than HTTP, for resource constrained devices. Data format agnostic.
+%  \item XMPP (-IoT) - Originally a chat protocol, which creates limits and not enough application level constraints
+%  \item AMQP - 
+%  \item DDS - 
+%  \item LLAP - 
+%  \item SOAP - Complicated remote procedure call standard; no specialization for IoT
+%  \item DPWS - Discovery, metadata, Pub/sub for web services. MetaData follows WSDL
+%  \item DNS-SD - Discovery protocol that is going to be used in this work
+%  \item O-DF/O-MI - Built specifically for loosely coupled IoT, peer-to-peer is easy as all devices are servers, extensible (required for this thesis)
+%\end{enumerate}
+%Investigate existing discovery and automatic configuration systems:
+%\begin{enumerate}
+%  \item (Protocols DHCP and ipv6: broadcast/multicast packets)
+%  \item ZeroConf networking: multicast dns (mDNS), service discovery (DNS-SD)
+%  \item LLMNR: Link local hostnames, similar to mDNS, but no standard status yet
+%  \item UPnP - Discovery, control, eventing. Used in media devices % related https://ieeexplore.ieee.org/document/9298148
+%\end{enumerate}
+%}
+
+\subsection{O-MI \& O-DF}\label{section:omiodf}
+
+%PMI $\rightarrow$ QLM $\rightarrow$ O-MI
+
+\textbf{Open Messaging Interface} (O-MI)~\cite{o-mi} is a protocol standard intended specifically for IoT. It provides loose coupling between devices or services; thus, they can be connected with minimal prior knowledge of each other. Instead of the publish-subscribe pattern it provides the \emph{observer pattern}, in addition to basic data CRUD (Create, Read, Update, Delete) model. The observer pattern differs from publish-subscribe in that it does not rely on the high availability server. Instead, consumers of the data subscribe directly to the producers of the data. It is achieved by each node with server and client capabilities, which enables peer-to-peer (P2P) communication. Another property of O-MI is that it is protocol agnostic, meaning it can be transferred to a destination device with any text payload capable protocol, such as HTTP, WebSocket, SOAP or TCP directly.
+
+O-MI provides five different request verbs, as depicted in Table~\ref{tab:o-mi-requests}: read, write, cancel, delete and call. \emph{Read requests} can further be used to set up different kinds of subscriptions or poll data from pollable subscriptions. \emph{Write} is used to create or update data, delete is used to remove data, call is used to run methods and cancel stops subscriptions. Subscriptions can be created by specifying the interval parameter, which sets the interval of subscription results or if it is \verb+-1+, responses are sent only when the requested items are updated. In the latter case, the subscription is a so-called event subscription.
+
+
+%\begin{enumerate}
+%  \item Read: Can be classified into a few different requests, based on parameters.
+%    \begin{enumerate}
+%    \item Read-once request: Basic read request that returns a single value for each requested item. Parameters can be used to fetch values between a time range or a certain number of newest or oldest values.
+%    \item Interval subscription: Given a positive number as the \verb+interval+ parameter, a subscription is created that returns the current value of requested items every time the interval amount of time has passed.
+%    \item Event subscription: Given \verb+-1+ as the \verb+interval+, a subscription is created that returns a response every time the requested items are updated.
+%    \item Pollable subscription: The \verb+callback+ parameter is the URL where to send the subscription results. If it is not given for subscriptions, the results can only be retrieved by polling the request ID of the subscription.
+%    \item Poll: If \verb+requestID+ element is given, the read request is considered as a poll for subscription.
+%  \end{enumerate}
+%  \item Write: Create new parts of the hierarchy or update values of existing items.
+%  \item Cancel: Stop subscriptions before their time-to-live (TTL) parameter have expired the subscription.
+%  \item Delete: Remove parts of the hierarchy, along with their data.
+%  \item Call: Execute some functionality based on passed parameters. Allows passing of any structure to a function and receiving any structure as a return value. When used with O-DF, the parameter and return value are complete O-DF trees.
+%\end{enumerate}
+\bgroup
+\def\arraystretch{1.3} % increase table padding, (top too close)
+\begin{table}[H]
+  \centering
+  \caption{O-MI requests. Parameters surrounded by angle brackets (\texttt{<>}) are XML elements, the rest are XML attributes.}
+  \smallskip
+  \label{tab:o-mi-requests}
+  \fontfamily{cmr}\selectfont % fix bold looking font
+  \scriptsize
+  \begin{tabular}{|p{0.08\textwidth}|p{0.16\textwidth}|p{0.14\textwidth}|p{0.5\textwidth}|}
+    \hline
+    Verb & Parameters & Functionality & Description \\ \hline
+    \hline
+    Read & \texttt{<msg>} & Read latest & Basic read request that returns a single value for each requested item in \verb+msg+. \\ \hline
+    Read & \texttt{<msg>}, \newline \texttt{newest}, \texttt{oldest}, \newline \texttt{begin}, \texttt{end} & Read history & Parameters can be used to fetch values between a time range, or a certain number of newest or oldest values. \\ \hline
+    Read & \texttt{<msg>}, \newline \texttt{interval>0},\newline \texttt{callback} & Interval \newline subscription & A subscription is created that returns the current value of requested items every time the interval amount of time has passed. \\ \hline
+    Read & \texttt{<msg>}, \newline \texttt{interval=-1}, \newline \texttt{callback} & Event \newline subscription & A subscription is created that returns a response every time the requested items are updated. \\ \hline
+    Read & \texttt{<msg>}, \newline \texttt{interval} & Pollable \newline subscription & The \verb+callback+ parameter is the URL where to send the subscription results. If it is not given for a subscription, the results are stored until polled. \\ \hline
+    Read & \texttt{<requestID>} & Poll & If \verb+requestID+ element is given, the read request is considered as a poll for subscription. \\ \hline
+    Write & \texttt{<msg>} & Create/Update & Create new parts of the hierarchy or update values of existing items. \\ \hline
+    Cancel & \texttt{<requestID>} & Cancel \newline subscription & Stop subscriptions before their time-to-live (TTL) parameter have expired the subscription. \\ \hline
+    Delete & \texttt{<msg>} & Delete & Remove parts of the hierarchy, along with their data. \\ \hline
+    Call & \texttt{<msg>} & Call method & Execute some functionality based on passed parameters. Allows passing of any structure to a function and receiving any structure as a return value. When used with O-DF, the parameter and return value are complete O-DF trees. \\ \hline
+  \end{tabular}
+\end{table}
+\egroup
+
+
+\textbf{Open Data Format} (O-DF)~\cite{o-df} is the recommended payload data format for O-MI. It is defined with XML schema to create a generic hierarchy to represent any objects similar to object-oriented programming paradigm.
+
+%Figure~\ref{fig:omiodf-example} shows an example of O-MI write request with O-DF payload that contains two sensors with one value in each. O-DF is structured in a hierarchical manner with the root being \verb|Objects|, then \verb|Object| is similar to a directory and \verb|InfoItem| is similar to a file in file systems. The right side of the figure shows a reference of allowed hierarchy structure: Only \verb+Object+ children can reside under the root (\verb+Objects+). \verb+Object+ can also have additional \verb!InfoItem! children, which in order can have \verb!value! and \verb!MetaData!, but no further \verb!Object! elements. Finally, the \verb!MetaData! element reuses the \verb!InfoItem! semantics, such that the metadata can be represented as key value pairs.
+Figure~\ref{fig:omiodf-example} shows an example of O-MI write request with O-DF payload that contains two sensors with one value in each. O-DF is structured in a hierarchical manner with the root being \emph{Objects}, then \emph{Object} is similar to a directory and \emph{InfoItem} is similar to a file in file systems. The right side of the figure shows a reference of allowed hierarchy structure: Only \emph{Object} children can reside under the root (\emph{Objects}). \emph{Object} can also have additional \emph{InfoItem} children, which in order can have \emph{value} and \emph{MetaData}, but no further \emph{Object} elements. Finally, the \emph{MetaData} element reuses the \emph{InfoItem} semantics, such that the metadata can be represented as key value pairs.
+
+Each hierarchy level can contain only unique identifiers and names. The identifiers can also have some extra parameters to describe their type, in addition to type attributes for Object and InfoItem elements. Moreover, almost all elements are also allowed to be extended by proprietary XML attributes.
+ 
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth, trim=0 4cm 0 1.5cm, clip]{images/omiodf.pdf}
+  \caption{Example O-MI write request with O-DF payload}
+  \label{fig:omiodf-example}
+\end{figure}
+
+When O-DF is used as a payload in O-MI requests, the requests are defined to \emph{fill} the O-DF tree, by including the given request structure and adding new elements to the tree leaves. For instance, if the request is a read request and a leaf is an InfoItem, the value of the InfoItem is added to the response. If the request contains an object leaf, then the entire subtree of the object is added in the response. 
+
+To summarize, O-MI and O-DF are very flexible, providing multiple ways of implementing the same use case, in addition to having future-proof extension points to consider the changing requirements of IoT. Likewise, flexibility is also a challenge when developing devices that should work together with other solutions that may be from other manufacturers, but this will be explored in the remainder of the study. % investigation
+
+%\fixme{Extensible and future proof, but lacks specifications of O-DF usage. BIoTope RDF semantics provides one option.}
+
+%\subsection{Publish-Subscribe protocols}
+%\subsection{Discovery protocols DNS-SD, UPnP}
+
+\section{Smart Objects}\label{section:SmartObjects}
+
+A Smart Object (SO) typically refers to a device that can react to the environment and cooperate with people and other nearby smart objects to enhance the functionality of the device.
+This section describes the requirements for smart objects and reviews existing work related to smart objects in the context of the current study. 
+
+\subsection{Requirements}
+
+Fortino et al.~\cite{Middlewares_for_Smart_Objects_and_Smart_Environments_Overview_and_Comparison} identify requirements for smart environments and smart objects. They base the requirements on the literature on smart objects and environments, confirming that interoperability is important. Different devices have typically different interfaces, thus it is challenging to make them work together, as commands from one device might be misunderstood by another device. Even semantically the same kind of devices from different manufacturers might have differences. The authors claim that abstractions are needed to achieve homogeneous interfaces, which can then facilitate \emph{plug-and-play} operations. Abstractions in the interface provide a smaller set of familiar concepts for applications to develop their functionalities. Abstractions are needed from the low level of the hardware up to the development process level. Based on a comparison of 13 platforms, they conclude that even though the platforms provide effective tools for developing, deploying and managing SOs, they need excessive manual operating to be able to manage numerous devices. Instead, they stress the need for more autonomous systems and agent-based methodologies. As one of their comparison frameworks, they present the following list of requirements for smart environments~\cite{A_Middleware_for_Intelligent_Environments_and_the_Internet_of_Things}:
+
+\begin{enumerate}
+  \item ``Abstraction over heterogeneous input and output hardware devices''%\\
+    %Hardware devices have many different kinds of low level interfaces, settings, models, etc. These should be abstracted into a common model to fit the higher level interfaces.
+  \item ``Abstraction over hardware and software interface''%\\
+    %Interface abstractions are needed for being able to communicate with the devices, without knowing the exact hardware and software details of each device separately.
+  \item ``Abstraction over data streams (continuous or discrete data or events) and data types''%\\
+    %Data types might be different even if meaning the same thing.
+  \item ``Abstraction over physicality (location, context)''
+  \item ``Abstraction over the development process (time of integration of services)''
+\end{enumerate}
+
+Furthermore, a list of requirements for smart objects can be acquired from the following design challenges~\cite{A_Document_Centric_Framework_for_Building_Distributed_Smart_Object_Systems}, as presented in Table~\ref{table:SO_requirements}.
+
+\bgroup
+\def\arraystretch{1.3} % increase table padding, (top too close)
+\setlength\doublerulesep{2ex}
+\begin{table}[H]
+  \centering
+  \caption{Smart object requirements~\cite{A_Document_Centric_Framework_for_Building_Distributed_Smart_Object_Systems}}
+  \smallskip
+  \label{table:SO_requirements}
+  \fontfamily{cmr}\selectfont % fix bold looking font
+  \begin{tabular}{|r|l|} \hline
+    SO Requirement 1 & ``Heterogeneity and Application Development'' \\ \hline
+  \multicolumn{2}{|p{\textwidth}|}{Applications must be expected to be written without prior knowledge of interface differences of devices and manufacturers.} \\ \hline \hline
+
+  SO Requirement 2 &``Augmentation Variation of Smart Objects'' \\ \hline
+  \multicolumn{2}{|p{\textwidth}|}{An object might provide multiple services, or the same services can be provided by multiple smart objects, but at different levels of detail. Consequently, it is not feasible to have fixed standards for object type specific service interfaces.} \\ \hline \hline
+  
+  SO Requirement 3 &``Management of Smart Object'' \\ \hline
+  \multicolumn{2}{|p{\textwidth}|}{Applications need a way to access and interact with the devices. In a dynamic smart environment, objects might be mobile or break. Applications need to be able to adapt in such situations.} \\ \hline \hline
+
+  SO Requirement 4 &``Evolution of Smart Object System'' \\ \hline
+  \multicolumn{2}{|p{\textwidth}|}{Smart object systems require a possibility to evolve over time by adding, moving and reconfiguring the smart objects. New technologies might emerge in the future, incorporated into the system.} \\ \hline
+
+  \end{tabular}
+\end{table}
+\egroup
+
+\subsection{Existing work}
+
+%\ixme{\url{https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=5232005} A Document centric Framework for Building Distributed Smart Object Systems} Presents challenges for smart objects, used in Middlewares for Smart Objects and Smart Environments: Overview and Comparison. 
+
+%\ixme{\url{https://link-springer-com.libproxy.aalto.fi/book/10.1007\%2F978-3-319-00491-4
+%  }
+%Mobile Agents-Based Smart Objects for the Internet of Things; 
+%Middlewares for Smart Objects and Smart Environments: Overview and Comparison
+%}
+%\\
+
+%\fixme{Split to smaller sections somehow?}
+%\ixme{\url{https://ieeexplore-ieee-org.libproxy.aalto.fi/abstract/document/5342399} Smart objects as building blocks for the Internet of things}
+Kortuem et al.~\cite{Smart_objects_as_building_blocks_for_the_Internet_of_things} describe the Internet of Things vision of the loosely coupled decentralized system of smart objects. In this article, SOs contain ``chunks of application code'' in addition to the typical device firmware, which is an idea that is extended in the RSOS as scripts. In their article, three categories are proposed: activity-aware, policy-aware and process-aware. In the first, an SO is designed to record the activities performed with the object, a tool for example, and report it to other systems. The second type follows sensor values and alerts if they exceed a value set by a policy. The third type follows the environment via multiple sensors and verifies that a workflow with many steps is followed in the correct order. Some prototypes from these different categories were tested in a construction site setting. For communication, they constructed an ad-hoc P2P query for values from the nearby objects to evaluate a rule. Then, the nearby objects could make similar queries before returning the result to make a chain of reasoning.
+% TODO: concluding comments on this^?
+%(Interaction important)
+
+%\ixme{Conclusions on these? How to continue to agents?}
+Smart objects offer an effective approach to Internet of Things as they establish the required framework to advance to more autonomous systems that could work more reliably, as well as handle a larger number of connected devices. A concept similar to smart objects in IoT is smart products in the context of the product lifecycle management, where the products can communicate with the manufacturer and other parties to provide extra value for all parties.
+
+%\ixme{\url{https://www.researchgate.net/publication/220709498_Gathering_Product_Data_from_Smart_Products} Gathering product data from smart products (Kary, 2008)} PMI. id@uri scheme. PROMISE EU project. (Fridge) Manufacturer can enhance product performance and preventive maintenance. Product agent was designed with interface. WLAN and auto-configuration-capable protocols (UPnP) is forecasted. A global lookup system to get the address of the agent is required.
+Främling et al.~\cite{Gathering_Product_Data_from_Smart_Products} demonstrate the use of PMI, the precursor of O-MI, for product lifecycle management. These smart products could provide data for manufacturers to improve the performance or the possibility to provide preventive maintenance, in addition to providing the users with useful information and control remotely. The authors suggest that the products could use WLAN and discovery protocols like Universal Plug and Play (UPnP) in the future, which will be the case in the RSOS. Instead, after analyzing how earlier ways to catalog and interface the devices from the internet are inadequate, they outline the use of PMI as a distributed network between companies, which the products would connect to. They show the system in use with a smart refrigerator.
+
+The smart home use case was extended in~\cite{P2P_Data_synchronization_for_product_lifecycle_management} with a smart ventilation machine, as well as with a description of the technical design and implementation of data synchronization with P2P connections. Two strategies were demonstrated: asynchronous primary copy and asynchronous update everywhere. However, they recognize the overhead and amount of IoT data sending, so only synchronizing the required data at the required times is encouraged. They emphasize the usefulness of agent systems, where an agent is an autonomously working software, as they offer structure for distributing the services, creating redundancy and transparency in the system. Consequently, they design the system with agents that create data streams only to the required nodes. The final decision on which synchronization scheme to use is on the software developer, so in the RSOS it is possible for the developer to create a device-agnostic agent software, thus deciding on the correct data synchronization settings on per service or application basis rather than device. Furthermore, the configuration of such data synchronization is mostly automated with device discovery and device-application matching in the RSOS.
+
+%\ixme{\url{https://www-sciencedirect-com.libproxy.aalto.fi/science/article/pii/S0166361514001870} P2P Data synchronization for product lifecycle management (Kary)} QLM used for data synchronization. References data synchronization categories synchronized primary copy, synchronized everywhere, asynchronous primary copy and asynchronous everywhere. The latter two are implemented with QLM standard. [CAP theorem specifies that a distributed data store can only guarantee two of the following: consistency (read returns most recent write or error), availability (every read receives data, but not necessarily the latest), partition tolerance (the system continues to operate even if all nodes cannot reach others)]. Multi-agent system references. In this work, mainly asynchronous primary copy is selected, but only for the data that a certain agent needs, on the device the data needs to be. Final call for the synchronization is on the developer of the agent script.
+
+%\ixme{\url{https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=5361638} Smart Spaces for Ubiquitously Smart Buildings (Kary, PMI)}
+
+%\ixme{\url{https://ieeexplore-ieee-org.libproxy.aalto.fi/abstract/document/6221929} Agent-oriented Smart Objects Development} Master/slave model, where the master is called a coordinator and is the only SO capable of communicating to other SOs. Provides a SO architecture with 9 components (TODO: can be compared to this work). The result supports proactive context-aware SO agent development. Needs JADE middleware.
+
+%\ixme{\url{https://ieeexplore-ieee-org.libproxy.aalto.fi/abstract/document/7300832} Autonomous and Self Controlling Smart Objects for the Future Internet} Agent-based smart objects implementation which contains most components in the object.
+More detailed implementations of agent-based smart object systems are described in~\cite{Agent-oriented_smart_objects_development} and~\cite{Autonomous_and_Self_Controlling_Smart_Objects_for_the_Future_Internet}. The first work proposes the use of the master and slave model, where the master is a coordinator of multiple smart objects, so it is the only component that can communicate to other smart objects. The second work proposes a more homogeneous system where most functionality is contained in the smart object, leaving only knowledge bases, reasoning and application specific capabilities for external Internet services. However, neither of the proposed systems focus on reliability, interoperability of protocols or application software. High interoperability is important for smart objects and required in order to achieve features such as plug-and-play, which will be explored in the next section.
+
+
+
+\section{Plug and Play}
+
+
+As any consumer device should be easy to use, the setup and replacement of devices should be automated as much as possible. It would also make the management of a larger number of devices feasible. The concept of \emph{plug-and-play} (PnP) is often used in this context. It means that the user can start using the device by simply plugging the cables in, and then the device performs any required configurations and commands to automatically connect itself to the environment. Typically, the device must use standardized protocols to communicate with its environment and to acquire any necessary information for the configuration. An example is a USB device, connecting to a computer, as shown in Figure~\ref{fig:usb-pnp}, where the computer needs to select the correct actions and connections to the operating system based on the information provided by the USB device. Another example is UPnP, which typically connects media players to media sources in households. However, PnP-like techniques are not commonly used to connect other types of IoT devices together. IoT system approaches to PnP are explored in the remainder of this section.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth, trim=0 3.5cm 0 3cm, clip]{images/PnP.pdf}
+  \caption{USB plug and play example}
+  \label{fig:usb-pnp}
+\end{figure}
+
+Stirbu~\cite{Towards_a_RESTful_Plug_and_Play_Experience_in_the_Web_of_Things} proposes a framework that uses HTTP REST APIs, which are commonly adopted in web applications. Each device should be addressable from a web URL directly or via a gateway, and they are listed in the online Resource Repository. Then, the discovery of other devices is accomplished via the Resource Repository with the device metadata, which is published by each device with the Atom publishing protocol. The Resource Repository provides users with an OpenSearch specification document to construct HTTP search queries to find devices. After that, the devices can either be controlled or data can be fetched with a REST API\@. The author adds that for complex APIs one could use Web Application Description Language (WADL), which is similar to SOAP\@. In conclusion, PnP is achieved by providing internet services for device search and metadata queries. In addition, the system requires enforcing reachable internet access to at least one gateway, which provides access to the local devices. However, requiring that all devices should be accessible from the Internet might limit use cases, specifically in situations where public IP is unavailable, which is often the case with mobile broadband networks. %might not be ideal in security point of view.
+
+
+%\ixme{\url{https://ieeexplore.ieee.org/document/7934759} Decentralized configuration of embedded web services for smart home applications}
+Wall et al.~\cite{Decentralized_configuration_of_embedded_web_services_for_smart_home_applications} describe an alternative strategy for device connection management in a PnP style. The user mobile device is used with a configurator app to configure IoT devices, which is the same strategy that is used in the RSOS. They use DPWS as the messaging standard. WS-Discovery is used to discover the devices, and a location service is included in the devices to improve usability. The location would be added either by an indoor localization system or manually by the user. To guarantee PnP success, the authors propose that each device has a predetermined list of device types they are compatible with, but it is apparent that this limits the available device combinations the user could create. They describe that when the user selects the device in the app, it will show the possible connections by filtering all the supported devices that were discovered in the LAN. Then it provides a simple \emph{if this, then that} rule configuration. Moreover, rules are checked for conflicts within a single device. % check if future work exists "Internet Draft: The OAuth 2.0 Bearer Token Usage over the Constrained Application Protocol (CoAP)" "Internet Draft: The OAuth 2.0 Internet of Things (IoT) Client Credentials Grant"
+The idea is improved in the RSOS by using O-DF and O-MI standards, which are more fitting for IoT data transfer use-cases and somewhat simpler, in addition to handling data incompatibilities and rules with scripts, which provide broader capabilities. They use a Raspberry Pi single-board computer with Java, while here, a more constrained embedded system with C/C++ is adopted.  % problem with rule UI, lux value limit hard to define without seeing the current value or some other reference
+
+% Cluoud based PnP configuration approach (OSGi) https://ieeexplore.ieee.org/document/7106921 The Device Driver Engine - Cloud enabled ubiquitous device integration
+
+% Gateway used in "Efficient Solution for Smart Home Applications" https://ieeexplore.ieee.org/document/8611836
+
+%\url{https://ieeexplore.ieee.org/document/7389072} uPnP-Mesh: The plug-and-play mesh network for the Internet of Things.
+% PnP for sensors and actuators that would be connected to a smart object, instead of having PnP for smart objects.
+% Time synchronized mesh network with each app and device requesting specified communication timeslot (interval)
+
+%\ixme{\url{https://ieeexplore.ieee.org/document/6489729} Towards integrating IoT devices with the Web} Presents data storage and brokerage middleware inteded for WSNs. Uses CoAP/HTTP on the device side and HTTP/Websockets on app side. Uses RDF to specify device metadata.
+%\\
+
+%\ixme{\url{https://ieeexplore.ieee.org/document/9181347} (Conference) A Condition-Action Rule-Based Integration Platform for the Internet of Things} (background: OpenIoT cloud device semantics interoperability) Architecture and implementation of integration platform where simple rules can be input for actuators to react on sensor readings. All processing happens in a centralized middleware server. No open standards or specifications are provided.
+%\\
+
+% GATEWAY
+%\ixme{\url{https://ieeexplore.ieee.org/document/6758734} An Internet of Things Middleware for Resource Constrained Mobile Devices}.  They present a middleware targeting mobile devices as a gateway between device and cloud, which can connect to sensors in plug-and-play manner by using plugins. Also has data subscriptions and aggregation functionality. Automatic discovery and plugin installation would be in future work.
+%\\
+
+% GATEWAY
+%\ixme{\url{https://ieeexplore.ieee.org/document/8074147} (Conference) Constructing a user-centric iot framework for software integration in a smart home environment} Gateway used to enable plug and play. Device despcription by a tree of properties in XML. Events are handled with MQTT. They use metaprogramming with the device description to reduce the amount of generated events in the system. In this work the events are reduced by each service subscribing only to the information they need and directly to the source device.
+%\\
+
+%\ixme{\url{https://ieeexplore.ieee.org/document/8516955} A Software Defined Device Provisioning Framework Facilitating Scalability in Internet of Things} Uses SDN (OpenDayLight) to provision IoT devices with LLDP protocol. Uses IoT platform (FIWARE), communicating to devices with MQTT, CoAP and HTTP. Automatically provision new devices, but does not provide mechanisms for security.
+%\\
+
+%\ixme{\url{https://ieeexplore.ieee.org/document/6402297} (Conference) AmbientWeb: Bridging the Web's cyber-physical gap} Proposes Dynamix plugin system for web browsers, which is used to add functionality like LAN device discovery to the browsers to allow PnP.
+%\\
+
+%GATEWAY
+%\ixme{\url{https://ieeexplore.ieee.org/document/9198427} IONMP -- An open standard plug and play protocol for IOT entities} Uses a gateway as a pub/sub broker and metadata storage. Protocol dataformat is in lightweight JSON structures. Protocol agnostic, request-response model.
+%\\
+
+%\ixme{\url{https://ieeexplore.ieee.org/document/8767269} Enabling Plug\&Play Cyber-Physical Systems Using Knowledge-Driven OPC UA Discovery} OPC UA is used as the platform. It provides discovery, pub/sub, methods and data organized in tree hierarchy. Handles big data. Uses RDF for semantics and relative addressing, to provide PnP capability. Provides levels of search results for matching sensor semantics: exact, plug in, subsume, intersection and disjoint.
+%\\
+
+%\ixme{\url{https://ieeexplore.ieee.org/document/7804000} The PnP Web Tag: A plug-and-play programming model for connecting IoT devices to the web of things}
+%Yang et al.~\cite{The_PnP_Web_Tag_A_plug-and-play_programming_model_for_connecting_IoT_devices_to_the_web_of_things} proposes the use of CoAP protocol with IPSO [\url{https://omaspecworks.org/wp-content/uploads/2018/03/draft-ipso-app-framework-04.pdf}] data format. It provides use-case limited models by specifying naming and typing conventions. SenML is given as heavier data format option. The architecture includes a gateway with proxy server for HTTP, WebSocket and CoAP communication, and client-side JavaScript for easy web app integration of plug-and-play IoT devices connected to the proxy.Publish/subscribe is implemented for end users with WebSocket and JSON. This approach assumes that all applications are made and run in client-side JavaScript in a browser, and this means that any app with active control loops would need a device which can run a browser or browser-based JavaScript engine continuously, which is not ideal.
+
+Yang et al.~\cite{The_PnP_Web_Tag_A_plug-and-play_programming_model_for_connecting_IoT_devices_to_the_web_of_things} focus on device-to-app interoperability. They propose an architecture of a gateway device with a proxy server for HTTP, WebSocket and CoAP communication, and it serves client-side JavaScripts for easy web app integration of PnP IoT devices connected to the proxy. Pub/sub is implemented for the end users with WebSocket and JSON\@. Their approach assumes that all applications are made and run on client-side with JavaScript in a browser, but this means that any app with active control loops would be difficult. It would need a device which can run a browser or a browser-based JavaScript engine continuously, otherwise it would need to be compiled as a part of the device firmware.
+
+The use of a scripting language would be useful for interoperability, because the same code works seamlessly on different platforms, and compilation to specific platform binary format is not necessary. Thus, the approach of scripting is explored in the next section.
+%the use of CoAP protocol with IPSO [\url{https://omaspecworks.org/wp-content/uploads/2018/03/draft-ipso-app-framework-04.pdf}] data format. It only provides use-case limited models by specifying naming and typing conventions. SenML is given as heavier data format option. 
+
+
+
+
+
+\subsection{IoT device functionality scripting}
+
+
+The RSOS presents scripting as the solution to the problem of supporting combinations of different devices to connect P2P, and to provide a way to satisfy the changing needs of the users. Scripts can be sent to devices to execute specific functionalities temporarily, as no change is needed for the device firmware. Moreover, it provides a platform for implementing efficiently functioning IoT applications, as more computation can be performed at the device and only the data needed by applications can be transferred from the device, instead of transferring all raw data continuously.
+
+Embedded devices are typically incapable of running the scripting languages common in computers, because their runtime process consumes too much memory. Instead, there are often lightweight versions designed to work in embedded devices. Here are some examples and which language their syntax is based on: MicroPython (Python), eLua (Lua), mruby (Ruby) and JerryScript (JavaScript). Another concern is how much integration work is needed to support a new embedded platform.
+
+%\ixme{\url{https://ieeexplore.ieee.org/document/8368351} (Conference) MODE: A Context-Aware IoT Middleware Supporting On-Demand Deployment for Mobile Devices } Middleware gateway using MQTT for Pub/sub, and provides an extension point by scripting "Tasks". Scripting enables data processing, data fusion, actuator controls and notifications. Middleware functions provided for scripts are: read, write, subscribe, publish, log, (read) deviceInfo, delete and error. (Context awareness here means where to deploy)
+Earlier work has used scripting to deploy task applications to a middleware device~\cite{MODE_A_Context-Aware_IoT_Middleware_Supporting_On-Demand_Deployment_for_Mobile_Devices}, where scripts are used to enable data processing, data fusion and read/write operations for device interfacing. Likewise, another work provides a method to connect IoT applications via client agents to a middleware server, which can run scripts provided by the client~\cite{ScriptIoT_A_Script_Framework_for_and_Internet-of-Things_Applications}. Similarly, in the RSOS, sensors and actuators are interfaced with read and write operations of O-MI, but scripts can be sent directly to the smart device instead of middleware server or gateway. %Another place where scripting was proposed is within sensor hardware, such that plug-and-play of sensors would be easier~\cite{SandBoxer_A_Self-Contained_Sensor_Architecture_for_Sandboxing_the_Industrial_Internet_of_Things},.
+
+
+%\ixme{I have collected lots of related work and written about all for notes; the most relevant sources can be selected later and others removed}
+
+% sensor builtin
+%\xme{\url{https://ieeexplore.ieee.org/document/8756997} SandBoxer: A Self-Contained Sensor Architecture for Sandboxing the Industrial Internet of Things} (background of embedded scripting and PnP pros) Proposes a sandboxing architecture for sensor drivers to be implemented in a platform independent scripting language, which is shipped builtin in the sensor hardware.
+%\\
+
+% Own language
+%\ixme{\url{https://ieeexplore.ieee.org/document/8567695} EveryLite: A Lightweight Scripting Language for Micro Tasks in IoT Systems} Presents a new scripting engine and language EveryLite, which is lightweight with core size of 37KB. Basic syntax of Lua with extra operator for getting sensor data from the network. Has a memory limit, which crashes the script if exceeded, and a simplified garbage collector to save program memory. (background: light JS engine: JerryScript, neebs to be developed further for portability and performance. eLua, mRuby)
+%\\
+
+% JerryScript
+%\ixme{\url{https://ieeexplore.ieee.org/document/8627129} Reprogramming Low-end IoT Devices from the Cloud} Proposes deploying scripts from cloud to IoT devices via a gateway. JerryScript % Same work but older version https://ieeexplore.ieee.org/document/8480277
+%\\
+
+%\ixme{\url{https://ieeexplore.ieee.org/document/7279058} ScriptIoT: A Script Framework for and Internet-of-Things Applications} Proposes IoT middleware architecture consisting of Agent servers and clients. Scripting is used by registering scripting to Agent servers from the application layer. Scripts are either Polling or event-driven, and the architecture is tested with bash scripting language. Concludes that access time and processor load is a bit higher but flexibility and scalability are improved.
+
+%\xme{(Conference) Integration of Lua script interpreter for automatic device configuration using TR-069} Uses Lua interpreter on server-side to configure some network devices. SDN?
+%\\
+
+% PRIVACY
+% https://www.sciencedirect.com/science/article/pii/S1389128618305322
+
+
+
+

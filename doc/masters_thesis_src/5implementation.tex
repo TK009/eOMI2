@@ -1,0 +1,297 @@
+%! TEX root = tuomas_keyrilainen_masters_thesis.tex
+\chapter{Implementation}
+\label{chapter:implementation}
+
+%You have now explained how you are going to tackle your problem. 
+%Go do that now! Come back when the problem is solved!
+%
+%Now, how did you solve the problem? 
+%Explain how you implemented your solution, be it a software component, a
+%custom-made FPGA, a fried jelly bean, or whatever.
+%Describe the problems you encountered with your implementation
+%work. Sometimes the content of the environment chapter is combined
+%together with the implementation chapter.
+
+The proposed embedded system of RSOS was implemented. For readability, the name Embedded O-MI and the related acronym eOMI will hereon be applied to refer to this implementation.
+This chapter describes the details of eOMI design and implementation choices.
+
+
+The eOMI can be split into the following subsections: %Connection manager, XML and O-DF/O-MI parser, O-MI request handling and subscription system, Scripting engine. %\fixme{Data storage system, Discovery system}
+
+\begin{itemize}
+  \item Connection manager\\
+    The First part of the communication layer. It handles the IP connections with HTTP WebSocket protocol, and keeps them open if required.
+  \item XML and O-DF/O-MI parser\\
+    The second part after the communication layer. It parses all incoming requests from the stream of XML elements. It saves all important request information to the internal memory structure and calls the request handler for each opened and closed O-DF element.
+  \item Request handler\\
+    Keeps track of the internal O-DF tree and selects the correct functionality for opened and closed O-DF elements depending on the request type.
+  \item Script engine\\
+    Initializes the script runtime and runs a script when triggered. Consists of ready-made script engine that is ported to the selected embedded system.
+
+\end{itemize}
+
+The remainder of the chapter is organized as follows.
+First, the implementation details of the listed eOMI components are presented. Then, test scenarios are introduced, along with their implementation using the developed RSOS.
+
+\section{O-DF/O-MI C implementation}
+
+The core platform independent functionality is shown in Figure~\ref{fig:embedded-o-mi-architecture} as blue. These were first programmed in the C language, then tested on a computer to utilize swift execution, static code check tools and effortless debugging tools. After that, the platform specific components were programmed in Arduino/C++. They include the communication layer, sensors, actuators and the scheduler.
+
+The communication layer was programmed using existing libraries for HTTP, WebSockets and mDNS. The discovery implementation was left partial. It only advertises services and the hostname of the device. The full implementation would also perform periodic discovery, and write the results to the O-DF tree for web applications as described in Section~\ref{section:discovery}. Hostnames were hard coded for the prototype but could be configurable by the user in a production version.
+
+Sensor and actuator interfacing were programmed with Arduino libraries and existing device specific driver libraries. The sensors are simply read periodically, and the result written to the O-DF tree with the same function as O-MI write requests use. On the other hand, actuators are connected as internal subscriptions similar to scripts, with each actuator having its own handler function to parse the value and call the correct device drivers.
+
+Sensor values are written with the current system time, which is set by the NTP as in a typical operating system (OS), but the adopted implementation did not work at the moment of writing. The reason is unknown, but the support for the ESP32-S2 chip in the Arduino-esp32 core is still in experimental \emph{alpha}-stage.
+
+The next sections provide the implementation details of various components of the O-DF/O-MI implementation.
+
+
+\subsection{Parsing}\label{sec:Parsing}
+
+O-DF and O-MI are defined in XML, which usually needs a heavy parser. As the ESP32-S2 has limited memory and computing power, a lightweight XML parser library needs to be selected for the implementation. Fortunately, most of the complicated XML features are not required, such as XML entities. To have a quick response time, the library data structures should fit into the main SRAM memory of 320 KB (see Table~\ref{table:esp32-s2-cpu}) while leaving space for other components. In addition, the parser cannot use OS libraries or standard libraries extensively as they might not be fully available on an embedded platform. Two libraries fulfilling the constraints were found: Sxmlc~\cite{sxmlc} and Yxml~\cite{yxml}.
+
+Sxmlc can parse an XML document into a memory structure called Document Object Model (DOM), or it can provide the parsing events as a stream. The library can also be used to create XML documents or search from them by attributes, tags or subset of the XPath query language. The document character data can be input from a file or a buffer containing the whole document. Sxmlc supports two Unicode Transformation Formats: 8-bit (UTF-8) or 16-bit (UTF-16), in addition to XML character escape sequences, such as \verb|&amp;|.~\cite{sxmlc}
+
+Yxml implements only the key aspects of the XML standard, which are required for parsing simple XML documents. It takes input as one character at a time, which classifies it as a streaming parser. As a result, dynamic memory management with malloc is not required, which helps with the memory management of the embedded system. Yxml supports UTF-8 and XML character escape sequences. Despite having a minimal implementation, it verifies most well-formedness constraints of the XML syntax, like the correct nesting of XML elements, but it lacks validation for the XML schema or Document Type Definition.~\cite{yxml}
+
+Sxmlc has dynamic memory allocation and extra search functionality which are not needed, and it requires modifications to connect the streaming API to network sockets. In comparison, Yxml only implements the minimal required functionality with the flexible character-based input API and uses a pre-allocated structure and buffer, which can be used to control the memory usage of the parser. Thus, Yxml is selected for the implementation.
+
+The next step in the eOMI is to match the streamed attribute and tag names to O-MI and O-DF namespace elements. The standards also define a strict ordering for most of the XML elements, which is beneficial to detect errors in the O-MI requests and to save memory. Memory can be saved by prosessing the stream in smaller chunks. For the purpose of O-DF/O-MI parsing, a state machine was built for the eOMI, as shown in Figure~\ref{fig:parsing-states}. For example, the parsing starts in the state \emph{preRoot}, because before the XML root element the parser might encounter XML processing instructions, like the definition of a character set. Then, if the XML element start event is encountered and the tag name is \emph{omiEnvelope}, the system transitions to the next state of that tag name. While in a state, the element can also have attributes, which can be interpreted correctly since the current state specifies which element the system is processing. The red state transitions mean that instead of the element start event, the element end event of the current node is required. The remainder of the state machine functions similarly with a few exceptions. The different O-MI request types have been reduced to a single state, \emph{request}, for simplicity, as they have a quite similar structure. In addition, the O-DF hierarchy needs to be implemented with a stack, otherwise the number of states would grow indefinitely as the hierarchy depth increases. The stack operations are indicated with the labels \emph{push} and \emph{pop} near the transition. Finally, the ending transition needs an extra check for the stack; when an Object tag is closed, either the stack is reduced, or the end is reached if it is empty.
+
+
+\begin{figure}[H]
+  \centering
+\begin{tikzpicture}[
+  %point/.style={circle,inner sep=0pt,minimum size=0pt,fill=black!50},
+  >={Stealth[round]}, green!20!black!50, text=black, very thick,
+  every new ->/.style = {shorten >=1pt},
+  graphs/every graph/.style = {edges=rounded corners},
+  terminal/.style = {
+    rounded rectangle, minimum size=6mm, very thick, draw=black!50, top color=white,
+    bottom color=black!20, font=\ttfamily, text height=1.5ex, text depth=.25ex, scale=0.8},
+  bl/.style = {bend left},
+  br/.style = {bend right},
+  brs/.style = {bend right=10},
+  bls/.style = {bend left=10},
+  ]
+  \matrix[row sep=10mm,column sep=6mm] {
+    \node   (preRoot)     [terminal]   {preRoot};     &
+    \node   (OmiEnvelope) [terminal]   {omiEnvelope}; &
+    \node   (request)     [terminal]   {request};     &
+    \node   (msg)         [terminal]   {msg};         &
+    \node   (Objects)     [terminal]   {Objects};     &
+    \node   (p1)          [coordinate] {};            \\
+                                                      &
+    \node   (response)    [terminal]   {response};    &
+    \node   (result)      [terminal]   {result};      &
+    \node   (return)      [terminal]   {return};      &
+    \node   (requestID)   [terminal]   {requestID};   &
+      \\
+    \node   (p3)          [coordinate] {};            &
+                                                      &
+                                                      &
+                                                      &
+                                                      &
+    \node   (p2)          [coordinate] {};            \\
+    \node   (Object)      [terminal]   {$Object_{begin}$};&
+    \node   (id)          [terminal]   {id};          &
+      \node   (ObjItems)    [terminal]   {$Object_{items}$};&
+    \node   (ObjChildren) [terminal]   {$Object_{objs}$};&
+                                                         &
+    \node   (End)         [terminal,double]   {End};     
+      \\
+                                             &
+    \node   (MetaData)    [terminal]   {MetaData};    &
+    \node   (InfoItem)    [terminal]   {InfoItem};    &
+    \node   (description) [terminal]   {description}; &
+                                                      &
+                                                      \\
+                                                      &&
+      \node (value)       [terminal]   {value};       &&&\\
+  };
+\draw [->] ($ (preRoot.west) - (4mm,0) $) -- (preRoot);
+\draw [->, rounded corners=3mm] (Objects) -| (p2) -| ($ (Object.north) - (2mm,0) $);
+\draw [->, rounded corners=3mm] (ObjChildren) -- ++(0,9mm) -| ($ (Object.north) + (2mm,0) $);
+\draw [->, rounded corners=3mm] (ObjItems) -- ++(0,9mm) -| ($ (Object.north) + (2mm,0) $);
+\draw [->, rounded corners=3mm, red] ($ (ObjItems.north) + (2mm,0) $) -- ++(0,3mm) -| ($ (ObjChildren.east) + (4mm,0) $) -- (End); %++(1mm,0);
+\graph [use existing nodes,edge quotes={scale=0.6,auto}] {
+preRoot     -> OmiEnvelope       -> request             -> msg            -> Objects;
+Object      -> id                -> [red, "push"] ObjItems      -> [bend right=20, "push"'] InfoItem -> [bend right=20, red, "pop"'] ObjItems;
+InfoItem    -> [bend right=20] value       -> [bend right=20,red] InfoItem;
+OmiEnvelope -> response          -> result              -> return         -> msg;
+return      -> [brs] requestID   -> [brs, red] return;
+ObjItems    -> [brs] description  -> [brs, red] ObjItems;
+InfoItem    -> [brs] description -> [brs, red] InfoItem <-> [brs, "push"'] MetaData       <-> [brs, red, "pop"'] InfoItem;
+ObjItems -> [red, "pop"] ObjChildren -> [loop below, red, "pop"] ObjChildren;
+ObjChildren -> [red, "empty stack"] End
+ };
+% Add visual legend instead of caption
+\end{tikzpicture}
+\caption{State machine for parsing O-DF / O-MI. Different O-MI request types are combined. The red transitions indicate the XML element end event of the current node, otherwise the link represents the XML element start event of the next node. A stack is used to push and pop hierarchy path segments to track the location in the O-DF hierarchy and decide which state to return on the element end event.}
+  \label{fig:parsing-states}
+\end{figure}
+
+While the eOMI processes the parser events, the parser needs to build and access the memory structures that store the required information for request handling. Most requests need processing of the O-DF nodes with paths to the O-DF tree, and in the case an Object-leaf, also a subtree needs to be computed from it. To accomplish these tasks, a similar approach is taken as the open source reference implementation of O-DF/O-MI standards, \emph{O-MI Node}~\cite{o-mi-node}. It uses two structures: A hash map from O-DF path hash to the node data structure and a specially sorted set of paths. The hash map provides fast access to single O-DF paths and the sorted set provides a fast method to construct subtrees. The ordering of the set is otherwise a normal lexicographic order but is done for each hierarchy level separately. In other words, it will result in a similar order as one would find in a file system directory tree, where the directory contents being the tree descendants, are listed below the directory they belong to, then the next directory, its contents and so on. As the set is sorted, a simple sorted array can be used to store the elements, and a single O-DF path can be found with the binary search. To further simplify the eOMI implementation, the path elements are extended with a pointer to the node data structure, removing the need for the hash map.
+
+In the eOMI, the stored value structure contains all the variables needed to process write or read requests for a single path. Moreover, any string value is allocated in the PSRAM with a skip list structure, which has hash of the string as the key. This way any repetitive InfoItem names, metadata fields, descriptions or scripts consumes no extra memory.
+
+\subsection{O-MI requests}
+
+In O-MI~\cite{o-mi}, the requests are specified as read, write, cancel, delete and call, where the subscription functionality belong to the read request. In the eOMI, the subscriptions are detected in the parser and divided internally into interval or event subscription requests. The implementation for reading a single value is trivially achieved by fetching the requested nodes from the data structures, which were described in Section~\ref{sec:Parsing}. Similarly, writing and deleting are performed by updating the data structures accordingly. Subscriptions are more involved and discussed next.
+
+Subscriptions must be optimized, because they might generate a notification response on every write. Event subscriptions are implemented similarly to the O-MI reference implementation, which has a mapping from O-DF path to sequence of subscriptions and each path in write request is fetched from this map~\cite{o-mi-node}. In the eOMI, the O-DF tree structure is reused to store a pointer to the subscription information. Since expiration time is checked on every event or new subscription, no extra timers are required, while keeping the subscription storage sufficiently clean. However, the interval subscriptions need one scheduling timer and a different technique is used than in the reference implementation, because the selected environment supports only single-threaded execution.
+
+Algorithm~\ref{alg:intervalSub} shows the procedure for handling interval subscriptions in the eOMI. It is evaluated when a scheduled timer interrupt is triggered, where the timer is always set to the nearest triggering time of all interval subscriptions. Accordingly, interval subscriptions are stored in a queue, which is sorted by their next triggering times, that is, when is the next time for them to send data. The procedure loops through the queue until the next candidate is early, which then specifies the wait time for the scheduler. After sending the subscribed data and the subscription is not expired, the next trigger time for it is calculated with its interval, and the subscription is put back into the ordered queue. %\fixme{Give some example for validation}
+
+Finally, the cancel subscription request is implemented by looping over all the subscriptions to find the correct one by its identifier.
+
+\begin{algorithm}[H]
+  \SetAlgoLined
+  %\KwResult{}
+  \KwIn{intervalSubQueue}
+  \tcp{intervalSubQueue is sorted by subscription triggerTime}
+  \Repeat{\KwSty{false}}{
+    $sub \leftarrow intervalSubQueue.\FuncSty{pop}()$\;
+
+    \If{sub = NULL}{
+      \KwSty{break}\;
+    }
+    \eIf{$sub.triggerTime \leq \FuncSty{getCurrentTime}()$}{
+      $\FuncSty{sendSubscriptionResult}(sub)$\;
+    }{
+      \tcc{All triggered subscriptions are processed, put it back to the front}
+      $intervalSubQueue.\FuncSty{pushFront}(sub)$\;
+      \KwSty{break}\;
+    }
+    \tcp{New trigger time for this subscription}
+    $sub.triggerTime \leftarrow sub.triggerTime + sub.interval$\;
+    \If{$sub.triggerTime \leq sub.expiry$}{
+      $intervalSubQueue.\FuncSty{push}(sub)$\;
+      $intervalSubQueue.\FuncSty{sort}()$\;
+    }
+  }( \tcp{loop until break})
+  \If{$sub \neq NULL$}{
+    \tcp{Schedule the next run for this procedure}
+    $\FuncSty{schedule}(sub.triggerTime)$\;
+  }
+  \caption{Interval subscription handling procedure; Triggered from scheduler}
+  \label{alg:intervalSub}
+\end{algorithm}
+
+
+
+
+\section{O-DF/O-MI scripting support}
+
+The scripting support in the eOMI is implemented with \emph{JerryScript}~\cite{jerryscript} JavaScript engine. Since it supports the earlier model ESP32 chip, it only required a couple of modifications to compile for the ESP32-S2. All supported features fit into the flash memory, but the working memory of the scripts had to be changed to the external PSRAM, which has a greater capacity. In the Arduino-ESP32 core~\cite{arduino-esp32}, the PSRAM is configured to be manual use only, but on the other hand, that enables precise control of which components are stored to which memory.
+
+The script engine is connected to the rest of the eOMI in two places. First, when a MetaData InfoItem named ``onwrite'' is being written, its value is passed to the script engine parser to check for syntax errors. Such errors are returned as an error response to the sender. If it was successful, the script is stored similarly to a normal MetaData InfoItem, but an internal event subscription is also made for the parent InfoItem, containing the script execution callback. The callback is the second connection to the script engine, where the script is fetched from the MetaData and executed by the script engine. Before execution, extra variables are created to contain contextual information that the script can utilize, in addition to the global API functions that have been added when the engine was initialized.
+
+%\section{Discovery}
+%\fixme{\\
+%  Use DNS-SD to find all O-MI supporting devices and write the information to O-DF.
+%}
+
+
+
+\section{Real life scenario test}
+
+%\ixme{add bold use case A and B (AC?)}
+%\ixme{\\
+%  Add diagram, number the scenarios. Maybe add images from real hardware and connections.
+%  \begin{enumerate}
+%    \item Run systems at home
+%    \item Provision a few sensors and actuators with WiFi
+%    \item Use the Configurator app to connect with each other
+%  \end{enumerate}
+%  Use case ideas: (give a title for each and a paragraph to explain)
+%  \begin{enumerate}
+%    \item Air quality IoT device with humidity sensor, in bathroom. Connected to bathroom exhaust air fan to remove excess moisture after a shower.
+%    \item Air quality IoT device with temperature sensors. Connected to heating devices, ventilation and AC, to either heat or cool the room air.
+%    \item Classic lamp control scenarios, based on time schedule, occupancy or whatever.
+%    \item Occupancy detection sensor connected to increase floor heating when humans are present.
+%  \end{enumerate}
+%}
+
+\subsubsection*{Case A}
+
+A simple real-life scenario was implemented to test the feasibility of the system. Using the developed embedded system, a humidity sensor and a servo motor, a smart object device was constructed to control an existing bathroom exhaust air fan. The fan includes a rope that needs to be pulled to start or stop the fan. The servo motor is used to perform the pulling. The finished prototype installation is shown in Figure~\ref{fig:bathroomfan}. The purpose of the setup is to start the fan if high humidity is detected and turn it off when a lower humidity level is reached. Although similar systems are available as an integrated product containing the fan, sensor and control circuitry, this system provides three extra features: Firstly, it has wireless connectivity to extend the functionality with other devices. Secondly, the parameters of the control logic can be modified. Thirdly, the device can be reconfigured to do something completely different.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.7\linewidth]{images/photoBathroomFan.jpg}
+  \caption{The bathroom fan switch installation. The device pulls the rope when commanded to turn the fan on or off.}
+  \label{fig:bathroomfan}
+\end{figure}
+
+The bathroom fan scenario data flow is depicted in Figure~\ref{fig:bathroomfan-dataflow}. The sensors and actuators are connected to their respective ESP32-S2 microcontroller units (MCUs) with physical connections and protocols, which are hard coded as drivers into the eOMI firmware. The remainder of the connections are configurable with O-MI. Subscriptions are used to transfer data only when values are updated. Subscriptions are set up between the ESP32-S2 MCUs to transfer the humidity sensor values to the servo controlling MCU. All data from the MCUs are subscribed to the data collection server, where O-MI-Node reference implementation is adopted to store the data in a local database. Finally, the data is visualized with the Grafana data visualization server.
+
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth, trim = 0 1cm 0 1cm, clip]{images/BathroomFanDiagram.pdf}
+  \caption{The data flow for the bathroom exhaust air fan scenario.}
+  \label{fig:bathroomfan-dataflow}
+\end{figure}
+
+%\subsection{Hardware}
+%
+%\ixme{\\
+%  ESP32-S2 development board. Sensors and actuators: Temperature sensors, Humidity sensor, PIR movement detector, relays, servo motor and heater.
+%}
+%
+
+%\subsection{Configurator app}
+
+%\ixme{\\
+%  Uses the above systems. Done as a web application. Some script examples of datatype conversions and sensor-to-actuator connections. 
+%}
+
+\subsubsection*{Configuration}
+
+The configurator app was not implemented, but instead it was simulated by sending the requests manually from a computer. To filter or modify the available scripts to fit devices of different models or manufacturers, the configurator app first needs to read the device data with a regular O-MI read request of the root, \emph{Objects}. 
+The eOMI response includes the versions of the firmware and model of the processor, along with all sensors and actuators.
+The beginning of the response is shown in Listing~\ref{lst:deviceReadShort} and see Appendix~\ref{chapter:appendixA} for the whole. Further details of each item can be fetched by requesting their MetaData and description elements, of which the former is primarily intended for machines and the latter for humans. 
+
+\begin{lstlisting}[language=XML, label={lst:deviceReadShort},caption={Beginning of the read request response from the device showing info about the device and its capabilities}]
+<omiEnvelope xmlns="http://www.opengroup.org/xsd/omi/2.0/" ttl="10.0"
+  version="2.0">
+  <response>
+    <result msgformat="odf">
+      <return returnCode="200"/>
+      <msg>
+        <Objects xmlns="http://www.opengroup.org/xsd/odf/2.0/" 
+        version="2.0">
+          <Object>
+            <id>Device</id>
+            <InfoItem name="ChipModel">
+              <value unixTime="20">ESP32-S2</value>
+            </InfoItem>
+            <InfoItem name="FirmwareBuildVersion">
+              <value unixTime="20">ed579a0-dirty</value>
+            </InfoItem>
+            ...
+\end{lstlisting}
+
+The next step is to send the scripts which contain the locally executed functionality. Two scripts are used to achieve the task, and they are written with the O-MI write request to the servo controlling device as shown in Listing~\ref{lst:scripts}. The first script tests for two thresholds of humidity values that are received via a subscription. Since the switch is of toggle type, the state of it is stored in the global variable \verb+triggered+. If the variable is still undefined, it is created on the first line. Then the thresholds are checked, and the switch action is written to ``/Servo/Switch'' InfoItem, which contains the second script. It controls the servo angle InfoItem, which is internally connected to the physical servo interface. The challenge with the second script was that the servo motor takes time to turn, and it also needs to be returned to the original position. The problem was solved by creating a sleep function that uses a busy loop to check the current time until it has advanced the required amount of time.
+
+\lstinputlisting[language=XML, label={lst:scripts},caption={The write request containing the two scripts used for the bathroom fan use case. Due to the XML syntax rules, the characters `$<$', `$>$' and `\&' must be escaped as \texttt{\&lt;}, \texttt{\&gt;} and \texttt{\&amp;}.}]{scripts.xml}
+% 
+
+Finally, the configurator app would make the subscriptions. Humidity sensor is subscribed from the corresponding MCU, in Listing~\ref{lst:humi-sub}. The subscription for everything in Listing~\ref{lst:objects-sub}, is sent to all devices from the database server, in order to collect data for visualization. The \emph{callback} parameter defines where event data are sent, \emph{ttl} of $-1$ defines that the subscription is valid forever or until canceled, and \emph{interval} of $-1$ defines that only updates are sent instead of periodic responses.
+
+\lstinputlisting[language=XML, label={lst:humi-sub},caption={Humidity sensor subscription}]{humiSub.xml}
+
+\lstinputlisting[language=XML, label={lst:objects-sub},caption={Subscribe for everything by specifying only the root: Objects}]{objectsSub.xml}
+
+
+\subsubsection*{Case B}
+
+A similar test was made with a portable air conditioning machine. The machine is noisy, uses a lot of power and does not have an automatic sleep mode for its fan, thus, the users wanted it to activate for short amounts of time and only when the temperature rises to discomfortable levels. Accordingly, the same \emph{bang-bang control} script from the Case A can be reused with different parameters. It was set to turn on when 28 degrees Celsius is reached and then turn off at 25 degrees. The resulting configuration request is provided in Appendix~\ref{chapter:appendix_AC_scripts}. The same temperature-humidity-device was reused from the Case A, but this time, the temperature was subscribed to the A/C controlling device. The AC was controlled with a relay to press the power button as it could be installed more reliably than a servo. The setup is shown in Figure~\ref{fig:ac}.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.7\linewidth, trim = 0 12cm 0 8cm, clip]{images/ac.jpeg}
+  \caption{The A/C machine with the relay and ESP32-S2 attached}%
+  \label{fig:ac}
+\end{figure}

@@ -1,0 +1,389 @@
+%! TEX root = tuomas_keyrilainen_masters_thesis.tex
+\chapter{System design and Architecture}
+\label{chapter:methods}
+
+
+%\ixme{P2P Data synchronization for product lifecycle management:. "In computer science, an agent is a piece of software acting autonomously; it has its own data structures and decision-making algorithms. For decades, agent platforms have been used in multiple research domains (sociology, chemistry, biology, etc.) because they help to realize important properties such as autonomy, responsiveness, redundancy, distributedness, and openness in the system [56]". Smart home example with two users and two devices. One of the devices is allowed to connect to manufacturer. Synchronization signals passed via Object type attribute.}\\
+
+The RSOS is designed by selecting constraints and features, inferring the requirements of the system, and finally designing the details of each subsystem. The design follows a loosely coupled multi-agent paradigm, allowing the IoT devices to communicate and process Peer-to-Peer (P2P) in the local network. Loose coupling was also one of the design requirements of the O-MI standard~\cite{Gathering_Product_Data_from_Smart_Products}. It enables more independent development of separate parts of the system, which allows easy adoption for device and application developers.
+
+%Embedded system design methodology is used to design the embedded system of the IoT devices. It takes the limited resources of embedded devices into account and focuses on the reliability of the software.
+
+%A generic iterative and incremental development methodology is used to build the implementation. More agile methods are often used in modern software development but this project will be done by one person rather than a team, in addition to flexible requirements and time to ensure completion.
+%Demonstration implementation of most key components will be made in the chapter~\ref{chapter:implementation}, Implementation.
+
+
+
+The design process of the RSOS begins with recognition of the requirements for the system. This section goes into detail of the requirements and high-level design choices of each subsystem. % which are done in each iteration. 
+
+
+For the system, the following high-level design choices were made: % PASSIIVI?
+\begin{enumerate}
+  \item O-MI and O-DF are adopted for communication on top of HTTP or WebSocket protocols.
+  \item IoT devices should primarily communicate directly between each other in a P2P manner.
+  \item Configuration is applied by a configurator web application.
+\end{enumerate}
+
+From the high-level requirements and constraints, the following practical requirements stories were set:
+\begin{enumerate}
+  \item The IoT device can be provisioned to a Wi-Fi network.
+  \item The IoT device supports at least a minimal subset of the O-DF/O-MI standard.
+  \item The IoT device has O-DF extension that enables scripting with write event hooks and API for local writing and reading.
+  \item The IoT device has sensors and actuators interfaced via O-MI write and read request with O-DF InfoItems.
+  \item The configurator app can find all IoT devices, which provide a discovery system for this.
+  \item The configurator app can provide list of scripts that fit for the discovered devices.
+  \item The configurator app can send the scripts and subscriptions to the IoT devices.
+  \item The configurator app can be opened on a different user device without losing existing device configurations.
+  \item Device scripts only have access to other devices and the Internet via subscriptions that are managed in the configurator.
+\end{enumerate}
+
+See Figure~\ref{fig:system-overview} for an overview of the RSOS and its components. The service layer contains services that are accessed via the Internet and includes an IoT App marketplace, an adapter database and other 3rd party services. The IoT apps in this architecture would contain \emph{agent scripts} and specifications for \emph{subscriptions} to be installed into the devices, in addition to any User Interface (UI) or mobile app it would have. The adapter database contains transformers for data types and info on what devices they are compatible with. The management layer manages the smart objects as the \emph{configurator app}, which runs on user computer or smartphone. It can perform operations like provisioning, discovery and reconfiguration of the smart objects. Finally, the device layer contains the embedded system running in smart objects. It handles data subscriptions and running of scripts.
+
+\begin{figure}[H]
+  \begin{center}
+    % below the size of the figure has been reduced for example
+    \includegraphics[width=0.9\textwidth]{images/IoT-P2P-scripting.pdf} 
+    \caption{RSOS overview: The configurator application runs on a user device, such as a smartphone. The configurator will fetch list scripts matching the available devices from the Internet and load the selected scripts to the devices, allowing the devices to communicate directly with each other.}
+    \label{fig:system-overview}
+  \end{center}
+\end{figure}
+
+The next section describes how smart object requirements are fulfilled by this design. Then, the rest of the chapter focuses on the details of the subsystems.
+
+
+
+\section{Smart Object Requirements}
+\label{section:so-requirements-fulfilled}
+
+Considering the generic SO requirements described in detail in Table~\ref{table:SO_requirements} earlier in the Background chapter. With the above design decisions and requirements, SO requirements can be fulfilled in the following ways:
+
+%\begin{itemize}
+%  \item
+\subsubsection*{SO Requirement 1: Heterogeneity and Application development}
+
+O-MI and O-DF provide abstraction over the data transfer and structure, in addition to the hardware abstraction over sensors and actuators. O-DF provides the possibility to add metadata to the InfoItems; additionally, it can be extended with semantics like RDF. In the RSOS, if the data lack proper semantics, the configurator can fetch translation scripts from an online service based on the manufacturer and model of the device. These scripts are called \emph{adapters} in this work.
+%  \item 
+
+\subsubsection*{SO Requirement 2: Augmentation Variation of Smart Objects}
+
+Services are called \emph{IoT applications}, or simply \emph{applications} in the RSOS.
+If the application has a wrong output format or semantics for a device or other application, it can be translated with an adapter script. If various levels of details are needed in the output data, it can be achieved with applications by deploying scripts to the devices to provide the exact required level of detail. Many such scripts could be deployed and running concurrently in the same device. If there are multiple sources of the same information from an aggregation of devices, the application developers can implement the most appropriate way to select the sources, either manual or automatic. There can even be applications whose sole purpose is to select or aggregate data for other applications.
+
+  %\item
+\subsubsection*{SO Requirement 3: Management of Smart Objects}
+RSOS applications and devices use local network device discovery to find the device address and access it directly. Failures and mobility can always be manually managed with the configurator app, but some aspects are also automated. Mobility is partly administered by the underlying Wi-Fi network, as only a single LAN network is assumed for this version of the design. Wi-Fi connected clients can freely select any access point that has the same name and security settings, and if all access points belong to the same LAN, the same IP settings can be used. Any further mobility and failure handling are left to the IoT applications to solve. The system provides applications with an easy way to subscribe to many devices and scripting provides ways to either combine the redundant or process missing information, in a use case specific manner. Mobility to another LAN network can be ensured by passing the data via an online service. Possible automation of these features is left to future work.
+
+
+%  \item
+\subsubsection*{SO Requirement 4: Evolution of Smart Object System}
+After adding, moving or removing devices, the user can select from the configurator app to reinstall scripts and applications to keep the old behavior. Alternatively, the user can reconfigure the behaviors at any time during the lifecycle of the devices, by uninstalling and installing applications or changing their parameters.
+
+%\end{itemize}
+
+
+
+\section{Proposed configurator application}
+
+
+
+The proposed configurator app is the program that the user can use to connect devices in a P2P style and install scripts for local processing. The concepts relating to the app can be split into subsections of Device discovery, Subscriptions, Adapters and IoT applications. The configurator app is assumed to be implemented as a web app to run on most browser capable devices without installation.
+
+
+\subsection{Device discovery}
+\label{section:discovery}
+
+This section discusses how the user can open the configurator app and how the app can find the available IoT devices in the LAN.
+
+If the configurator app is designed to be opened from the Internet as a website, it would have no information about the local network nor the local IP address. Thus, it could not reach the devices with a direct connection. Instead, if the app is hosted on the IoT devices, the user only needs to know the address of one device to access the app and then the app would gain access to that local IoT device. Access to one IoT device is useful as will be found later in this section, but it is not enough, as the app does not know what other IoT devices are in the network or how to contact them. This is where device discovery is needed.
+
+In the RSOS, LAN IoT devices will be discovered with mDNS with its DNS Service Discovery (DNS-SD) companion mechanism, because they are more generic than UPnP, and because LLMNR has no service discovery. However, as the configuration application is assumed as a browser web app, it creates an extra problem as browsers disallow the use of UDP, which is required by the discovery protocols. Furthermore, the related browser API standard is discontinued~\cite{W3C_Network_Service_Discovery}. Although the problem occurs only for web apps and could be solved with native apps, a backup mechanism would fix it, but also improve reliability and efficiency of the discovery step.
+
+%\ixme{It seems that discovery is not possible in web browsers directly, but operating systems might include at least partial support for DNS-SD in the future (.local DNS domain). Workaround options are:
+%\begin{enumerate}
+%  \item Using an external Internet server (centralized; bad)
+%  \item Discovery app which opens a web browser when devices have been discovered, while maybe combining with 2. By selecting 2 and 3, the result will be the most future proof
+%  \item Using Wi-Fi scan list as entrypoint and delegating discovery to the IoT devices (they probably need to do discovery anyways). Discovered devices could be written and read in O-DF.
+%\end{enumerate}
+%}
+
+Most operating systems provide an API or a library for native applications to use mDNS, but it is also possible that mDNS is available on the OS level DNS resolver, since a single shared implementation is recommended by the standard~\cite{Multicast_DNS_RFC6762}. It would be useful for the configurator web app, because it is possible to query for domain names ending in mDNS reserved ``.local'' domain via the standard domain name resolve functions as used by browsers, but DNS-SD would not be possible, as it produces multiple results. Nevertheless, if the configurator app in the RSOS is hosted on every IoT device, they can provide a common non-unique domain name via mDNS, such that when sending a query, all devices strive to answer it and the first answer will be selected by the DNS resolver. This might seem wasteful if there are numerous devices, but this problem is reduced by the mDNS standard~\cite{Multicast_DNS_RFC6762} instructing that resolvers may implement caching of any or all query results, even responses for other network participants.
+
+The current OS support was tested. At the moment of writing, Windows 10 (v10.0.19043.1055), Linux (Ubuntu 18.04), macOS (v11.4) and IPhone (v14.6) supports mDNS, while Android (v9) does not. On Linux mDNS is available via the \emph{systemd-resolved} service but might need to be enabled manually. Android has a mDNS library available for developers and expects each app to implement special handling for the ``.local'' domain, but browser apps have not yet implemented it. 
+
+For the case where OS- or browser-level mDNS is unavailable, the problem could be solved with at least three different ways:
+\begin{enumerate}
+  \item Online service
+  \item Wi-Fi hotspot with captive portal
+  \item Native launcher application
+\end{enumerate}
+
+In the first option, each device sends their network information to an online service, where the app can fetch them. However, it is a suboptimal solution as it relies on a centralized solution, or if distributed, it would also require new standardization to find the correct server.
+
+In the second option, the user initiates a Wi-Fi access point scan to find at least one of the IoT devices that provides a hotspot access point, which could then capture all http requests in a captive portal manner to send the web app page. IoT devices would probably also need to perform discovery, so they could simply publish the discovery results as O-DF InfoItems, which could then be loaded by the web app. The main problem in this option is that if the user device has no mobile data connection, the Wi-Fi Internet access is lost as the hotspot access point is not connected to the Internet. Switching back to the correct Wi-Fi would be possible but requires an extra, manual step.
+
+The third option adopts a companion launcher application that would be installed to the user device. The launcher could discover devices and then launch the web app with the results as a parameter. It would need extra development for each supported platform and an extra app installation step, but most of the application code could reside in the cross-platform web app. Otherwise, if the configurator app is hosted on each IoT device similarly to the previous option, existing mDNS service discovery apps can be used to find and open advertised HTTP services.
+
+A combination of the above options would provide the higher number of ways to reach the IoT devices, thus it is decided that each device has a local copy of the configurator web app, along with a common mDNS address and a captive portal hotspot access point. In real products, the local copy of the app could use browser JS to load an up-to-date online version of the app, and only revert to a local copy if it is unavailable.
+
+
+\subsection{Subscriptions}
+\label{section:subscriptions}
+
+Each agent script would typically require some input data and/or provide output data for another agent on a different device. The communication functionality of agent scripts in the RSOS is intentionally limited to sandbox the script, similar to web browsers. The scripts are only allowed to interface with external devices or services with subscriptions. The required subscriptions are sent by the configurator app when installing an agent script to a device. They are specified by the agent script developers and can be set up in either direction: incoming or outgoing. The incoming data connection is set up by sending a subscription request to some other device, then receiving back the resulting values and writing in the local O-DF data hierarchy. The agent is set up to handle the written values with the ``onwrite'' handler, or it can just read the value whenever the script is triggered by other means. The outgoing data connection is set up by sending a subscription to InfoItems on the same node as the agent script is set up to perform local writes. When the agent has written values, they will be sent to other devices with the subscription system. In both cases, the agent script is only required for local operations.
+
+While the agent scripts in the RSOS can be provided by a third-party developer, by limiting the ability to make IP connections only with subscriptions, user privacy is enforced. All subscriptions are created from the configuration app, which can then list them to the user directly, so the user can be sure what data and where it is flowing. The only downside in this restriction is that it removes the ability to create ad-hoc data flows during the operation of the device, creating wasted data transfers in some situations. However, this could easily be fixed while retaining the same result, by granting subscription creation permissions to the script instead of concrete active subscriptions. The developers of an agent script can also include outgoing subscriptions to some Internet URL rather than LAN device IP address to enable cloud services in the RSOS. On the permission of the user, it could also be used to provide features such as preventive maintenance by the manufacturers or provide information to improve the product quality~\cite{Gathering_Product_Data_from_Smart_Products}.
+
+If incoming subscription connection is needed, one typically needs to perform NAT traversal to pass through the firewall, which requires some cooperation from the device, instead of the configurator app accomplishing everything. Piggybacking is one choice as an existing technique included in the O-MI standard ~\cite{o-mi}~\cite{A_standardized_approach_to_deal_with_firewall_and_mobility_policies_in_the_IoT}, but with WebSockets, a simpler method is to keep a WebSocket connection open. The device can initiate the connection to the server and send the subscription, then the server can send the events via the same connection.  While this also points to subscription creation permissions for predetermined addresses being a better choice, the implementation in this work will use the concrete subscription model to simplify implementation; thus, agent scripts have no access to a subscription function.
+%\fixme{Or should it be changed to use subscription permission model anyways?} 
+
+\subsection{Adapters}
+
+%\ixme{tell briefly about adapters}
+In this architecture, \emph{adapters} have a specific meaning as scripts that convert values to other format to establish interoperability between devices, or between a device and a script. First, motivation for adapters is examined. Then, the design of their function in the RSOS is described. Finally, the flow of data signals through the whole system is described.
+
+In O-DF, the data type can be specified with the XMLSchema type, %or via RDF semantics if it is more complicated
+but sometimes the required data is in a different but compatible datatype. For example, consider a device that detects if a door is open or closed and the related question of representing the status in data. Some examples are listed in Table~\ref{table:door_dataformat_example}. One vendor might make the device output ``true'' on closed, ``false'' on open. Another might make it opposite with ``false'' on open or use numbers 1 and 0. The situation becomes even more complicated if some sensor has an extra state for ``locked''. Indeed, this is similar to the problem of many communication protocols. If we consider that there would be $n$ different device value representations for the same measurement, and $m$ different agents needing that measurement, each agent would need to include $n$ converters to the internal format resulting in $n \times m$ instances of conversion code in the device ecosystem. Even if this is successfully implemented, keeping it up to date will become a problem as new devices emerge. 
+
+\bgroup
+\def\arraystretch{1.1}
+\begin{table}[H]
+  \centering
+  \caption{Examples of different possible formats for simple door sensors, which could be from different manufacturers.}
+  \smallskip
+  \begin{tabular}{|r|l|l|l|} \cline{2-4} %\hline
+    \multicolumn{1}{r|}{} & \multicolumn{3}{c|}{Door is} \\ \hline %\cline{2-4}
+    description & open & closed & locked \\ \hline \hline
+    Boolean & true & false &  \\ \hline
+    Inverted & false & true &  \\ \hline
+    Capitalized format & True & False &  \\ \hline
+    Binary boolean & 1 & 0 &  \\ \hline
+    Custom boolean & yes & no & \\ \hline
+    String enumeration & open & closed & locked \\ \hline
+    Integer enumeration & 0 & 1 & 2 \\ \hline
+  \end{tabular}
+  \label{table:door_dataformat_example}
+\end{table}
+\egroup
+
+To mitigate the problem in the RSOS, the configurator app would provide these conversion functions as \emph{adapters}. Adapters are stored mainly in an online database but can also be cached locally. When the configurator app is used to scan for possible agent scripts, it will also check for combinations of adapters attached to the agent scripts. The adapters are queried with the datatype, semantics and metadata of the sensor or actuator to provide the most probably working solution. Developers of third party adapters for the RSOS could tag the exact models of the supported devices to ensure the best probability of successful adapter matching. Thus, the default query can be limited to only return the tagged exact device matches, while the coarser queries can be reserved for advanced users of the RSOS.
+
+The adapters in the RSOS are used with the same mechanisms as the agent scripts. They are scripts that are attached to the \emph{onwrite} handler of the input or output InfoItem on the same device where the agent is run. When the InfoItem is written by a subscription or internal sensor in the RSOS, the adapter script is run first to convert the value, and then the agent script will always receive data of the expected type.
+
+Figure~\ref{fig:data-pipeline} shows the entire pipeline of the allowed order of components in the RSOS and a few examples. Yellow blocks with question marks are optional and in blue O-DF blocks data are stored as O-DF structure. Input and output can only be connected via the O-DF data storage. Furthermore, data can only be transferred over the network from one O-DF storage to another, with the O-MI subscription. In the first example, the raw sensor data of Device A is directly sent as O-DF to Device B, where it is processed by two agent scripts one after the other, and finally the result is translated by the second adapter to a format compatible to the Actuator of the device.  To summarize, there are two pipelines, which are connected after the first Logic block. Instead of an actuator the pipeline can be connected to another pipeline. The first pipeline has only four blocks: Sensor, O-DF, Logic and O-DF. The second has five blocks: O-DF, Logic, Adapter, O-DF and Actuator. Finally, there is the second example that demonstrates how a device would be connected to an online service. Data are transformed locally to another format in O-DF and then sent to a server. The server must have O-MI support with O-DF to be able to receive the data.
+
+
+\begin{figure}[H]
+  \begin{center}
+    % below the size of the figure has been reduced
+    \includegraphics[width=\textwidth]{images/Pipeline.pdf} 
+    \caption{The top diagram shows the allowed order of stages for data flows. The yellow blocks with a question mark are optional and blue boxes mandatory. Example 1 shows how two pipelines can be combined, where the first pipeline ends after the first Logic block. Example 2 shows how a device could connect to an online server.}
+    \label{fig:data-pipeline}
+  \end{center}
+\end{figure}
+
+
+\subsection{IoT applications}
+
+As a result of the different approach to IoT services, that this proposed system takes, implemented IoT applications would have to follow a specific framework. It is detailed in this subsection along with its installation procedure.
+
+The main goal of IoT applications support in the RSOS is to provide as fast and easy installation as possible, while still providing a possibility for creative combinations of devices and apps to implement many use cases for the user. Applications in this system would consist of device matcher rules, agent scripts for the devices and a frontend. Device matcher rules specify which devices are needed for this application, how they are connected with subscriptions, and what sort of data the agent scripts are expecting. Agent scripts contain the device local business logic for processing the data and controlling actuators. Finally, the frontend is the user interface (UI) of the application. For example, it can have tunable parameters that are saved for the agent scripts or show some status from the data it has subscribed from the devices. The frontend is optional, or can be implemented as a separate application, but it still needs to use O-DF/O-MI for communication so that security and privacy can be implemented in a simple manner.
+
+The installation of IoT applications in the RSOS proceeds as follows:
+\begin{enumerate}
+  \item The user can search applications from a list that is filtered by locally available devices or InfoItems. The application list can be provided from an online registry and filtering is expanded automatically by fitting compatible Adapters to inputs and outputs of agent scripts.
+  \item The user selects an application.
+  \item If there are multiple ways to match the application to devices or InfoItems of the devices, the user can select which InfoItems from which devices to use.
+  \item The configurator sends write requests to install any required adapter and agent scripts, and then sends subscription requests to connect the devices.
+  \item App frontend is opened. The user can input any parameters, which will be sent to devices with write requests. Data can be shown on the frontend by sending subscription or read requests to any items that are associated with this application.
+\end{enumerate}
+
+%\subsection{Data services}
+%
+%\fixme{\\
+%  Embedded devices usually do not have much memory to store sensor value history, so any service which uses a lot of data (Big data), would need to be a cloud service (unless a vendor decides to make a home server product with this functionality). As these kind of services are also important, I will make some demonstrations how they could work in this ecosystem.\\
+%  \\
+%  Possible services might include:
+%\begin{itemize}
+%  \item Data processing services: ML/AI (maybe a small demo)
+%  \item Data visualization services (Grafana integration ready, check diagram HTML embedding possibilities for making an easier interface)
+%  \item Data marketplace (maybe a small demo, BIoTope marketplace)
+%\end{itemize}
+%}
+
+
+
+%\section{Security and Access control}
+%\fixme{\\
+%In order to survive long times in terms of software security, the devices need to minimize attack surface. They either needs to be somewhat isolated from the internet and/or have software updates. The easiest method is to be behind a firewall, in LAN.
+%}
+
+%\fixme{
+%  Describe MyData (\url{http://mydata.org}). In this context, it would be a locally hosted service that decides access control and data flows to outside the LAN (to the internet). It could work as a proxy for all O-MI subscriptions and controlled by the owner via a web application. This service would be the point where the selected personal data would be discoverable to other parties via internet.
+%}
+
+\section{Proposed embedded system}
+
+
+The IoT device code is targeted to an embedded system. They are commonly used in IoT, because they are less expensive than full operating system computers. On the other hand, they have limitations, as were discussed in Chapter~\ref{chapter:environment}, namely, low memory and no process abstraction.
+
+The architecture of the embedded system is depicted in Figure~\ref{fig:embedded-o-mi-architecture}. All communication flows via Communication Layer, which keeps track of open network sockets and implements all required protocols. For incoming O-MI requests, the implementation is split into Read handler and Write handler, where all read related requests and subscriptions go to Read handler and data writing related requests to Write handler. They both use the common O-DF data storage, which contains the hierarchical structure of O-DF, data and metadata. Write handler processes incoming write requests, subscription notifications and local sensor values into the format of O-DF Data storage. After that, if the InfoItems have a special handler defined, it also routes information to the handler, which might be either the Script engine, the Event subscription handler or one of the local Actuators. Interval subscriptions are triggered by a scheduler which uses a hardware timer or clock, triggering a regular read request with a callback connection set by the subscription. Finally, the Script engine handles a storage for the scripts that are written with the O-MI write request. Requests or subscriptions can trigger a script, if some included InfoItem has a handler set. The Script engine also needs to handle memory used by the scripts.
+
+\begin{figure}[t]
+  \begin{center}
+    % below the size of the figure has been reduced for example
+    \includegraphics[width=\textwidth,trim = 0 0.2cm 0 0, clip]{images/embedded-O-MI.pdf} 
+    \caption{Embedded system architecture of O-MI node implementation with scripting support. Arrows represent the possible information flows. Scripts are activated via subscriptions or write and call requests and can interact with hardware and other devices by local read and write requests only.}
+    \label{fig:embedded-o-mi-architecture}
+  \end{center}
+\end{figure}
+
+Memory handling is important in embedded system design and implementation, as careless dynamic memory allocation and freeing leads to fragmentation. This refers to the process where the available memory reduces due to freed memory leaving holes, in which new larger allocations no longer fit, and this eventually leads to out-of-memory crash of the system~\cite{Dynamic_Memory_Management_for_Embedded_Systems}. Thus, dynamic memory allocation should be avoided, such as the \verb|malloc| command in C programming language. Instead, static memory and other compile time decided memory allocation can be used, where the compiler knows how long the memory allocation is used. It can thereby be packed optimally in the available memory region.
+
+
+
+The remainder of this section is divided into two according to the major functionalities of the embedded system: Device provisioning and Script engine. Device provisioning describes the set-up of a new device and Script engine introduces a scripting extension to O-DF/O-MI.
+
+
+%\section{Connectivity}
+%\subsection{Radio connectivity}\label{sec:Networks}
+%
+%\fixme{\\
+%  \begin{itemize}
+%    \item Home IoT devices needs to be cheap to be affordable in large quantities, so I will focus on Wi-Fi and other cheap networks.
+%    \item LAN Wi-Fi as main way of communication, but another network might be needed for devices running on battery (Wi-Fi has high battery consumption usually when active), outside of Wi-Fi range (reliability, usability) or non-provisioned devices (usability).
+%    \item Backup network candidates: 2G/3G Mobile data, LoRa, 5G massive IoT, NB-IoT, local network radios as mesh network? Sigfox, Ingenu
+%  \end{itemize}
+%}
+
+\subsection{Device provisioning}
+
+Generally, when users have a new IoT device, they need to complete a setup step called \emph{device provisioning}. In the process, users take ownership of the device, and it needs to be configured with information on how to join a network.
+
+In the RSOS, the ownership is assumed if the device is connected to the user LAN, so only the Wi-Fi network credentials are required. Further credentials would belong to the security architecture, which is not in the scope of this work, but it would probably involve cryptographic signature key or password. The device provisioning step can also include input of other device-specific settings, such as the device name. To establish the connection from a new device to the Wi-Fi network, some options are explored in the remainder of this section. Since the problem is isolated to the installation phase of the device, all methods described in the section are compatible with each other and could be used with the RSOS.
+
+The problem could be approached with two different strategies: either attach the device to a user account during ordering from a store or claim ownership with physical access or proximity. The first strategy would store the ownership information in an online service, thus it would require that the device has Internet access out of the box, such as a mobile data connection. A bit more complicated implementation would involve the existing devices on the LAN to share their Internet access to perform the ownership query and accept the new device without it needing direct Internet access.
+
+Physical proximity or access is the most common device provisioning scheme in consumer IoT. For example, a device creates a hotspot access point that the user can join with a smartphone and then input the home Wi-Fi credentials for the device. Variations of the scheme might use a vendor specific app and Bluetooth for the configuration, to save the Wi-Fi credentials for the next devices to be provisioned. Alternatively, some Wi-Fi access points have a standard, Wi-Fi Protected Setup (WPS). It has various methods for activating, but the most well-known one is probably the WPS button, which needs time proximity in addition to location proximity. The button needs to be pressed roughly at the same time as the new device attempts to connect.~\cite{A_primer_to_Wi-Fi_provisioning_for_IoT_applications}
+
+Most significantly, the sharing of network credentials can be automated to only require physical proximity, if an existing device on the local network supports the same process. These methods could use a signal strength threshold or radio transmission power to further reduce the required distance. The process can be implemented with various transmission methods, like Near-Field Communication (NFC), Bluetooth, Wi-Fi, light or sound.
+
+For example, a method using Wi-Fi can use a Wi-Fi hotspot on the existing device, while another device can detect it, join and request the credentials~\cite{Scalable_IoT_Platform_for_Heterogeneous_Devices_in_Smart_Environments}. The required proximity can be reduced by reducing transmit power and increasing the signal strength requirement for the other device, although this technique might be vulnerable for an adversary with a powerful transmitter and a high-gain antenna. If better security is required, an extra step can always be added, such as the ownership check from an online registry, or a query for the user to either accept or deny a new joining device. This Wi-Fi method is selected for the RSOS.
+
+Figure~\ref{fig:hidden-wifi-provisioning} shows the communication steps of the Wi-Fi provisioning method adopted. In Steps 0, 1, 2 and 3, the first device cannot find a Wi-Fi access point, thus it creates a hotspot for the user to manually input Wi-Fi credentials. Then, the first device creates a hotspot for later devices, which is hidden to not clutter the Wi-Fi list when users are scanning for nearby Wi-Fi networks. After that, the second device is introduced nearby, and in steps 4, 5 and 6, it finds the hidden Wi-Fi, connects to it and requests the Wi-Fi credentials. If it was successful, the second device also creates a hidden Wi-Fi hotspot, and further joining devices would repeat the same process.
+
+%\fixme{\\
+%  How to take ownership and configure an IoT device after purchase. Most current devices use either a manual code or just opens an access point without or low security. This needs to be improved in order to have better usability, security, and maintainability (in the case of device replacement). \\
+%\\
+%TODO: research other current methods.
+%\\
+%I have come up with two easier main options: Internet service, which is contacted via the backup network, or short distance based authentication~\cite{Scalable_IoT_Platform_for_Heterogeneous_Devices_in_Smart_Environments}. In this work the only backup network available is ad hoc Wi-Fi access point by other devices.
+%\begin{enumerate}
+%  \item internet service
+%    \begin{enumerate}
+%      \item needs information about purchased or transferred devices.
+%      \item option 1: direct internet connection with mobile data or LoRa. (No hardware for this in the current plan.)
+%      \item option 2: mesh networks could share internet access for the authentication request even
+%        before joining the network officially.
+%    \end{enumerate}
+%  \item short distance
+%    \begin{enumerate}
+%      \item Option 1: Wi-Fi-discovery like in our paper ``Scalable IoT Platform for Heterogeneous Devices in Smart Environments''. Maybe add signal strength or other range limitation to improve security slightly.
+%      \item Option 2: Button press / magnet (like Wi-Fi WPS, but WPS does not seem to be that popular)
+%      \item Option 3: Sound code (frequency could be on non-audible frequency range), could be done from smart phone speakers or device to device. Downside is added hardware and non-standardized complexity of audio protocol.
+%      \item This method has some security concerns, as usually there is always some way to get close enough the device and global encryption keys make vendor independence hard and might be reverse engineered from other devices. Possible solutions include simple user queries like "Did you add these devices (yes/no)?".
+%    \end{enumerate}
+%\end{enumerate}
+%}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[trim = 0 0.5cm 0 0.5cm, clip]{images/discovery-mechansim.pdf}
+  \caption{Option for automated device provisioning for Wi-Fi networks. Source:~\cite{Scalable_IoT_Platform_for_Heterogeneous_Devices_in_Smart_Environments}.}
+  \label{fig:hidden-wifi-provisioning}
+\end{figure}
+
+%\subsection{Discovery}
+
+%\fixme{\url{https://ieeexplore.ieee.org/document/6402297} (Conference) AmbientWeb: Bridging the Web's cyber-physical gap} Proposes Dynamix plugin system for web browsers, which is used to add functionality like LAN device discovery to the browsers to allow PnP.
+
+
+%\subsection{Application level protocols}
+
+%\fixme{\\
+%After discovery, the device needs to start using application level protocols in order to talk to other devices and the mobile device of the user. HTTP or WebSocket will be used to be able to support web based applications on any platform.\\
+%\\
+%Full protocol stack for the implementation:\\
+%RDF-Semantics/O-DF/O-MI/WS/HTTP/TCP/IP.\\
+%\\
+%RDF semantics and O-DF requires choosing some structure and types. RDF types would be chosen from popular vocabularies as much as possible.
+%}
+%\\
+
+%\fixme{\\
+%  Note: For secured P2P reachability outside LAN, a P2P VPN network could be used, like Nebula which is open source and based on Noise Protocol Framework, (but setup requires admin level skills). Other P2P VPN solutions seem to be either outdated or proprietary, but some protocols might be used in similar manner (like JXTA maybe?).
+%  Of course it is also possible that proprietary VPN becomes popular as IoT security\&privacy product
+%}
+
+\subsection{Script Engine}
+
+The scripting engine processes the scripts when triggered by one of the mechanisms connected to the Script engine in Figure~\ref{fig:embedded-o-mi-architecture}. This section describes how O-MI and O-DF are extended in the RSOS with scripting support to include scripts and specify the script triggers. Also, the script engine requirements and script API are specified.
+
+Four triggering mechanisms are specified for the RSOS architecture: O-MI \emph{write}, \emph{read} and \emph{call} requests for a single InfoItem, or as a callback destination for the local O-MI subscriptions. The subscriptions allow selecting a collection of items or objects for convenience. Furthermore, the interval subscription allows periodical execution of the script. The scripts are sent in text format in the MetaData element of the triggering O-DF Object or InfoItem.
+
+Table~\ref{table:triggers} shows how the available script triggering methods are applied with O-DF/O-MI. The MetaData InfoItems are used to store the script text, and three names of MetaData InfoItems are reserved for the purpose of specifying the trigger: ``onwrite'', ``onread'' and ``oncall''. The type of ``javascript'' is added to further differentiate the use of these names from possible conflicts with other systems, and to reserve future extension possibility for other scripting languages. The callbacks for subscriptions, must follow the Uniform Resource Identifier (URL) format, so a protocol of ``javascript'' is invented to allow constructing a valid URL. It is followed by an O-DF path leading to the script, for instance: \lstinline{``javascript://Objects/myDevice/myController/MetaData/myScript''}.
+
+\begin{table}[H]
+  \centering
+  \caption{O-DF/O-MI extensions for script execution triggering}
+  \label{table:triggers}
+  \fontfamily{cmr}\selectfont % fix bold looking font
+  \scriptsize
+  \begin{tabular}{|p{0.30\textwidth}|p{0.3\textwidth}|p{0.33\textwidth}|} \hline
+    Location in O-DF/O-MI & content description & description \\ \hline
+    In MetaData:\newline $<$InfoItem name="onwrite"\newline type="javascript"$>$ & javascript code inside $<$value$>$ & The script is executed if a new value is written to the InfoItem which the MetaData belongs to. \\ \hline
+    In MetaData:\newline $<$InfoItem name="onread"\newline type="javascript"$>$ & javascript code inside $<$value$>$ & The script is executed if the current value is read from the InfoItem which the MetaData belongs to. \\ \hline
+    In MetaData:\newline $<$InfoItem name="oncall"\newline type="javascript"$>$ & javascript code inside $<$value$>$ & The script is executed if a call request is received for the InfoItem which the MetaData belongs to. \\ \hline
+    In $<$read$>$, the callback attribute & "javascript://$<$O-DF-path$>$", where path is given as in URL discovery of O-DF standard, ending in the InfoItem name.  & Subscription results will be passed as an argument to the script, which has been written to a MetaData InfoItem. \\ \hline
+  \end{tabular}
+\end{table}
+
+The scripting engine requirements for the RSOS include:
+
+\begin{enumerate}
+  \item A lightweight interpreter and configurable memory allocation for the scripts, such that it can be fitted into the selected embedded system hardware.
+  \item Sandboxing from the rest of the embedded system. This is to ensure system stability and restrict network communication to O-DF/O-MI, for the O-DF items that was granted by the user.
+  \item A foreign function interface to implement the API, which will be used to access resources outside the sandbox. The API is listed in Table~\ref{table:script-API}
+\end{enumerate}
+
+JavaScript is selected as the scripting language in the RSOS, due to its popularity in web development. The popularity increases chances of finding existing script engine options that fulfill the above requirements.
+
+\bgroup
+\def\arraystretch{1.3} % increase table padding, (top too close)
+\begin{table}[H]
+  \centering
+  \caption{Script API}
+  \smallskip
+  \label{table:script-API}
+  \fontfamily{cmr}\selectfont % fix bold looking font
+  \scriptsize
+  \begin{tabular}{|p{0.27\textwidth}|p{0.7\textwidth}|} \hline
+    Semantics & Description \\ \hline
+    \hline
+    %handler(handleFunction) & Takes a function as parameter, which should take one parameter containing the O-DF tree of the script trigger. The handleFunction should return a value object if the script is triggered by ``onread''. ``oncall'' handler can return an O-DF structure and ``onwrite'' can return a value object to write it. \\ \hline
+    \verb!global! & The global object, which contains all global variables and functions. \\ \hline
+    \verb!event!\newline \verb!arguments[0]! & Global variable that contains the arguments from the event handler. In the case of an ``oncall'' handler, it contains the O-DF parameter from the value element. In ``onwrite'' it contains the InfoItem with its value, which is being written. \\ \hline
+    \verb!odf.readItem(path)! & path: a string representing an O-DF path like in the data discovery of O-DF standard.\newline Returns the element or value depending on the path ending. ``/value'' ending returns the value directly. \\ \hline
+    \verb!odf.writeItem(path, value)! & path: a string representing an O-DF path like in the data discovery of O-DF standard.\newline value: element object or value object to write.\\ \hline
+    \emph{result of the last statement} & The last statement can contain a value that replaces the event value. In the case of ``oncall'' it is the return value of the call. \\ \hline
+  \end{tabular}
+\end{table}
+\egroup
+
+%\fixme{improve the API and add object reference}.
+
+%\fixme{The trend with web browser event handling have been to move out from the use of inline event handlers, which needs to be defined on every element that are needed to catch events. %\url{https://developer.mozilla.org/en-US/docs/Learn/JavaScript/Building_blocks/Events#inline_event_handlers_%E2%80%94_dont_use_these } 
+%  The reason lies in maintainability of the code when a handler is used in many elements and the extra markup makes the document inefficient to parse. Thus, the API should be extended to allow one script to handle multiple InfoItems, by using selectors similar to HTML and CSS, in addition to an API command to add event handler functions in JS.}
+
+
+
+

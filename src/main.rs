@@ -18,10 +18,10 @@ fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    println!("\n\n========================================");
-    println!("  Reconfigurable Device v0.1.0");
-    println!("  Serial port OK!");
-    println!("========================================\n");
+    info!("\n\n========================================");
+    info!("  Reconfigurable Device v0.1.0");
+    info!("  Serial port OK!");
+    info!("========================================\n");
     info!("Reconfigurable device starting...");
 
     // Initialize peripherals

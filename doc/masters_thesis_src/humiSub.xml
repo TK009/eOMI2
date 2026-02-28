@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<omiEnvelope xmlns="http://www.opengroup.org/xsd/omi/2.0/" 
+  version="2.0" ttl="-1">
+  <read msgformat="odf" callback="ws://bathroom-fan.local" interval="-1">
+    <msg>
+      <Objects xmlns="http://www.opengroup.org/xsd/odf/2.0/" version="2.0">
+        <Object>
+          <id>Dht11</id>
+          <InfoItem name="RelativeHumidity" />
+        </Object>
+      </Objects>
+    </msg>
+  </write>
+</omiEnvelope>

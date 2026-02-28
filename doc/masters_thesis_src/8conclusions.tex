@@ -1,0 +1,35 @@
+%! TEX root = tuomas_keyrilainen_masters_thesis.tex
+\chapter{Conclusions}
+\label{chapter:conclusions}
+
+%: most important findings; background, goals, content and findings. (summary only, one to three pages)}
+
+The objective of this study was to advance the interoperability of IoT devices for home automation. The objective was pursued by designing a system architecture for smart objects, which can be configured to send data to other devices and to process data locally. An embedded system component of the proposed architecture was implemented and tested in a real home environment to confirm the feasibility of the approach.
+
+The architecture contains three layers: service layer, management layer and device layer. The service layer contains online services for installing IoT applications and any services used by IoT applications that need to be on the Internet. The management layer consists of the configurator application that is used to configure the devices for their connections and applications. The device layer contains the embedded system that manages hardware input/output, and can run scripts for local data processing and handle subscriptions for data sending. Three sets of protocols are applied: mDNS with DNS-SD for device discovery, HTTP WebSocket for communication and O-MI with O-DF for application-layer IoT data handling. Furthermore, O-DF/O-MI was extended with scripting capability, which is triggered on write, read or call requests. Using the scripting capability, the system improves interoperability by providing a repository of adapters that can convert otherwise incompatible value formats to the same type, in addition to providing local processing for IoT applications. Finally, the architecture was validated by four SO requirements identified in the literature.
+
+The embedded system was implemented for Espressif ESP32-S2 SoC mostly using C and hardware integration with C++ language and Arduino. The embedded system consists of four major components: connection manager, request parser, request handler and scripting engine. Connection manager was implemented with existing libraries to handle mDNS and WebSocket connections. Parser uses the YXML streaming XML parser library and a novel state machine approach to parse O-MI and O-DF efficiently as a stream. Then, the request handler selects the correct actions and responses for the request and implements the subscriptions. Finally, JerryScript was used as the scripting engine with a small API implemented for modifying the device O-DF tree.
+
+The system was tested with two use cases. The first was bathroom exhaust fan, which activates on high humidity during a shower, and deactivates when low humidity is reached. It was built with two smart objects, one with a humidity sensor and one with a servo motor to control an existing fan. The second use case demonstrates reconfiguration by controlling air conditioning with similar devices. In both use cases, the data and control signals were collected to an O-MI database service and visualized with Grafana.
+
+The embedded system was able to execute the use cases successfully, proving that the concept is feasible. This work provides the first implementation of O-MI and O-DF for resource constrained devices. On the other hand, the configurator application was simulated by sending the configuration requests manually, but was neither implemented nor tested, which might lead to unforeseen challenges.
+
+The proposed system would imply higher-quality IoT home automation systems. IoT applications would be more reliable when the communication and processing is accomplished locally, instead of messages having a round-trip to an Internet service or a centralized gateway. Interoperability allows the same applications to work on devices of different manufacturers, and fosters innovation for application development. Moreover, security and privacy are improved as well, as the user can view and control where data streams flow. The main limitation that the architecture requires industry approval to achieve the full vision of interoperability, and due to focus on LAN, remote controlling from Internet would require an active connection for each controllable device. Other limitations are that the system is designed for single LAN network, and without any security considerations. These limitations could be addressed in future studies, together with an exploration of automated configuration of devices or different styles of IoT app and data marketplaces.
+
+%FIXME: the main limitation _is that_
+
+%limitatiton... is that the proposed system contains specific protocols that would need to be adopted in the smart device market to achieve the vision presented in this study.
+
+
+%Time to wrap it up!  Write down the most important findings from your
+%work.  Like the introduction, this chapter is not very long.  One to
+%two (never over three) pages might be a good limit. Still, the chapter
+%gives the background, goals, content, and the findings. However, all that
+%should already be in the previous chapters. This is just a summary (as
+%are the abstract and the introduction).
+%
+%For making PDF/A version requested by the Aalto Library, open the end result pdf file in
+%Acrobat and store it as PDF/A. Then verify the result (everything should be fine, at
+%least as PDF/A-2b version works).
+%
+%Congratulations, your thesis is ready and it looks beautiful!

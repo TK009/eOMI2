@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<omiEnvelope xmlns="http://www.opengroup.org/xsd/omi/2.0/" 
+  version="2.0" ttl="-1">
+  <read msgformat="odf" callback="ws://axolotl.local:8080" interval="-1">
+    <msg>
+      <Objects xmlns="http://www.opengroup.org/xsd/odf/2.0/" 
+        version="2.0" />
+    </msg>
+  </write>
+</omiEnvelope>

@@ -1,0 +1,105 @@
+%! TEX root = tuomas_keyrilainen_masters_thesis.tex
+\chapter{Discussion}
+\label{chapter:discussion}
+
+%\ixme{TEMPLATE: New insights, findings, summary, future work}
+
+%\subsection{Device linking - Integration service}
+
+%\fixme{\\
+%The implemented system promotes sustainability in the following ways: It uses extensible standards, which provide interoperability with new and replacement components. Automatic configuration improves usability and maintainability. Focusing on local network P2P connectivity and local computation for critical parts of the system improves reliability against uncertainty of access to online services. Local handling of user data sharing supports relevant concerns about privacy and control.
+%}
+
+%\fixme{Can be separated into sections: implications, limitations, future research directions}
+
+\subsection*{Implications}
+% Better:
+% reliability
+% maintainability
+% longetivity/sustainability
+% usability: discover
+
+%\fixme{bullet points or merge to two paragraphs}
+
+The proposed system improves many aspects of IoT solutions. In addition to useful new features, it improves most software quality categories, such as reliability, efficiency, interoperability, maintainability, security, privacy and usability.
+
+Reliability can be improved with more autonomous solutions by using scripting and P2P subscriptions. P2P links reduce the amount of links between the data producer and consumer devices, which results in less probability of cut connections. Furthermore, it improves efficiency and latency as the network packets need not travel to a data center and back, only to transfer data to a nearby device.
+
+IoT devices will have higher longevity as new features can be added in an instant with marketplaces or free repositories of scripts. To further boost reliability, it will be possible to add redundant devices in the presence of a script capable of combining them. 
+
+Interoperability allows the same apps to work in multiple devices which can bring economies of scale. It increases the amount and quality of the software that is available for the devices. It also improves maintainability, as replacing a broken device is easier when the same settings and logic can be uploaded to the new one with scripts. 
+
+Security and privacy aspects are improved by the proposed solution, by providing the user with full visibility and control of all data connections to the Internet, while most of the connections are established P2P in the local area network. By having all Internet connections initiated from the LAN, the attack surface is reduced, while also gaining high usability, as no firewall settings are needed.
+
+Usability is also improved with device provisioning and device discovery, which helps device installation and configuration by finding all local devices. Furthermore, it provides an easier entry point to the software of the system on operating systems that have support for it.
+
+All these quality improvements are important for the core platform to be able to support IoT system innovation. New ideas can be developed faster and more easily, and be reused in the next projects. To manage the large amounts of IoT devices and data forecasted for the future, the platform provides tools to handle the data and logic locally, rather than in cloud services.
+
+\subsection*{Limitations}
+
+The proposed system suffers from a few limitations and trade-offs.
+
+The DNS-SD is not currently possible in browsers, which limits the options of implementing discovery for the browser-based configurator app. Even the basic Multicast DNS is not supported or enabled for browsers on all operating systems, which also limits the ways of providing the entry point for the app. %The proposed solution to host the app on IoT devices lets the user to skip installation of any apps, but might create challenges when the app needs to be updated.
+
+Outside LAN remote control and monitoring require that all the wanted data and controls are sent to an external service, which reduces the security and efficiency benefits discussed above. All related devices would need to open their own connection to the remote monitoring/control service, unless a more complicated setup with a gateway-like device is implemented.
+
+Some IoT software might have high computational requirements for their business logic, such as machine learning. Thus, it might not be feasible to implement them into a script running in a low-performance SoC. However, it would be possible to design a separate device that has more computing power and provides its computing capabilities as a service to other devices. It could be implemented either by extending scripting API or by adding O-MI call methods.
+
+The proposed system would need market entry and subsequent popularity to be able to test the real interoperability level and achieve the vision of compatible devices as presented in this study.
+
+
+
+\subsection*{Future research}
+
+%\fixme{bullet points or merge to two paragraphs}
+
+Future research directions are plentiful, spanning categories such as security, power usage, P2P networking, autoconfiguration and marketplaces.
+
+%\fixme{CSS part of IoT}
+
+% security
+The security side of the proposed platform presents a good future research topic, as security was not in the focus of the current study. For example, write access to the device could be limited to the owner of the device, who is set in the provisioning step. Similarly, the discovery system should only include owned devices. Security could be further customized if the script system is extended to allow scripts to block requests.
+
+% power
+Another aspect not explored is the power consumption of the devices. If the device needs to run on battery power, it should be allowed to sleep most of the time, but then it typically cannot receive any requests. Wakeup sources include sensors or a timer, thus, some clock synchronization strategy could be investigated. The sleep functionality or switches to some internal circuitry could be given to the scripts via an additional script API or info items. Script API should also have a subscription method to establish subscriptions only when required, as discussed in Section~\ref{section:subscriptions}.
+
+% P2P networking between other LANs
+The network adopted was limited to LAN, but it would be useful to explore a combination of multiple LAN networks. Specifically, solutions are required to transfer data between networks possibly handling firewalls. Once a solution for passing O-MI messages between networks is established, then discovery, device configuration and subscriptions can use O-MI to pass the required information. Also, other than multicast-based discovery methods can be explored to reduce unnecessary traffic on larger networks. A yet further network-related research direction would focus on improving provisioning. Such solutions could include devices having another connection method, for example as any longer-range radio protocol or a public mesh network. The network could be used to facilitate provisioning and work as a backup if the Wi-Fi connection was lost, improving reliability.
+
+% Autoconfiguration
+To reach the full Plug-and-Play experience, the topic of automatic app configuration could be explored by adopting different schemes. For instance, configurator app could detect when a device is being replaced by a similar new device in the same location and automatically select the same IoT application for it. Furthermore, similar nearby devices could be used as a template, that is, to automatically add the same IoT application as in the similar devices. An indoor location system or signal distance measuring would be useful in such cases.
+
+% marketplace
+Finally, the system would need a marketplace, but there are multiple options on how it could be implemented. It could provide a collection of free essential IoT applications like manual controls, alerting, bang-bang switching or more advanced control loop algorithms. Paid IoT applications could have proprietary algorithms, a fancier setup, and control user interfaces, in addition to connecting online services. Optionally, the marketplace could experiment buying and selling of user data with different pricing methods.
+
+
+
+
+
+%\fixme{Brainstorming Future work: 
+%\begin{enumerate}
+%  \item Security: script installation permissions / ownership, secure discovery (no spoofing)
+%    \item Security: blocker script that implements passwords etc. 
+%  \item Power management: Expose InfoItems of sleep functionality of different hardware and software (like discovery broadcast, and other things to enoble discovery delegation (https://ieeexplore.ieee.org/document/9298148))
+%  \item P2P/Environment: Expand to more dynamic environments than LAN. Connect discovery data of multiple LANs?
+%  \item Autoconfiguration schemes (service discovery)
+%    \item Automatic location calculation
+%  \item Better provisioning techniques (network detection)
+%    \item Reliability: add a backup network (maybe different radio tech)
+  %\item Marketplace for data, online services and scripts (offline services)
+
+% App enhancements
+  %\item Security: Encrypted comms
+  %\item Automatic script combination
+  %\item Further optimization of the embedded O-MI platform
+  %\item Better diagnostics and metering
+% Dumped
+  %\item Usability: User study for the best user experience of setup interface for device connection services
+  %\item Reliability: More autonomy to support massive scenarios? - device or connection failure handling ---- failure can be handled if subscribed to backups in advance
+%\end{enumerate}
+%}
+%\fixme{\\
+%  Integration service will provide the third step of auto-configuration by providing either low level data transformation based on detected types or full services based on the properties of owned devices, their distance to each other and existing connections. Even the history of old devices can be used to detect replacement of an old device.\\
+%  \\
+%  High confidence links can be automatic, or the user can be provided by a selectable catalog of plug-and-play integrations. This service would be a part of user web app, but probably also has an online database or even a marketplace. Web app will upload the integration code with O-MI write as O-DF MetaData (and create O-MI subscriptions to the devices, unless this will be done by the integration code?).
+%}

@@ -1,0 +1,3213 @@
+Aalto University
+School of Science
+Master’s Programme in Computer, Communication and Information Sciences
+
+Tuomas Keyriläinen
+
+Smart Home:
+Design and Implementation of IoT-Based Reconfigurable Smart Home System
+
+Master’s Thesis
+Espoo, July 1, 2021
+Supervisor:
+Advisors:
+
+Professor Kary Främling
+Asad Javed M.Sc.
+Matti Huotari M.Sc.
+
+Aalto University
+School of Science
+Master’s Programme in Computer, Communication and
+ABSTRACT OF
+Information Sciences
+MASTER’S THESIS
+Author:
+Tuomas Keyriläinen
+Title:
+Smart Home: Design and Implementation of IoT-Based Reconfigurable Smart
+Home System
+Date:
+July 1, 2021
+Pages: 76
+Major:
+Computer Science
+Code: SCI3042
+Supervisor:
+Professor Kary Främling
+Advisors:
+Asad Javed M.Sc.
+Matti Huotari M.Sc.
+Interoperability is a key issue in Internet of Things (IoT). To improve it, this
+study proposes a system architecture of reconfigurable smart objects for a smart
+home setting. The architecture consists of the service layer for online services,
+the management layer for configuring local devices, and the device layer that
+contains the embedded system for IoT devices. The architecture is designed
+to fulfill smart object system requirements identified in the literature, and the
+embedded system component of the proposed architecture was implemented and
+evaluated in real home environment to confirm the feasibility of the approach.
+The embedded system has a novel combination of IoT standards and scripting
+capability to enable direct peer-to-peer connections and local data processing with
+JavaScript in the local area network. The main implementation was materialized
+in C language and hardware integration with C++ and Arduino, while using
+existing libraries where possible.
+The system was compiled for ESP32-S2 Wi-Fi-enabled system on a chip and
+tested successfully in two simple use cases, proving the feasibility of the system.
+The scripting aspect allows direct connections between IoT devices even when the
+datatypes are different, as long as an adapter script can be uploaded to the device
+to convert the values. In addition to interoperability, the proposed system improves reliability, as connections and data processing are local instead of having a
+round-trip to an Internet service. Furthermore, security and privacy are improved
+as the user has full visibility and control over all active data connections from
+the devices. However, the proposal addresses no further security considerations,
+which can be improved in future work. Also, the system is currently designed
+only for small LAN networks, and could be improved by more advanced device
+discovery schemes and peer-to-peer communication methods.
+Keywords:
+Language:
+
+Internet of Things, smart home, smart object, peer-to-peer
+English
+2
+
+Aalto-yliopisto
+Perustieteiden korkeakoulu
+Tieto-, tietoliikenne- ja informaatiotekniikan maisteriohjelma
+
+DIPLOMITYÖN
+TIIVISTELMÄ
+
+Tekijä:
+Tuomas Keyriläinen
+Työn nimi:
+Älytalo:
+Esineiden
+internettiin
+perustuvan
+uudelleenkonfiguroitavan
+älytalojärjestelmän suunnittelu ja toteutus
+Päiväys:
+1. heinäkuuta 2021
+Sivumäärä: 76
+Pääaine:
+Tietotekniikka
+Koodi:
+SCI3042
+Valvoja:
+Professori Kary Främling
+Ohjaajat:
+Maisteri Asad Javed
+Maisteri Matti Huotari
+Yhteentoimivuus on avainongelma esineiden internetissä. Parantaakseen sitä
+tämä tutkimus ehdottaa älytaloihin suunnattua uudelleenkonfiguroitavien
+älylaitteiden järjestelmäarkkitehtuuria. Arkkitehtuuri koostuu kolmesta kerroksesta: palvelukerros Internet-palveluille, hallintakerros paikallisten laitteiden konfigurointiin sekä laitekerros, joka sisältää sulautetun järjestelmän laitteille. Arkkitehtuuri on suunniteltu täyttämään kirjallisuudessa tunnistetut älyesineiden
+vaatimukset, ja arkkitehtuurin sulautetun järjestelmän komponentti toteutettiin ja testattiin todellisessa kotitaloudessa lähestymistavan käyttökelpoisuuden
+varmistamiseksi. Sulautettu järjestelmä koostuu uudenlaisesta, esineiden internetin standardien ja skriptausmahdollisuuden yhdistelmästä, joka mahdollistaa
+lähiverkon vertaisverkkoyhteydet ja datan paikallisen prosessoinnin JavaScriptillä. Toteutus tehtiin pääasiassa C-kielellä ja integrointi laitteistoon C++:lla ja
+Arduinolla, käyttäen olemassa olevia kirjastoja aina kun mahdollista.
+Toteutus käännettiin ESP32-S2 Wi-Fi-järjestelmäpiirille, ja testattiin onnistuneesti kahdessa käyttötapauksessa, todistaen järjestelmän käyttökelpoisuuden.
+Järjestelmän skriptauspuoli mahdollistaa suorat verstaisverkkoyhteydet laitteiden välille, vaikka ne käyttäisivät eri tietotyyppejä, kunhan tyyppien välillä on
+muunnosskripti ja se voidaan lähettää laitteille. Yhteentoimivuuden parantamisen lisäksi järjestelmä lisää luotettavuutta, koska yhteydet ja prosessointi voidaan suorittaa paikallisesti, sen sijaan että data kulkisi Internettiin ja takaisin.
+Myös tietoturva ja yksityisyys parantuvat, koska käyttäjällä on täysi näkyvyys ja
+hallinta kaikista aktiivisista datayhteyksistä. Ehdotettu järjestelmä ei kuitenkaan
+sisällä muita tietoturvaominaisuuksia, vaan niitä voidaan käsitellä jatkotutkimuksissa. Lisäksi järjestelmä on suunniteltu toimimaan vain pienissä paikallisverkoissa, mutta sitä voitaisiin laajentaa kehittyneemmillä laitteiden löytötekniikoilla ja
+vertaisverkkomenetelmillä.
+Asiasanat:
+Kieli:
+
+Esineiden internet, älytalo, älyesine, laitteesta laitteeseen
+Englanti
+3
+
+Abbreviations and Acronyms
+IoT
+API
+SO
+HTML
+JS
+CSS
+HTTP
+O-MI
+O-DF
+P2P
+RSOS
+PnP
+WLAN
+LAN
+Wi-Fi
+pub/sub
+MQTT
+CoAP
+REST
+
+Internet of Things
+Application Programming Interface
+Smart Object
+HyperText Markup Language; The language of website content.
+JavaScript; A programming language. Most significantly,
+browsers only allow JS for website client-side functionality.
+Cascading Style Sheets; The language of website styling.
+Hypertext Transfer Protocol; The core protocol of the Web.
+Used to transfer HTML and other files.
+Open Messaging Interface; An IoT protocol standard
+Open Data Format; An IoT data standard
+Peer to Peer; A term for communications directly from peer
+to another peer, instead of via a dedicated server.
+Reconfigurable Smart Object System; The system architecture proposed in this study.
+Plug and Play; A term used for easy-to-install peripherals,
+without user intervention.
+Wireless Local Area Network; See LAN.
+Local Area Network; A computer network that spans a limited physical area, such as one apartment or building.
+A family of wireless network protocols, often used for WLAN.
+Publish-subscribe pattern, where participants can either publish new information or subscribe to consume it.
+Message Queuing Telemetry Transport; A lightweight
+publish-subscribe protocol.
+Constrained Application Protocol; An application data transfer protocol intended for constrained devices.
+Representational State Transfer; A software architecture
+style, simplifying HTTP services.
+4
+
+TCP
+UDP
+UPnP
+
+DNS
+mDNS
+DNS-SD
+LLMNR
+CRUD
+SOAP
+XML
+TTL
+URL
+WADL
+IP
+DPWS
+WS-Discovery
+VLAN
+SoC
+ESP32-S2
+RAM
+SRAM
+
+Transmission Control Protocol; A fundamental Internet protocol to provide reliable and ordered stream of data.
+User Datagram Protocol; An Internet protocol to send messages without ordering or delivery guarantees.
+Universal Plug and Play; A group of protocols that allow
+networked devices to find and establish connections to each
+other automatically in a LAN.
+Domain Name System; A system and protocol that is mainly
+used to retrieve IP addresses for hostnames.
+Multicast DNS; A modified DNS protocol; Allows DNS
+queries in a LAN without a name server with multicast UDP.
+DNS Service Discovery; mDNS companion standard to allow
+multiple results to find all hosts providing a specified service.
+Link-Local Multicast Name Resolution; Similar to mDNS.
+Create, Read, Update and Delete; A term for the required
+basic operations to create a persistent data storage.
+Simple Object Access Protocol; Allows transfer of structured
+information and invoking processes on a server.
+Extensible Markup Language; A document markup format
+that is both human-readable and machine-readable.
+Time-To-Live; A parameter in O-MI that defines the maximum amount of time the request should be answered in.
+Uniform Resource Locator; Also known as a web address; A
+format to specify a location on a computer network.
+Web Application Description Language; An XML format to
+describe HTTP-based web services.
+Used to refer either the Internet Protocol or a numerical address used in it.
+Devices Profile for Web Services; Similar standard to UPnP,
+but aimed more towards web service technologies.
+Web Services Dynamic Discovery; A multicast service discovery protocol for local networks.
+Virtual Local Area Network; A standard that allows creation
+of many virtual LANs in one physical LAN.
+System on Chip; An integrated circuit that contains most
+components of a computer system, instead of separate parts.
+The commercial name of the SoC used in this study.
+Random Access Memory; A memory type, which allows access
+to any of its memory locations in roughly the same time.
+Static Random Access Memory; A type of semiconductor
+RAM that requires no refreshing circuitry to retain the data.
+5
+
+PSRAM
+UART
+RGB LED
+GPIO
+
+CPU
+ROM
+
+RTC
+IDE
+OTA
+RDF
+app
+OS
+NAT
+WPS
+NFC
+eOMI
+UTF
+DTD
+MCU
+NTP
+
+PseudoStatic Random Access Memory; Similar to static RAM
+in interface but handles memory refreshing internally.
+Universal Asynchronous Receiver-Transmitter; A device for
+configurable serial communication between devices.
+Red Green Blue Light Emitting Diode; A light that has configurable color channels to achieve any perceived light color.
+General-Purpose Input/Output; A hardware digital signal pin
+on an integrated circuit, that can be configured to various
+input or output operations by the firmware.
+Central Processing Unit; An integrated circuit that performs
+operations, as specified by instructions of a program.
+Read-Only Memory; A type of memory that cannot be written. Provides commonly used program code or data in an
+integrated circuit to save physical space or faster speed.
+Real-Time Clock; An electronic device that retains and measures passage of clock time and date.
+Integrated Development Environment; A software that combines software development tools to one integrated package.
+Over-The-Air; A term for installing firmware or software updates remotely, usually over a wireless connection.
+Resource Description Framework; A family of specifications
+used to describe resources in machine-readable way.
+Short for application; Typically refers to a smartphone app.
+Operating System; A system software that manages hardware
+resources and running of programs.
+Network Address Translation; A method of changing an IP
+address in network packets when routing between networks.
+Wi-Fi Protected Setup; A standard that attempts to automate wireless network connection setup securely.
+Near-Field Communication; A group of wireless communication protocols, intended to restrict range to a few cm.
+Embedded O-MI; The embedded system implementation of
+O-DF/O-MI in this study.
+Unicode Transformation Format; A Format to encode text
+characters of most of the world’s writing systems.
+Document Type Definition; Declaration of a document type
+used in languages such as XML.
+MicroController Unit; A small computer in an integrated circuit.
+Network Time Protocol; A network protocol for clock synchronization between computer systems.
+6
+
+Contents
+Abbreviations and Acronyms
+
+4
+
+1 Introduction
+9
+1.1 Problem statement . . . . . . . . . . . . . . . . . . . . . . . . 9
+1.2 Structure of the Thesis . . . . . . . . . . . . . . . . . . . . . . 13
+2 Background
+2.1 Existing proprietary and open solutions . . . . . . . . . . . . .
+2.2 Open standards and specifications . . . . . . . . . . . . . . . .
+2.2.1 Existing protocol limitations . . . . . . . . . . . . . . .
+2.2.2 O-MI & O-DF . . . . . . . . . . . . . . . . . . . . . . .
+2.3 Smart Objects . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2.3.1 Requirements . . . . . . . . . . . . . . . . . . . . . . .
+2.3.2 Existing work . . . . . . . . . . . . . . . . . . . . . . .
+2.4 Plug and Play . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2.4.1 IoT device functionality scripting . . . . . . . . . . . .
+
+14
+14
+15
+15
+18
+20
+21
+22
+24
+26
+
+3 Environment
+
+27
+
+4 System design and Architecture
+4.1 Smart Object Requirements . . . . . . . . . . . . . . . . . . .
+4.2 Proposed configurator application . . . . . . . . . . . . . . . .
+4.2.1 Device discovery . . . . . . . . . . . . . . . . . . . . .
+4.2.2 Subscriptions . . . . . . . . . . . . . . . . . . . . . . .
+4.2.3 Adapters . . . . . . . . . . . . . . . . . . . . . . . . . .
+4.2.4 IoT applications . . . . . . . . . . . . . . . . . . . . . .
+4.3 Proposed embedded system . . . . . . . . . . . . . . . . . . .
+4.3.1 Device provisioning . . . . . . . . . . . . . . . . . . . .
+4.3.2 Script Engine . . . . . . . . . . . . . . . . . . . . . . .
+
+30
+32
+34
+34
+36
+37
+39
+40
+42
+44
+
+7
+
+5 Implementation
+5.1 O-DF/O-MI C implementation . . . . . . . . . . . . . . . . .
+5.1.1 Parsing . . . . . . . . . . . . . . . . . . . . . . . . . .
+5.1.2 O-MI requests . . . . . . . . . . . . . . . . . . . . . . .
+5.2 O-DF/O-MI scripting support . . . . . . . . . . . . . . . . . .
+5.3 Real life scenario test . . . . . . . . . . . . . . . . . . . . . . .
+
+46
+47
+47
+50
+52
+52
+
+6 Results
+
+59
+
+7 Discussion
+
+62
+
+8 Conclusions
+
+65
+
+A Read request response
+
+72
+
+B The A/C use case configuration
+
+75
+
+8
+
+Chapter 1
+
+Introduction
+Internet of Things (IoT) has been an aspiring discussion topic in the software and electronics industry for a long time. It is a broad concept regarding
+networked devices, that contains sensors, actuators, software and other technologies, for the purpose of communicating with other devices and systems
+across the Internet. Over the past decade, there has been a surge in the
+development of new smart devices that can connect to the Internet and be
+controlled using applications remotely. This network of devices together with
+other appliances embedded with sensors, electronics, software and connectivity is called the Internet of Things (IoT).
+Smart home enables intelligent control of home appliances to automate
+common tasks or to provide other value, such as energy savings. The system
+involves monitoring of sensors and acting based on their values. It can control
+heating, ventilation and air conditioning, lighting or media devices. These
+examples are presented in Figure 1.1. However, smart home automation has
+not gained much popularity. Specifically, barriers to home automation have
+included the high cost of devices, inflexibility, difficulty of management and
+security concerns [1]. This work proposes a solution based on Internet of
+Things.
+
+1.1
+
+Problem statement
+
+Such smart devices can be examined through two major problems. The first
+is that the setup of such devices and their connections often involves a complicated integration work, which includes a case-specific custom configuration.
+The second is that after an IoT system has been in use some time, one of
+the components in the system will inevitably be replaced, broken or otherwise reach end-of-life. The component might be anything from a simple IoT
+9
+
+CHAPTER 1. INTRODUCTION
+
+10
+
+Figure 1.1: Smart home overview
+device or network equipment failure to a server or cloud service being decommissioned. Unless the failed component is a simple network connection that
+can automatically be routed via a different path, the fix typically requires
+an expert understanding the problem and the original system configuration.
+As IoT systems often have many components, including external services,
+it leads to systems that are unreliable or expensive to build and maintain.
+Therefore, these problems need solutions to increase IoT attractiveness and
+sustainability.
+In order to address these problems in this work, IoT is approached in
+the Thing viewpoint rather than the Internet viewpoint. Thus, rather than
+focusing on things using Internet services that run in cloud environments,
+focus is on local devices that connect to each other in the local network and
+provide services locally. Such devices are usually called smart objects [2]. As
+a result, the devices can continue working without Internet access and with
+lower latency, as they communicate in the same network without round-trips
+to the Internet. However, with the current consumer electronics segment,
+device-to-device connections are usually limited to within the same vendor
+or has specific proprietary communication protocol. Connections between
+these vendor silos work mostly with cloud service APIs, but are often limited
+to simple connections, while transformations between different data formats
+are too complicated for the average consumer to solve. An easy-to-use solution would greatly enhance the value of IoT devices, since combining the
+products of different vendors would vastly increase the possible combinations
+of devices, choices for replacements and lower the risk of vendor-lock-in. For
+
+CHAPTER 1. INTRODUCTION
+
+11
+
+the reasons mentioned above, the term Smart Objects (SO) assumes a broader
+meaning in this work as it can be a more generic building block, which can
+be used in creative ways, instead of a product designed to be used in one way
+only.
+
+Research Methodology
+The objective of this work is to advance the possibility that devices of different vendors work together, of which the web offers a successful example.
+The web is enabled by standardized languages and protocols. Most importantly, HyperText Markup Language (HTML) represents the content data
+to render for the user, JavaScript (JS) provides client-side software extension
+possibility, and Cascading Style Sheets (CSS) provides style rules to change
+the appearance of the data. They are transferred as payload with the HTTP
+protocol from servers to the requesting clients. IoT has slightly different requirements than the web, so different options to fill similar application level
+roles are investigated. Especially two standards are designed to fit some
+of these roles: Open Messaging Interface (O-MI) [3] provides transferring
+capabilities like HTTP and Open Data Format (O-DF) [4] provides content
+format similar to HTML. The CSS equivalent language could apply the same
+device or sensor metadata to many items with one statement, but this is not
+within the scope of this work. Instead, this study focuses on the scripting
+equivalent of the web, and an extension proposal is made and implemented
+to extend O-DF/O-MI with scripting capabilities, which are requirements to
+open possibilities for automating configuration and improving peer-to-peer
+(P2P) interoperability.
+IoT gateways are a common way to facilitate services for local IoT devices
+by providing data processing and creating connections, either from a device
+to an external IoT application or a device to another device. Like JavaScript
+in browsers, scripting could be adopted to implement these features in smart
+objects instead of IoT gateways. As a result, the functionality is distributed
+instead of creating a single weak link, and versions of the features are easier
+to manage. When using a gateway, the device and service interfaces must be
+backwards compatible, otherwise a new gateway needs to be installed next
+to the old one, in case of device updates. If scripting is enabled on smart
+devices, most gateway features can be implemented in a script, which can be
+tailored for each version of the API of the device directly.
+For the scripting capability of devices to be useful, a method of script
+loading is needed. In contrast to scripts in web browsers that run on computers, IoT devices often lack sufficient physical input and output facilities
+to select scripts, and a common use case involves connecting different devices
+
+CHAPTER 1. INTRODUCTION
+
+12
+
+together, so a separate application for this functionality is reasonable. Such
+an application could discover all local devices and their metadata, which
+would then be applied to search and fetch any scripts fitting to these devices
+and their combinations. Furthermore, this kind of configurator application
+would enable automating many cases of new device configuration with different strategies.
+In short, the present investigation asks the following questions:
+1. Is it feasible to implement an embedded system using interoperable
+open standards, in addition to runtime functionality extension capabilities with scripting?
+2. Does the designed system work in real smart home automation scenario?
+These research questions are answered by designing a system architecture
+around these ideas, implementing a prototype of the embedded system and
+testing two use cases in a real home setting. For concision and readability,
+this study will hereon apply the concept of Reconfigurable Smart Object
+System and the related acronym RSOS to refer to the system architecture
+proposed in the current work.
+
+Contributions
+This study offers the following four key contributions:
+1. It builds a candidate architecture for more interoperable smart object
+based Internet of Things.
+2. It proposes a novel combination of a configurator application and ondevice computation with scripts, to allow reconfiguration of device functionality.
+3. It provides the first open source implementation of O-DF and O-MI
+standards for embedded devices, and includes an extension for scripting
+support.
+4. It evaluates whether the proposed system can be operated in a real
+home.
+
+CHAPTER 1. INTRODUCTION
+
+1.2
+
+13
+
+Structure of the Thesis
+
+The rest of this thesis is organized as follows. First, related work on smart
+objects is reviewed in Chapter 2, examining similar commercial systems, related protocols and required technologies. In Chapter 3, the environment
+of the implementation is defined in terms of hardware and physical aspects.
+Chapter 4 describes the design of the RSOS, while the details of the implementation are provided in Chapter 5. The success of the implementation is
+tested in a real world setting and the results analyzed in Chapter 6. Finally,
+implications, limitations and future work will be discussed in Chapter 7, and
+the thesis is concluded with a summary in Chapter 8.
+
+Chapter 2
+
+Background
+Designing an interoperable IoT system with autonomous smart objects induces a few requirements. These requirements have been investigated under
+different terminology and contexts. In the context of smart object IoT, the
+most important need is to have a software platform for applications, which
+connects the applications to the device data sources. It is often called a middleware. For example, earlier researchers [5] have described middleware to
+provide abstractions of the heterogeneous components to bind them together,
+creating common APIs (Application Programming Interfaces) and services
+for the applications. They propose that a middleware for IoT would consist of
+four functional blocks: Interoperation, security & privacy, context detection,
+device discovery & management and managing data volume. Middleware are
+often implemented in some form of a gateway device between the network
+of sensors and actuators and the internet. The RSOS is fundamentally a
+middleware but does not require a gateway device to function.
+The remainder of this chapter presents a few existing proprietary and
+open middleware solutions. Further, IoT protocols required for such middleware are described. Then, smart object requirements and existing work for
+smart object middlewares are explored, in addition to proposals for providing
+plug-and-play (PnP) style connectivity between the devices. Finally, earlier
+work on IoT system implementations are presented, focusing on systems that
+adopt scripting.
+
+2.1
+
+Existing proprietary and open solutions
+
+IoT platforms provide a collection of interoperable tools required for implementing large IoT systems. Some examples of IoT platforms are KAA platform, ThingSpeak, Microsoft Azure IoT, ThingsBoard and AWS IoT. They
+14
+
+CHAPTER 2. BACKGROUND
+
+15
+
+include features like device management, scalability, storage of data, availability, plug and play, data processing and data abstraction. [6] Thus, they
+also serve as middleware. IoT platforms often focus on providing the features
+via cloud services, and are directed towards developers of IoT systems, which
+accounts for vertical silos in companies. It means that all the data of certain
+products are collected and stored inside one company, and are not straight
+forward or possible to use in third party applications or products.
+As an example of more end user oriented services, IFTTT1 aims to bridge
+the gap between companies by providing applets that trigger actions in one
+service based on the events of another service. The difficulty of service integration can be seen in the limitations of the service. It only allows simple
+“if this, then that” logic, and all service integrations require programming
+an adapter between IFTTT and the service [7].
+OpenHAB [8] (open Home Automation Bus) is an open source home
+automation software. It is intended to be run on a local computer to manage
+connections and data processing of local devices. OpenHAB itself is not
+a proprietary system, but provides a repository of bindings, which provide
+support to different proprietary systems and protocols of devices. The system
+also provides a cloud service to provide remote control and to be able to
+connect easily to online services that require a server, for instance, IFTTT
+and mobile push notifications services. OpenHAB is to some extent usable
+for a technically oriented consumer, but advanced features might require deep
+expertise in OpenHAB or programming.
+All in all, in the context of the RSOS, the problems of proprietary systems are that data are collected into vertical silos, which limits innovation
+in third-party applications and requires a reliable Internet connection and
+service availability. OpenHAB runs locally, but has a centralized server architecture, which causes downtime for the entire system in case of centralized
+server problems or maintenance. The reliability problem might limit using
+the system on critical use cases which require continuous control or reliable
+immediate reaction to an event.
+
+2.2
+
+Open standards and specifications
+
+2.2.1
+
+Existing protocol limitations
+
+An overview of standards and protocols relevant to IoT is provided in this
+section. This work focuses on Wireless Local Area Network (WLAN) with
+Wi-Fi, making the selection of the protocols of physical, link and network
+1
+
+https://ifttt.com
+
+CHAPTER 2. BACKGROUND
+
+16
+
+layers irrelevant, so they are not further considered in the design of the RSOS.
+Thus, the selection of the application level protocols in the stack remains to
+be specified.
+Some commonly used protocols in IoT are MQTT, CoAP, HTTP and
+WebSockets, since they are found in large IoT platforms [6]. HTTP is used as
+it is easy to interface with existing software and servers, but it only provides
+a request-response model for communication; each request results in exactly
+one response. However, continuous data streams from sensors are usually
+needed, thus a request-response model results in large overhead, latency and
+small throughput.
+The Constrained Application Protocol (CoAP) [9] improves HTTP in
+this context, by providing a subset of its features and some machine-tomachine related features in a more compact and lightweight protocol, which
+is intended for memory- and performance-constrained devices or networks.
+It keeps the request-response requirement of HTTP to support the stateless protocol requirement of Representational State Transfer (REST) style
+communication, which is popular in the Web. Web servers do not typically
+support CoAP directly; however, it can be transformed into HTTP requests
+and responses effortlessly.
+WebSocket [10] is an extension to HTTP, which provides a different solution to the large overhead of HTTP requests by lifting the request-response
+requirement and providing a two-way channel for a stream of messages, similar to TCP. WebSocket is useful in user interfaces as it is an efficient way
+to create a data stream to a web browser, especially because browsers have
+strict limits on what protocols are allowed in client-side scripts. Additionally, WebSocket can also be secured easily as it can be used with HTTPS to
+share the same underlying secure channel. Although WebSocket is suited for
+IoT use, it lacks payload specifications for the IoT domain, such as actuator
+control or time series data related requests.
+In IoT, time series data often need to be transferred in real time from
+sensing devices to services or devices, which need to act based on the data.
+For example, a service could send notifications if interesting sensor values are
+detected, or if an actuator needs to be activated to keep sensor values within
+a predetermined range. Then, to allow different parties to construct interoperable implementations, a standardized way to create ad-hoc data streams is
+needed, which leads to a publish-subscribe (pub/sub) pattern, where participating agents can either publish data or subscribe to it to receive notifications
+of published data. In IoT and other networked domains, the model usually
+involves a specialized data broker server, which has a method for publishing
+or subscribing the data. One example of such a model is in the MQTT protocol, which is an application level protocol and is payload-agnostic, which
+
+CHAPTER 2. BACKGROUND
+
+17
+
+is why it needs no specific payload data format [11]. Since both the data
+producers and consumers need to be configured to communicate with the
+broker server, a common server is often used for many devices and agents.
+The use of a common data broker server creates an additional critical link,
+which causes additional costs and difficulties to construct a reliable infrastructure for the IoT agents. For example, it would need a fallback server
+to be able to handle updates or failures of the main server. Although the
+required infrastructure would be easy to implement in a cloud environment,
+it is difficult or costly to implement on-site, for example in households.
+In addition to data transfers, discovery protocols are used to find devices
+and their IP address in a LAN. Discovery protocols typically use multicast to
+advertise or query other devices. Three well known examples are: Universal
+Plug and Play (UPnP), Link-Local Multicast Name Resolution (LLMNR)
+and multicast DNS (mDNS) with its DNS Service Discovery (DNS-SD) companion mechanism.
+Universal Plug and Play (UPnP) [12] defines a full device architecture
+to allow plug-and-play connectivity. It contains five steps: discovery, description, control, eventing and presentation. Discovery operates by devices
+advertising themselves with multicast version of HTTP (HTTPMU). Description step defines how to fetch more information about discovered devices. The information is used in the rest of the steps and contains control
+interfaces, variables and an optional presentation URL. Device controls are
+defined with SOAP. Eventing allows subscribing to variables. Presentation
+URL can provide a web app to show a user interface for a device.
+LLMNR [13] and mDNS [14] provide only hostname resolution using multicast packets. LLMNR is not standardized, whereas mDNS is in the Proposed Standard phase. Furthermore, extension DNS-SD [15] can be used
+with mDNS to provide service discovery, which is application protocol agnostic unlike UPnP.
+Table 2.1 lists a short comparison and summary of protocols described in
+this section. O-MI and O-DF are presented in more detail in the Section 2.2.2.
+
+CHAPTER 2. BACKGROUND
+
+18
+
+Table 2.1: Summary of related protocols
+Name
+
+Transfer
+protocol
+
+Payload
+
+Purpose (simplified)
+
+HTTP
+
+TCP
+
+Any
+
+Request/response. Transfer files
+and call API functions
+
+WebSockets HTTP/TCP
+
+Any
+
+Allows TCP-like connection to
+browsers.
+
+CoAP
+
+UDP
+
+Any
+
+Similar to HTTP, but fewer features and more performance
+
+MQTT
+
+Any TCP-like
+
+Any
+
+Publish/subscribe
+
+UPnP
+
+(multicast)
+UDP
+
+XML,
+SOAP
+
+LAN service discovery, Pub/sub
+XML events and call functions
+
+LLMNR
+
+multicast
+UDP
+
+(modified
+DNS)
+
+LAN hostname resolution, any
+application protocol can be used
+
+mDNS,
+DNS-SD
+
+multicast
+UDP
+
+(modified
+DNS)
+
+LAN service discovery, any application protocol can be used
+
+O-MI
+
+Any TCP-like
+
+O-DF (or
+any text)
+
+Interoperable IoT data CRUD,
+functions and Pub/sub.
+
+2.2.2
+
+O-MI & O-DF
+
+Open Messaging Interface (O-MI) [3] is a protocol standard intended
+specifically for IoT. It provides loose coupling between devices or services;
+thus, they can be connected with minimal prior knowledge of each other.
+Instead of the publish-subscribe pattern it provides the observer pattern, in
+addition to basic data CRUD (Create, Read, Update, Delete) model. The
+observer pattern differs from publish-subscribe in that it does not rely on the
+high availability server. Instead, consumers of the data subscribe directly
+to the producers of the data. It is achieved by each node with server and
+client capabilities, which enables peer-to-peer (P2P) communication. Another property of O-MI is that it is protocol agnostic, meaning it can be
+transferred to a destination device with any text payload capable protocol,
+such as HTTP, WebSocket, SOAP or TCP directly.
+O-MI provides five different request verbs, as depicted in Table 2.2: read,
+write, cancel, delete and call. Read requests can further be used to set up different kinds of subscriptions or poll data from pollable subscriptions. Write
+is used to create or update data, delete is used to remove data, call is used
+to run methods and cancel stops subscriptions. Subscriptions can be created
+
+CHAPTER 2. BACKGROUND
+
+19
+
+by specifying the interval parameter, which sets the interval of subscription
+results or if it is -1, responses are sent only when the requested items are
+updated. In the latter case, the subscription is a so-called event subscription.
+Table 2.2: O-MI requests. Parameters surrounded by angle brackets (<>) are
+XML elements, the rest are XML attributes.
+Verb
+
+Parameters
+
+Functionality
+
+Description
+
+Read
+
+<msg>
+
+Read latest
+
+Basic read request that returns a single value for each
+requested item in msg.
+
+Read
+
+<msg>,
+newest, oldest,
+begin, end
+
+Read history
+
+Parameters can be used to fetch values between a
+time range, or a certain number of newest or oldest
+values.
+
+Read
+
+<msg>,
+interval>0,
+callback
+
+Interval
+subscription
+
+A subscription is created that returns the current
+value of requested items every time the interval
+amount of time has passed.
+
+Read
+
+<msg>,
+interval=-1,
+callback
+
+Event
+subscription
+
+A subscription is created that returns a response every time the requested items are updated.
+
+Read
+
+<msg>,
+interval
+
+Pollable
+subscription
+
+The callback parameter is the URL where to send
+the subscription results. If it is not given for a subscription, the results are stored until polled.
+
+Read
+
+<requestID>
+
+Poll
+
+If requestID element is given, the read request is considered as a poll for subscription.
+
+Write
+
+<msg>
+
+Create/Update
+
+Create new parts of the hierarchy or update values
+of existing items.
+
+Cancel
+
+<requestID>
+
+Cancel
+subscription
+
+Stop subscriptions before their time-to-live (TTL)
+parameter have expired the subscription.
+
+Delete
+
+<msg>
+
+Delete
+
+Remove parts of the hierarchy, along with their data.
+
+Call
+
+<msg>
+
+Call method
+
+Execute some functionality based on passed parameters. Allows passing of any structure to a function
+and receiving any structure as a return value. When
+used with O-DF, the parameter and return value are
+complete O-DF trees.
+
+Open Data Format (O-DF) [4] is the recommended payload data format for O-MI. It is defined with XML schema to create a generic hierarchy
+to represent any objects similar to object-oriented programming paradigm.
+Figure 2.1 shows an example of O-MI write request with O-DF payload
+that contains two sensors with one value in each. O-DF is structured in a
+hierarchical manner with the root being Objects, then Object is similar to a
+directory and InfoItem is similar to a file in file systems. The right side of the
+figure shows a reference of allowed hierarchy structure: Only Object children
+can reside under the root (Objects). Object can also have additional InfoItem
+children, which in order can have value and MetaData, but no further Object
+elements. Finally, the MetaData element reuses the InfoItem semantics, such
+that the metadata can be represented as key value pairs.
+
+CHAPTER 2. BACKGROUND
+
+20
+
+Each hierarchy level can contain only unique identifiers and names. The
+identifiers can also have some extra parameters to describe their type, in
+addition to type attributes for Object and InfoItem elements. Moreover,
+almost all elements are also allowed to be extended by proprietary XML
+attributes.
+
+O-MI
+
+O-DF
+
+O-MI
+
+Figure 2.1: Example O-MI write request with O-DF payload
+When O-DF is used as a payload in O-MI requests, the requests are
+defined to fill the O-DF tree, by including the given request structure and
+adding new elements to the tree leaves. For instance, if the request is a read
+request and a leaf is an InfoItem, the value of the InfoItem is added to the
+response. If the request contains an object leaf, then the entire subtree of
+the object is added in the response.
+To summarize, O-MI and O-DF are very flexible, providing multiple ways
+of implementing the same use case, in addition to having future-proof extension points to consider the changing requirements of IoT. Likewise, flexibility
+is also a challenge when developing devices that should work together with
+other solutions that may be from other manufacturers, but this will be explored in the remainder of the study.
+
+2.3
+
+Smart Objects
+
+A Smart Object (SO) typically refers to a device that can react to the environment and cooperate with people and other nearby smart objects to
+enhance the functionality of the device. This section describes the requirements for smart objects and reviews existing work related to smart objects
+in the context of the current study.
+
+CHAPTER 2. BACKGROUND
+
+2.3.1
+
+21
+
+Requirements
+
+Fortino et al. [16] identify requirements for smart environments and smart
+objects. They base the requirements on the literature on smart objects and
+environments, confirming that interoperability is important. Different devices have typically different interfaces, thus it is challenging to make them
+work together, as commands from one device might be misunderstood by
+another device. Even semantically the same kind of devices from different
+manufacturers might have differences. The authors claim that abstractions
+are needed to achieve homogeneous interfaces, which can then facilitate plugand-play operations. Abstractions in the interface provide a smaller set of familiar concepts for applications to develop their functionalities. Abstractions
+are needed from the low level of the hardware up to the development process
+level. Based on a comparison of 13 platforms, they conclude that even though
+the platforms provide effective tools for developing, deploying and managing
+SOs, they need excessive manual operating to be able to manage numerous
+devices. Instead, they stress the need for more autonomous systems and
+agent-based methodologies. As one of their comparison frameworks, they
+present the following list of requirements for smart environments [17]:
+1. “Abstraction over heterogeneous input and output hardware devices”
+2. “Abstraction over hardware and software interface”
+3. “Abstraction over data streams (continuous or discrete data or events)
+and data types”
+4. “Abstraction over physicality (location, context)”
+5. “Abstraction over the development process (time of integration of services)”
+Furthermore, a list of requirements for smart objects can be acquired
+from the following design challenges [18], as presented in Table 2.3.
+
+CHAPTER 2. BACKGROUND
+
+22
+
+Table 2.3: Smart object requirements [18]
+SO Requirement 1
+
+“Heterogeneity and Application Development”
+
+Applications must be expected to be written without prior knowledge of
+interface differences of devices and manufacturers.
+SO Requirement 2
+
+“Augmentation Variation of Smart Objects”
+
+An object might provide multiple services, or the same services can be provided by multiple smart objects, but at different levels of detail. Consequently, it is not feasible to have fixed standards for object type specific
+service interfaces.
+SO Requirement 3
+
+“Management of Smart Object”
+
+Applications need a way to access and interact with the devices. In a dynamic
+smart environment, objects might be mobile or break. Applications need to
+be able to adapt in such situations.
+SO Requirement 4
+
+“Evolution of Smart Object System”
+
+Smart object systems require a possibility to evolve over time by adding,
+moving and reconfiguring the smart objects. New technologies might emerge
+in the future, incorporated into the system.
+
+2.3.2
+
+Existing work
+
+Kortuem et al. [2] describe the Internet of Things vision of the loosely coupled
+decentralized system of smart objects. In this article, SOs contain “chunks
+of application code” in addition to the typical device firmware, which is an
+idea that is extended in the RSOS as scripts. In their article, three categories
+are proposed: activity-aware, policy-aware and process-aware. In the first,
+an SO is designed to record the activities performed with the object, a tool
+for example, and report it to other systems. The second type follows sensor
+values and alerts if they exceed a value set by a policy. The third type follows
+the environment via multiple sensors and verifies that a workflow with many
+steps is followed in the correct order. Some prototypes from these different
+categories were tested in a construction site setting. For communication,
+they constructed an ad-hoc P2P query for values from the nearby objects to
+evaluate a rule. Then, the nearby objects could make similar queries before
+returning the result to make a chain of reasoning.
+Smart objects offer an effective approach to Internet of Things as they
+
+CHAPTER 2. BACKGROUND
+
+23
+
+establish the required framework to advance to more autonomous systems
+that could work more reliably, as well as handle a larger number of connected
+devices. A concept similar to smart objects in IoT is smart products in
+the context of the product lifecycle management, where the products can
+communicate with the manufacturer and other parties to provide extra value
+for all parties.
+Främling et al. [19] demonstrate the use of PMI, the precursor of O-MI,
+for product lifecycle management. These smart products could provide data
+for manufacturers to improve the performance or the possibility to provide
+preventive maintenance, in addition to providing the users with useful information and control remotely. The authors suggest that the products could
+use WLAN and discovery protocols like Universal Plug and Play (UPnP)
+in the future, which will be the case in the RSOS. Instead, after analyzing
+how earlier ways to catalog and interface the devices from the internet are
+inadequate, they outline the use of PMI as a distributed network between
+companies, which the products would connect to. They show the system in
+use with a smart refrigerator.
+The smart home use case was extended in [20] with a smart ventilation
+machine, as well as with a description of the technical design and implementation of data synchronization with P2P connections. Two strategies
+were demonstrated: asynchronous primary copy and asynchronous update
+everywhere. However, they recognize the overhead and amount of IoT data
+sending, so only synchronizing the required data at the required times is encouraged. They emphasize the usefulness of agent systems, where an agent
+is an autonomously working software, as they offer structure for distributing
+the services, creating redundancy and transparency in the system. Consequently, they design the system with agents that create data streams only
+to the required nodes. The final decision on which synchronization scheme
+to use is on the software developer, so in the RSOS it is possible for the developer to create a device-agnostic agent software, thus deciding on the correct data synchronization settings on per service or application basis rather
+than device. Furthermore, the configuration of such data synchronization is
+mostly automated with device discovery and device-application matching in
+the RSOS.
+More detailed implementations of agent-based smart object systems are
+described in [21] and [22]. The first work proposes the use of the master and
+slave model, where the master is a coordinator of multiple smart objects, so
+it is the only component that can communicate to other smart objects. The
+second work proposes a more homogeneous system where most functionality
+is contained in the smart object, leaving only knowledge bases, reasoning and
+application specific capabilities for external Internet services. However, nei-
+
+CHAPTER 2. BACKGROUND
+
+24
+
+ther of the proposed systems focus on reliability, interoperability of protocols
+or application software. High interoperability is important for smart objects
+and required in order to achieve features such as plug-and-play, which will
+be explored in the next section.
+
+2.4
+
+Plug and Play
+
+As any consumer device should be easy to use, the setup and replacement
+of devices should be automated as much as possible. It would also make the
+management of a larger number of devices feasible. The concept of plug-andplay (PnP) is often used in this context. It means that the user can start using
+the device by simply plugging the cables in, and then the device performs
+any required configurations and commands to automatically connect itself to
+the environment. Typically, the device must use standardized protocols to
+communicate with its environment and to acquire any necessary information
+for the configuration. An example is a USB device, connecting to a computer,
+as shown in Figure 2.2, where the computer needs to select the correct actions
+and connections to the operating system based on the information provided
+by the USB device. Another example is UPnP, which typically connects
+media players to media sources in households. However, PnP-like techniques
+are not commonly used to connect other types of IoT devices together. IoT
+system approaches to PnP are explored in the remainder of this section.
+
+USB Device
+
+Computer
+1. Configure speed
+
+2. Send ID
+
+4. Communication
+
+3. Find driver
+
+Driver
+
+Figure 2.2: USB plug and play example
+Stirbu [23] proposes a framework that uses HTTP REST APIs, which are
+commonly adopted in web applications. Each device should be addressable
+from a web URL directly or via a gateway, and they are listed in the online
+Resource Repository. Then, the discovery of other devices is accomplished
+via the Resource Repository with the device metadata, which is published
+
+CHAPTER 2. BACKGROUND
+
+25
+
+by each device with the Atom publishing protocol. The Resource Repository provides users with an OpenSearch specification document to construct
+HTTP search queries to find devices. After that, the devices can either
+be controlled or data can be fetched with a REST API. The author adds
+that for complex APIs one could use Web Application Description Language
+(WADL), which is similar to SOAP. In conclusion, PnP is achieved by providing internet services for device search and metadata queries. In addition,
+the system requires enforcing reachable internet access to at least one gateway, which provides access to the local devices. However, requiring that all
+devices should be accessible from the Internet might limit use cases, specifically in situations where public IP is unavailable, which is often the case
+with mobile broadband networks.
+Wall et al. [24] describe an alternative strategy for device connection management in a PnP style. The user mobile device is used with a configurator
+app to configure IoT devices, which is the same strategy that is used in the
+RSOS. They use DPWS as the messaging standard. WS-Discovery is used
+to discover the devices, and a location service is included in the devices to
+improve usability. The location would be added either by an indoor localization system or manually by the user. To guarantee PnP success, the authors
+propose that each device has a predetermined list of device types they are
+compatible with, but it is apparent that this limits the available device combinations the user could create. They describe that when the user selects the
+device in the app, it will show the possible connections by filtering all the
+supported devices that were discovered in the LAN. Then it provides a simple
+if this, then that rule configuration. Moreover, rules are checked for conflicts
+within a single device. The idea is improved in the RSOS by using O-DF and
+O-MI standards, which are more fitting for IoT data transfer use-cases and
+somewhat simpler, in addition to handling data incompatibilities and rules
+with scripts, which provide broader capabilities. They use a Raspberry Pi
+single-board computer with Java, while here, a more constrained embedded
+system with C/C++ is adopted.
+Yang et al. [25] focus on device-to-app interoperability. They propose an
+architecture of a gateway device with a proxy server for HTTP, WebSocket
+and CoAP communication, and it serves client-side JavaScripts for easy web
+app integration of PnP IoT devices connected to the proxy. Pub/sub is
+implemented for the end users with WebSocket and JSON. Their approach
+assumes that all applications are made and run on client-side with JavaScript
+in a browser, but this means that any app with active control loops would be
+difficult. It would need a device which can run a browser or a browser-based
+JavaScript engine continuously, otherwise it would need to be compiled as a
+part of the device firmware.
+
+CHAPTER 2. BACKGROUND
+
+26
+
+The use of a scripting language would be useful for interoperability, because the same code works seamlessly on different platforms, and compilation
+to specific platform binary format is not necessary. Thus, the approach of
+scripting is explored in the next section.
+
+2.4.1
+
+IoT device functionality scripting
+
+The RSOS presents scripting as the solution to the problem of supporting
+combinations of different devices to connect P2P, and to provide a way to
+satisfy the changing needs of the users. Scripts can be sent to devices to
+execute specific functionalities temporarily, as no change is needed for the
+device firmware. Moreover, it provides a platform for implementing efficiently
+functioning IoT applications, as more computation can be performed at the
+device and only the data needed by applications can be transferred from the
+device, instead of transferring all raw data continuously.
+Embedded devices are typically incapable of running the scripting languages common in computers, because their runtime process consumes too
+much memory. Instead, there are often lightweight versions designed to work
+in embedded devices. Here are some examples and which language their
+syntax is based on: MicroPython (Python), eLua (Lua), mruby (Ruby) and
+JerryScript (JavaScript). Another concern is how much integration work is
+needed to support a new embedded platform.
+Earlier work has used scripting to deploy task applications to a middleware device [26], where scripts are used to enable data processing, data fusion
+and read/write operations for device interfacing. Likewise, another work provides a method to connect IoT applications via client agents to a middleware
+server, which can run scripts provided by the client [27]. Similarly, in the
+RSOS, sensors and actuators are interfaced with read and write operations
+of O-MI, but scripts can be sent directly to the smart device instead of middleware server or gateway.
+
+Chapter 3
+
+Environment
+In this chapter the environment of the implementation is specified. It can be
+divided into three categories: physical test environment, hardware environment and programming environment.
+Physical environment
+As the physical environment, a modern household is selected. It has good
+WLAN coverage and power sockets available, so no mesh networking or other
+radio protocols for power saving are needed. Batteries are avoided as much
+as possible as they present an extra chore for the user and might lead to
+a reliability problem if the user does not notice or neglects to change the
+battery.
+Despite the Wi-Fi signal being good, the Internet connectivity was measured from ping packet loss to well-known DNS servers for 5 months resulting
+to availability of 99.84%. Usual connection loss was because of home router,
+5G mobile network or Internet service provider issues. Availability might be
+a lot worse in average home. In a 2013 study [28], the sampled median availability of a US home router was 98.27%. Hence, Internet availability should
+not be relied on for functionally critical parts. Since homes are the target
+environment, the IoT device user experience should be consumer-grade, such
+that non-programmer users could use the device and would also be willing
+to pay for them.
+Although homes are the target in this work, small offices also fit the constraints, if they have a single LAN without restrictions to broadcast packets,
+like too strict firewall or network split into many Virtual Local Area Networks
+(VLAN).
+
+27
+
+CHAPTER 3. ENVIRONMENT
+
+28
+
+Hardware environment
+The selected hardware environment is an embedded system with Espressif
+ESP32-S2 [29] System-on-chip (SoC), due to cheap price, small size and extensive features. It provides Wi-Fi subsystem, supporting IEEE 802.11b/g/n
+Wi-Fi standards. In case battery is needed, it has typically low power usage
+ranging from 19 mA to 190 mA at 3.3 V, depending on networking activity,
+but there are also power saving features to temporarily reach three orders of
+magnitude lower values of 20 to 450 µA.
+The computing specifications are listed in table 3.1. The processor is
+single-core 32-bit, with a high 240 MHz max clock frequency for its category.
+Internal memory is only 320 KB, which can be limiting for this complicated
+project, but the selected WROVER-module [30] has extra 2 MB of external
+PSRAM (Pseudo Static Random Access Memory), which is better, but still
+less than in personal computers or smartphones. Furthermore, the external PSRAM chip competes with flash memory of serial bus capacity. Flash
+memory size is 4 MB and is used for long term cold storage of the program code and optional file system. Furthermore, the WROVER-module is
+embedded into a development board Saola-1, which includes primarily the
+USB-to-UART interface for programming and debugging, as well as power
+regulator, RGB LED, two buttons and pin headers for all 47 GPIO (General
+Purpose Input/Output) pins [31].
+Table 3.1: ESP32-S2 Computing specifications [29] in WROVER module [30].
+CPU
+CPU cores
+Max CPU frequency
+Co-processor
+ROM
+SRAM
+RTC SRAM
+Flash memory 1
+PSRAM 1
+1
+
+Xtensa® 32-bit LX7
+1
+240 MHz
+Ultra-low-power RISC-V
+128 KB
+320 KB
+16 KB
+4 MB
+2 MB
+
+From external components of the selected WROVER module.
+
+CHAPTER 3. ENVIRONMENT
+
+29
+
+Programming environment
+Finally, the programming environment with ESP32-S2 can be either manufacturer supplied ESP-IDF environment in C programming language or with
+Arduino C++ environment, by using Arduino-esp32 [32]. Some scripting
+environments are also available, but Arduino environment is used in this
+prototype to have possibility to write memory efficient code, have a broader
+code library selection available, and have larger developer community to find
+information for development. Arduino uses the gcc compiler, which can be
+used separately from its Integrated Development Environment (IDE) with
+the make build system. Another option is to use PlatformIO [33], which
+enables interoperability between many IDEs and embedded hardware platforms, and provides platform independent features such as debugging, testing
+and code analysis. Arduino also supports over-the-air (OTA) updates if the
+flash memory has room for the new version simultaneously with the old version.
+Embedded system environment means that there is no operating system.
+For instance, it implies that there is no process abstraction, so no process
+scheduler or separate memory spaces, which means that such features need to
+be either added by a library or considered in the program code. For example,
+Wi-Fi and some other network protocols require periodical communication,
+which are handled as a timed task.
+
+Chapter 4
+
+System design and Architecture
+The RSOS is designed by selecting constraints and features, inferring the
+requirements of the system, and finally designing the details of each subsystem. The design follows a loosely coupled multi-agent paradigm, allowing
+the IoT devices to communicate and process Peer-to-Peer (P2P) in the local network. Loose coupling was also one of the design requirements of the
+O-MI standard [19]. It enables more independent development of separate
+parts of the system, which allows easy adoption for device and application
+developers.
+The design process of the RSOS begins with recognition of the requirements for the system. This section goes into detail of the requirements and
+high-level design choices of each subsystem.
+For the system, the following high-level design choices were made:
+1. O-MI and O-DF are adopted for communication on top of HTTP or
+WebSocket protocols.
+2. IoT devices should primarily communicate directly between each other
+in a P2P manner.
+3. Configuration is applied by a configurator web application.
+From the high-level requirements and constraints, the following practical
+requirements stories were set:
+1. The IoT device can be provisioned to a Wi-Fi network.
+2. The IoT device supports at least a minimal subset of the O-DF/O-MI
+standard.
+3. The IoT device has O-DF extension that enables scripting with write
+event hooks and API for local writing and reading.
+30
+
+CHAPTER 4. SYSTEM DESIGN AND ARCHITECTURE
+
+31
+
+4. The IoT device has sensors and actuators interfaced via O-MI write
+and read request with O-DF InfoItems.
+5. The configurator app can find all IoT devices, which provide a discovery
+system for this.
+6. The configurator app can provide list of scripts that fit for the discovered devices.
+7. The configurator app can send the scripts and subscriptions to the IoT
+devices.
+8. The configurator app can be opened on a different user device without
+losing existing device configurations.
+9. Device scripts only have access to other devices and the Internet via
+subscriptions that are managed in the configurator.
+See Figure 4.1 for an overview of the RSOS and its components. The
+service layer contains services that are accessed via the Internet and includes
+an IoT App marketplace, an adapter database and other 3rd party services.
+The IoT apps in this architecture would contain agent scripts and specifications for subscriptions to be installed into the devices, in addition to any User
+Interface (UI) or mobile app it would have. The adapter database contains
+transformers for data types and info on what devices they are compatible
+with. The management layer manages the smart objects as the configurator
+app, which runs on user computer or smartphone. It can perform operations
+like provisioning, discovery and reconfiguration of the smart objects. Finally,
+the device layer contains the embedded system running in smart objects. It
+handles data subscriptions and running of scripts.
+
+CHAPTER 4. SYSTEM DESIGN AND ARCHITECTURE
+
+32
+
+Internet
+Service
+Layer
+
+IoT App
+Marketplace
+
+Adapter
+Database
+
+3rd Party
+Services
+
+Local Area Network
+Management
+Layer
+
+Provisioning
+
+Discovery
+
+Reconfiguration
+
+IoT Smart Objects
+Device
+Layer
+
+Adapter
+scripts
+
+Agent
+scripts
+
+Data
+Subscriptions
+
+Figure 4.1: RSOS overview: The configurator application runs on a user device, such as a smartphone. The configurator will fetch list scripts matching
+the available devices from the Internet and load the selected scripts to the
+devices, allowing the devices to communicate directly with each other.
+
+The next section describes how smart object requirements are fulfilled
+by this design. Then, the rest of the chapter focuses on the details of the
+subsystems.
+
+4.1
+
+Smart Object Requirements
+
+Considering the generic SO requirements described in detail in Table 2.3
+earlier in the Background chapter. With the above design decisions and
+requirements, SO requirements can be fulfilled in the following ways:
+SO Requirement 1: Heterogeneity and Application development
+O-MI and O-DF provide abstraction over the data transfer and structure,
+in addition to the hardware abstraction over sensors and actuators. O-DF
+provides the possibility to add metadata to the InfoItems; additionally, it
+can be extended with semantics like RDF. In the RSOS, if the data lack
+proper semantics, the configurator can fetch translation scripts from an online
+service based on the manufacturer and model of the device. These scripts
+are called adapters in this work.
+
+CHAPTER 4. SYSTEM DESIGN AND ARCHITECTURE
+
+33
+
+SO Requirement 2: Augmentation Variation of Smart Objects
+Services are called IoT applications, or simply applications in the RSOS. If
+the application has a wrong output format or semantics for a device or other
+application, it can be translated with an adapter script. If various levels of
+details are needed in the output data, it can be achieved with applications
+by deploying scripts to the devices to provide the exact required level of
+detail. Many such scripts could be deployed and running concurrently in the
+same device. If there are multiple sources of the same information from an
+aggregation of devices, the application developers can implement the most
+appropriate way to select the sources, either manual or automatic. There
+can even be applications whose sole purpose is to select or aggregate data
+for other applications.
+SO Requirement 3: Management of Smart Objects
+RSOS applications and devices use local network device discovery to find
+the device address and access it directly. Failures and mobility can always
+be manually managed with the configurator app, but some aspects are also
+automated. Mobility is partly administered by the underlying Wi-Fi network,
+as only a single LAN network is assumed for this version of the design. Wi-Fi
+connected clients can freely select any access point that has the same name
+and security settings, and if all access points belong to the same LAN, the
+same IP settings can be used. Any further mobility and failure handling
+are left to the IoT applications to solve. The system provides applications
+with an easy way to subscribe to many devices and scripting provides ways
+to either combine the redundant or process missing information, in a use
+case specific manner. Mobility to another LAN network can be ensured by
+passing the data via an online service. Possible automation of these features
+is left to future work.
+SO Requirement 4: Evolution of Smart Object System
+After adding, moving or removing devices, the user can select from the configurator app to reinstall scripts and applications to keep the old behavior.
+Alternatively, the user can reconfigure the behaviors at any time during the
+lifecycle of the devices, by uninstalling and installing applications or changing
+their parameters.
+
+CHAPTER 4. SYSTEM DESIGN AND ARCHITECTURE
+
+4.2
+
+34
+
+Proposed configurator application
+
+The proposed configurator app is the program that the user can use to connect devices in a P2P style and install scripts for local processing. The
+concepts relating to the app can be split into subsections of Device discovery, Subscriptions, Adapters and IoT applications. The configurator app is
+assumed to be implemented as a web app to run on most browser capable
+devices without installation.
+
+4.2.1
+
+Device discovery
+
+This section discusses how the user can open the configurator app and how
+the app can find the available IoT devices in the LAN.
+If the configurator app is designed to be opened from the Internet as a
+website, it would have no information about the local network nor the local
+IP address. Thus, it could not reach the devices with a direct connection.
+Instead, if the app is hosted on the IoT devices, the user only needs to know
+the address of one device to access the app and then the app would gain
+access to that local IoT device. Access to one IoT device is useful as will be
+found later in this section, but it is not enough, as the app does not know
+what other IoT devices are in the network or how to contact them. This is
+where device discovery is needed.
+In the RSOS, LAN IoT devices will be discovered with mDNS with its
+DNS Service Discovery (DNS-SD) companion mechanism, because they are
+more generic than UPnP, and because LLMNR has no service discovery.
+However, as the configuration application is assumed as a browser web app,
+it creates an extra problem as browsers disallow the use of UDP, which is
+required by the discovery protocols. Furthermore, the related browser API
+standard is discontinued [34]. Although the problem occurs only for web
+apps and could be solved with native apps, a backup mechanism would fix
+it, but also improve reliability and efficiency of the discovery step.
+Most operating systems provide an API or a library for native applications
+to use mDNS, but it is also possible that mDNS is available on the OS level
+DNS resolver, since a single shared implementation is recommended by the
+standard [14]. It would be useful for the configurator web app, because it is
+possible to query for domain names ending in mDNS reserved “.local” domain
+via the standard domain name resolve functions as used by browsers, but
+DNS-SD would not be possible, as it produces multiple results. Nevertheless,
+if the configurator app in the RSOS is hosted on every IoT device, they can
+provide a common non-unique domain name via mDNS, such that when
+
+CHAPTER 4. SYSTEM DESIGN AND ARCHITECTURE
+
+35
+
+sending a query, all devices strive to answer it and the first answer will
+be selected by the DNS resolver. This might seem wasteful if there are
+numerous devices, but this problem is reduced by the mDNS standard [14]
+instructing that resolvers may implement caching of any or all query results,
+even responses for other network participants.
+The current OS support was tested. At the moment of writing, Windows
+10 (v10.0.19043.1055), Linux (Ubuntu 18.04), macOS (v11.4) and IPhone
+(v14.6) supports mDNS, while Android (v9) does not. On Linux mDNS
+is available via the systemd-resolved service but might need to be enabled
+manually. Android has a mDNS library available for developers and expects
+each app to implement special handling for the “.local” domain, but browser
+apps have not yet implemented it.
+For the case where OS- or browser-level mDNS is unavailable, the problem
+could be solved with at least three different ways:
+1. Online service
+2. Wi-Fi hotspot with captive portal
+3. Native launcher application
+In the first option, each device sends their network information to an
+online service, where the app can fetch them. However, it is a suboptimal
+solution as it relies on a centralized solution, or if distributed, it would also
+require new standardization to find the correct server.
+In the second option, the user initiates a Wi-Fi access point scan to find
+at least one of the IoT devices that provides a hotspot access point, which
+could then capture all http requests in a captive portal manner to send the
+web app page. IoT devices would probably also need to perform discovery,
+so they could simply publish the discovery results as O-DF InfoItems, which
+could then be loaded by the web app. The main problem in this option is
+that if the user device has no mobile data connection, the Wi-Fi Internet
+access is lost as the hotspot access point is not connected to the Internet.
+Switching back to the correct Wi-Fi would be possible but requires an extra,
+manual step.
+The third option adopts a companion launcher application that would be
+installed to the user device. The launcher could discover devices and then
+launch the web app with the results as a parameter. It would need extra
+development for each supported platform and an extra app installation step,
+but most of the application code could reside in the cross-platform web app.
+Otherwise, if the configurator app is hosted on each IoT device similarly to
+the previous option, existing mDNS service discovery apps can be used to
+find and open advertised HTTP services.
+
+CHAPTER 4. SYSTEM DESIGN AND ARCHITECTURE
+
+36
+
+A combination of the above options would provide the higher number of
+ways to reach the IoT devices, thus it is decided that each device has a local
+copy of the configurator web app, along with a common mDNS address and
+a captive portal hotspot access point. In real products, the local copy of the
+app could use browser JS to load an up-to-date online version of the app,
+and only revert to a local copy if it is unavailable.
+
+4.2.2
+
+Subscriptions
+
+Each agent script would typically require some input data and/or provide
+output data for another agent on a different device. The communication
+functionality of agent scripts in the RSOS is intentionally limited to sandbox
+the script, similar to web browsers. The scripts are only allowed to interface
+with external devices or services with subscriptions. The required subscriptions are sent by the configurator app when installing an agent script to a
+device. They are specified by the agent script developers and can be set up
+in either direction: incoming or outgoing. The incoming data connection is
+set up by sending a subscription request to some other device, then receiving
+back the resulting values and writing in the local O-DF data hierarchy. The
+agent is set up to handle the written values with the “onwrite” handler, or it
+can just read the value whenever the script is triggered by other means. The
+outgoing data connection is set up by sending a subscription to InfoItems on
+the same node as the agent script is set up to perform local writes. When
+the agent has written values, they will be sent to other devices with the subscription system. In both cases, the agent script is only required for local
+operations.
+While the agent scripts in the RSOS can be provided by a third-party
+developer, by limiting the ability to make IP connections only with subscriptions, user privacy is enforced. All subscriptions are created from the
+configuration app, which can then list them to the user directly, so the user
+can be sure what data and where it is flowing. The only downside in this
+restriction is that it removes the ability to create ad-hoc data flows during
+the operation of the device, creating wasted data transfers in some situations. However, this could easily be fixed while retaining the same result,
+by granting subscription creation permissions to the script instead of concrete active subscriptions. The developers of an agent script can also include
+outgoing subscriptions to some Internet URL rather than LAN device IP address to enable cloud services in the RSOS. On the permission of the user, it
+could also be used to provide features such as preventive maintenance by the
+manufacturers or provide information to improve the product quality [19].
+If incoming subscription connection is needed, one typically needs to per-
+
+CHAPTER 4. SYSTEM DESIGN AND ARCHITECTURE
+
+37
+
+form NAT traversal to pass through the firewall, which requires some cooperation from the device, instead of the configurator app accomplishing
+everything. Piggybacking is one choice as an existing technique included in
+the O-MI standard [3] [35], but with WebSockets, a simpler method is to
+keep a WebSocket connection open. The device can initiate the connection
+to the server and send the subscription, then the server can send the events
+via the same connection. While this also points to subscription creation
+permissions for predetermined addresses being a better choice, the implementation in this work will use the concrete subscription model to simplify
+implementation; thus, agent scripts have no access to a subscription function.
+
+4.2.3
+
+Adapters
+
+In this architecture, adapters have a specific meaning as scripts that convert values to other format to establish interoperability between devices, or
+between a device and a script. First, motivation for adapters is examined.
+Then, the design of their function in the RSOS is described. Finally, the flow
+of data signals through the whole system is described.
+In O-DF, the data type can be specified with the XMLSchema type, but
+sometimes the required data is in a different but compatible datatype. For
+example, consider a device that detects if a door is open or closed and the
+related question of representing the status in data. Some examples are listed
+in Table 4.1. One vendor might make the device output “true” on closed,
+“false” on open. Another might make it opposite with “false” on open or
+use numbers 1 and 0. The situation becomes even more complicated if some
+sensor has an extra state for “locked”. Indeed, this is similar to the problem of many communication protocols. If we consider that there would be
+n different device value representations for the same measurement, and m
+different agents needing that measurement, each agent would need to include
+n converters to the internal format resulting in n × m instances of conversion code in the device ecosystem. Even if this is successfully implemented,
+keeping it up to date will become a problem as new devices emerge.
+
+CHAPTER 4. SYSTEM DESIGN AND ARCHITECTURE
+
+38
+
+Table 4.1: Examples of different possible formats for simple door sensors,
+which could be from different manufacturers.
+Door is
+description open closed locked
+Boolean
+Inverted
+Capitalized format
+Binary boolean
+Custom boolean
+String enumeration
+Integer enumeration
+
+true
+false
+True
+1
+yes
+open
+0
+
+false
+true
+False
+0
+no
+closed
+1
+
+locked
+2
+
+To mitigate the problem in the RSOS, the configurator app would provide
+these conversion functions as adapters. Adapters are stored mainly in an
+online database but can also be cached locally. When the configurator app
+is used to scan for possible agent scripts, it will also check for combinations
+of adapters attached to the agent scripts. The adapters are queried with the
+datatype, semantics and metadata of the sensor or actuator to provide the
+most probably working solution. Developers of third party adapters for the
+RSOS could tag the exact models of the supported devices to ensure the best
+probability of successful adapter matching. Thus, the default query can be
+limited to only return the tagged exact device matches, while the coarser
+queries can be reserved for advanced users of the RSOS.
+The adapters in the RSOS are used with the same mechanisms as the
+agent scripts. They are scripts that are attached to the onwrite handler of
+the input or output InfoItem on the same device where the agent is run.
+When the InfoItem is written by a subscription or internal sensor in the
+RSOS, the adapter script is run first to convert the value, and then the agent
+script will always receive data of the expected type.
+Figure 4.2 shows the entire pipeline of the allowed order of components
+in the RSOS and a few examples. Yellow blocks with question marks are
+optional and in blue O-DF blocks data are stored as O-DF structure. Input
+and output can only be connected via the O-DF data storage. Furthermore,
+data can only be transferred over the network from one O-DF storage to
+another, with the O-MI subscription. In the first example, the raw sensor
+data of Device A is directly sent as O-DF to Device B, where it is processed
+by two agent scripts one after the other, and finally the result is translated
+by the second adapter to a format compatible to the Actuator of the device.
+To summarize, there are two pipelines, which are connected after the first
+
+CHAPTER 4. SYSTEM DESIGN AND ARCHITECTURE
+
+39
+
+Logic block. Instead of an actuator the pipeline can be connected to another
+pipeline. The first pipeline has only four blocks: Sensor, O-DF, Logic and ODF. The second has five blocks: O-DF, Logic, Adapter, O-DF and Actuator.
+Finally, there is the second example that demonstrates how a device would
+be connected to an online service. Data are transformed locally to another
+format in O-DF and then sent to a server. The server must have O-MI
+support with O-DF to be able to receive the data.
+Device A
+
+Device B
+
+Input/Sensor?
+
+O-DF
+
+Adapter?
+
+Logic?
+
+Adapter?
+
+O-DF
+
+Output/Actuator?
+
+Logic
+
+Adapter
+
+O-DF
+
+Actuator
+
+Example1:
+Device A
+
+Device B
+
+Sensor
+
+O-DF
+
+Logic
+
+O-DF
+
+Example 2:
+Internet Server
+
+Device A
+Sensor
+
+O-DF
+
+Adapter
+
+O-DF
+
+Service
+
+Figure 4.2: The top diagram shows the allowed order of stages for data
+flows. The yellow blocks with a question mark are optional and blue boxes
+mandatory. Example 1 shows how two pipelines can be combined, where the
+first pipeline ends after the first Logic block. Example 2 shows how a device
+could connect to an online server.
+
+4.2.4
+
+IoT applications
+
+As a result of the different approach to IoT services, that this proposed
+system takes, implemented IoT applications would have to follow a specific
+framework. It is detailed in this subsection along with its installation procedure.
+The main goal of IoT applications support in the RSOS is to provide as
+fast and easy installation as possible, while still providing a possibility for
+creative combinations of devices and apps to implement many use cases for
+
+CHAPTER 4. SYSTEM DESIGN AND ARCHITECTURE
+
+40
+
+the user. Applications in this system would consist of device matcher rules,
+agent scripts for the devices and a frontend. Device matcher rules specify
+which devices are needed for this application, how they are connected with
+subscriptions, and what sort of data the agent scripts are expecting. Agent
+scripts contain the device local business logic for processing the data and
+controlling actuators. Finally, the frontend is the user interface (UI) of the
+application. For example, it can have tunable parameters that are saved for
+the agent scripts or show some status from the data it has subscribed from
+the devices. The frontend is optional, or can be implemented as a separate
+application, but it still needs to use O-DF/O-MI for communication so that
+security and privacy can be implemented in a simple manner.
+The installation of IoT applications in the RSOS proceeds as follows:
+1. The user can search applications from a list that is filtered by locally
+available devices or InfoItems. The application list can be provided
+from an online registry and filtering is expanded automatically by fitting compatible Adapters to inputs and outputs of agent scripts.
+2. The user selects an application.
+3. If there are multiple ways to match the application to devices or InfoItems of the devices, the user can select which InfoItems from which
+devices to use.
+4. The configurator sends write requests to install any required adapter
+and agent scripts, and then sends subscription requests to connect the
+devices.
+5. App frontend is opened. The user can input any parameters, which
+will be sent to devices with write requests. Data can be shown on the
+frontend by sending subscription or read requests to any items that are
+associated with this application.
+
+4.3
+
+Proposed embedded system
+
+The IoT device code is targeted to an embedded system. They are commonly used in IoT, because they are less expensive than full operating system
+computers. On the other hand, they have limitations, as were discussed in
+Chapter 3, namely, low memory and no process abstraction.
+The architecture of the embedded system is depicted in Figure 4.3. All
+communication flows via Communication Layer, which keeps track of open
+network sockets and implements all required protocols. For incoming O-MI
+
+CHAPTER 4. SYSTEM DESIGN AND ARCHITECTURE
+
+IoT device
+
+41
+
+Communication Layer
+
+Discovery
+
+Read handler
+
+Sub.
+Queue
+
+Interval subscription
+handler
+
+Scheduler
+
+O-DF
+Data
+
+Write handler
+
+Script engine
+
+Sensors &
+Actuators
+
+Event subscription
+handler
+
+Scripts
+
+Platform specific implementation
+
+Figure 4.3: Embedded system architecture of O-MI node implementation
+with scripting support. Arrows represent the possible information flows.
+Scripts are activated via subscriptions or write and call requests and can
+interact with hardware and other devices by local read and write requests
+only.
+
+requests, the implementation is split into Read handler and Write handler,
+where all read related requests and subscriptions go to Read handler and
+data writing related requests to Write handler. They both use the common
+O-DF data storage, which contains the hierarchical structure of O-DF, data
+and metadata. Write handler processes incoming write requests, subscription
+notifications and local sensor values into the format of O-DF Data storage.
+After that, if the InfoItems have a special handler defined, it also routes information to the handler, which might be either the Script engine, the Event
+subscription handler or one of the local Actuators. Interval subscriptions
+are triggered by a scheduler which uses a hardware timer or clock, triggering
+a regular read request with a callback connection set by the subscription.
+Finally, the Script engine handles a storage for the scripts that are written
+with the O-MI write request. Requests or subscriptions can trigger a script,
+if some included InfoItem has a handler set. The Script engine also needs to
+handle memory used by the scripts.
+Memory handling is important in embedded system design and implemen-
+
+CHAPTER 4. SYSTEM DESIGN AND ARCHITECTURE
+
+42
+
+tation, as careless dynamic memory allocation and freeing leads to fragmentation. This refers to the process where the available memory reduces due
+to freed memory leaving holes, in which new larger allocations no longer fit,
+and this eventually leads to out-of-memory crash of the system [36]. Thus,
+dynamic memory allocation should be avoided, such as the malloc command
+in C programming language. Instead, static memory and other compile time
+decided memory allocation can be used, where the compiler knows how long
+the memory allocation is used. It can thereby be packed optimally in the
+available memory region.
+The remainder of this section is divided into two according to the major functionalities of the embedded system: Device provisioning and Script
+engine. Device provisioning describes the set-up of a new device and Script
+engine introduces a scripting extension to O-DF/O-MI.
+
+4.3.1
+
+Device provisioning
+
+Generally, when users have a new IoT device, they need to complete a setup
+step called device provisioning. In the process, users take ownership of the
+device, and it needs to be configured with information on how to join a
+network.
+In the RSOS, the ownership is assumed if the device is connected to
+the user LAN, so only the Wi-Fi network credentials are required. Further
+credentials would belong to the security architecture, which is not in the
+scope of this work, but it would probably involve cryptographic signature
+key or password. The device provisioning step can also include input of other
+device-specific settings, such as the device name. To establish the connection
+from a new device to the Wi-Fi network, some options are explored in the
+remainder of this section. Since the problem is isolated to the installation
+phase of the device, all methods described in the section are compatible with
+each other and could be used with the RSOS.
+The problem could be approached with two different strategies: either
+attach the device to a user account during ordering from a store or claim
+ownership with physical access or proximity. The first strategy would store
+the ownership information in an online service, thus it would require that the
+device has Internet access out of the box, such as a mobile data connection.
+A bit more complicated implementation would involve the existing devices
+on the LAN to share their Internet access to perform the ownership query
+and accept the new device without it needing direct Internet access.
+Physical proximity or access is the most common device provisioning
+scheme in consumer IoT. For example, a device creates a hotspot access
+point that the user can join with a smartphone and then input the home Wi-
+
+CHAPTER 4. SYSTEM DESIGN AND ARCHITECTURE
+
+43
+
+Fi credentials for the device. Variations of the scheme might use a vendor
+specific app and Bluetooth for the configuration, to save the Wi-Fi credentials for the next devices to be provisioned. Alternatively, some Wi-Fi access
+points have a standard, Wi-Fi Protected Setup (WPS). It has various methods for activating, but the most well-known one is probably the WPS button,
+which needs time proximity in addition to location proximity. The button
+needs to be pressed roughly at the same time as the new device attempts to
+connect. [37]
+Most significantly, the sharing of network credentials can be automated
+to only require physical proximity, if an existing device on the local network supports the same process. These methods could use a signal strength
+threshold or radio transmission power to further reduce the required distance. The process can be implemented with various transmission methods,
+like Near-Field Communication (NFC), Bluetooth, Wi-Fi, light or sound.
+For example, a method using Wi-Fi can use a Wi-Fi hotspot on the
+existing device, while another device can detect it, join and request the credentials [38]. The required proximity can be reduced by reducing transmit
+power and increasing the signal strength requirement for the other device,
+although this technique might be vulnerable for an adversary with a powerful transmitter and a high-gain antenna. If better security is required, an
+extra step can always be added, such as the ownership check from an online
+registry, or a query for the user to either accept or deny a new joining device.
+This Wi-Fi method is selected for the RSOS.
+Figure 4.4 shows the communication steps of the Wi-Fi provisioning
+method adopted. In Steps 0, 1, 2 and 3, the first device cannot find a Wi-Fi
+access point, thus it creates a hotspot for the user to manually input Wi-Fi
+credentials. Then, the first device creates a hotspot for later devices, which
+is hidden to not clutter the Wi-Fi list when users are scanning for nearby
+Wi-Fi networks. After that, the second device is introduced nearby, and in
+steps 4, 5 and 6, it finds the hidden Wi-Fi, connects to it and requests the
+Wi-Fi credentials. If it was successful, the second device also creates a hidden
+Wi-Fi hotspot, and further joining devices would repeat the same process.
+
+CHAPTER 4. SYSTEM DESIGN AND ARCHITECTURE
+
+1. Connect to hotspot
+
+0. No hidden
+WiFi
+
+2. Ask for WiFi
+
+FIRST DEVICE
+4. Find
+hidden
+WiFi
+
+44
+
+CLIENT/USER
+3. WiFi credc.
+
+5. GET
+
+6. WiFi credc. (device discovered)
+
+SECOND DEVICE
+
+THIRD DEVICE
+
+Figure 4.4: Option for automated device provisioning for Wi-Fi networks.
+Source: [38].
+
+4.3.2
+
+Script Engine
+
+The scripting engine processes the scripts when triggered by one of the mechanisms connected to the Script engine in Figure 4.3. This section describes
+how O-MI and O-DF are extended in the RSOS with scripting support to
+include scripts and specify the script triggers. Also, the script engine requirements and script API are specified.
+Four triggering mechanisms are specified for the RSOS architecture: OMI write, read and call requests for a single InfoItem, or as a callback destination for the local O-MI subscriptions. The subscriptions allow selecting
+a collection of items or objects for convenience. Furthermore, the interval
+subscription allows periodical execution of the script. The scripts are sent
+in text format in the MetaData element of the triggering O-DF Object or
+InfoItem.
+Table 4.2 shows how the available script triggering methods are applied
+with O-DF/O-MI. The MetaData InfoItems are used to store the script text,
+and three names of MetaData InfoItems are reserved for the purpose of specifying the trigger: “onwrite”, “onread” and “oncall”. The type of “javascript”
+is added to further differentiate the use of these names from possible conflicts with other systems, and to reserve future extension possibility for other
+scripting languages. The callbacks for subscriptions, must follow the Uniform
+Resource Identifier (URL) format, so a protocol of “javascript” is invented to
+allow constructing a valid URL. It is followed by an O-DF path leading to the
+script, for instance: ‘‘javascript://Objects/myDevice/myController/MetaData/myScript’’.
+
+CHAPTER 4. SYSTEM DESIGN AND ARCHITECTURE
+
+45
+
+Table 4.2: O-DF/O-MI extensions for script execution triggering
+Location in O-DF/O-MI
+In MetaData:
+<InfoItem name=”onwrite”
+type=”javascript”>
+In MetaData:
+<InfoItem name=”onread”
+type=”javascript”>
+In MetaData:
+<InfoItem name=”oncall”
+type=”javascript”>
+In <read>, the callback attribute
+
+content description
+javascript code inside <value>
+
+javascript code inside <value>
+
+javascript code inside <value>
+
+”javascript://<O-DF-path>”,
+where path is given as in URL
+discovery of O-DF standard,
+ending in the InfoItem name.
+
+description
+The script is executed if a new
+value is written to the InfoItem
+which the MetaData belongs to.
+The script is executed if the current value is read from the InfoItem
+which the MetaData belongs to.
+The script is executed if a call request is received for the InfoItem
+which the MetaData belongs to.
+Subscription results will be passed
+as an argument to the script, which
+has been written to a MetaData InfoItem.
+
+The scripting engine requirements for the RSOS include:
+1. A lightweight interpreter and configurable memory allocation for the
+scripts, such that it can be fitted into the selected embedded system
+hardware.
+2. Sandboxing from the rest of the embedded system. This is to ensure
+system stability and restrict network communication to O-DF/O-MI,
+for the O-DF items that was granted by the user.
+3. A foreign function interface to implement the API, which will be used
+to access resources outside the sandbox. The API is listed in Table 4.3
+JavaScript is selected as the scripting language in the RSOS, due to its
+popularity in web development. The popularity increases chances of finding
+existing script engine options that fulfill the above requirements.
+Table 4.3: Script API
+Semantics
+
+Description
+
+global
+
+The global object, which contains all global variables and functions.
+
+event
+arguments[0]
+
+Global variable that contains the arguments from the event handler. In
+the case of an “oncall” handler, it contains the O-DF parameter from the
+value element. In “onwrite” it contains the InfoItem with its value, which
+is being written.
+
+odf.readItem(path)
+
+path: a string representing an O-DF path like in the data discovery of
+O-DF standard.
+Returns the element or value depending on the path ending. “/value”
+ending returns the value directly.
+
+odf.writeItem(path, value) path: a string representing an O-DF path like in the data discovery of
+O-DF standard.
+value: element object or value object to write.
+result of the last statement
+
+The last statement can contain a value that replaces the event value. In
+the case of “oncall” it is the return value of the call.
+
+Chapter 5
+
+Implementation
+The proposed embedded system of RSOS was implemented. For readability,
+the name Embedded O-MI and the related acronym eOMI will hereon be
+applied to refer to this implementation. This chapter describes the details of
+eOMI design and implementation choices.
+The eOMI can be split into the following subsections:
+• Connection manager
+The First part of the communication layer. It handles the IP connections with HTTP WebSocket protocol, and keeps them open if required.
+• XML and O-DF/O-MI parser
+The second part after the communication layer. It parses all incoming
+requests from the stream of XML elements. It saves all important
+request information to the internal memory structure and calls the
+request handler for each opened and closed O-DF element.
+• Request handler
+Keeps track of the internal O-DF tree and selects the correct functionality for opened and closed O-DF elements depending on the request
+type.
+• Script engine
+Initializes the script runtime and runs a script when triggered. Consists
+of ready-made script engine that is ported to the selected embedded
+system.
+The remainder of the chapter is organized as follows. First, the implementation details of the listed eOMI components are presented. Then, test
+scenarios are introduced, along with their implementation using the developed RSOS.
+46
+
+CHAPTER 5. IMPLEMENTATION
+
+5.1
+
+47
+
+O-DF/O-MI C implementation
+
+The core platform independent functionality is shown in Figure 4.3 as blue.
+These were first programmed in the C language, then tested on a computer
+to utilize swift execution, static code check tools and effortless debugging
+tools. After that, the platform specific components were programmed in
+Arduino/C++. They include the communication layer, sensors, actuators
+and the scheduler.
+The communication layer was programmed using existing libraries for
+HTTP, WebSockets and mDNS. The discovery implementation was left partial. It only advertises services and the hostname of the device. The full
+implementation would also perform periodic discovery, and write the results
+to the O-DF tree for web applications as described in Section 4.2.1. Hostnames were hard coded for the prototype but could be configurable by the
+user in a production version.
+Sensor and actuator interfacing were programmed with Arduino libraries
+and existing device specific driver libraries. The sensors are simply read
+periodically, and the result written to the O-DF tree with the same function
+as O-MI write requests use. On the other hand, actuators are connected as
+internal subscriptions similar to scripts, with each actuator having its own
+handler function to parse the value and call the correct device drivers.
+Sensor values are written with the current system time, which is set by the
+NTP as in a typical operating system (OS), but the adopted implementation
+did not work at the moment of writing. The reason is unknown, but the support for the ESP32-S2 chip in the Arduino-esp32 core is still in experimental
+alpha-stage.
+The next sections provide the implementation details of various components of the O-DF/O-MI implementation.
+
+5.1.1
+
+Parsing
+
+O-DF and O-MI are defined in XML, which usually needs a heavy parser. As
+the ESP32-S2 has limited memory and computing power, a lightweight XML
+parser library needs to be selected for the implementation. Fortunately, most
+of the complicated XML features are not required, such as XML entities. To
+have a quick response time, the library data structures should fit into the
+main SRAM memory of 320 KB (see Table 3.1) while leaving space for other
+components. In addition, the parser cannot use OS libraries or standard
+libraries extensively as they might not be fully available on an embedded
+platform. Two libraries fulfilling the constraints were found: Sxmlc [39] and
+
+CHAPTER 5. IMPLEMENTATION
+
+48
+
+Yxml [40].
+Sxmlc can parse an XML document into a memory structure called Document Object Model (DOM), or it can provide the parsing events as a stream.
+The library can also be used to create XML documents or search from them
+by attributes, tags or subset of the XPath query language. The document
+character data can be input from a file or a buffer containing the whole document. Sxmlc supports two Unicode Transformation Formats: 8-bit (UTF-8)
+or 16-bit (UTF-16), in addition to XML character escape sequences, such as
+&amp;. [39]
+Yxml implements only the key aspects of the XML standard, which are
+required for parsing simple XML documents. It takes input as one character at a time, which classifies it as a streaming parser. As a result, dynamic
+memory management with malloc is not required, which helps with the memory management of the embedded system. Yxml supports UTF-8 and XML
+character escape sequences. Despite having a minimal implementation, it
+verifies most well-formedness constraints of the XML syntax, like the correct
+nesting of XML elements, but it lacks validation for the XML schema or
+Document Type Definition. [40]
+Sxmlc has dynamic memory allocation and extra search functionality
+which are not needed, and it requires modifications to connect the streaming
+API to network sockets. In comparison, Yxml only implements the minimal
+required functionality with the flexible character-based input API and uses a
+pre-allocated structure and buffer, which can be used to control the memory
+usage of the parser. Thus, Yxml is selected for the implementation.
+The next step in the eOMI is to match the streamed attribute and tag
+names to O-MI and O-DF namespace elements. The standards also define a
+strict ordering for most of the XML elements, which is beneficial to detect
+errors in the O-MI requests and to save memory. Memory can be saved by
+prosessing the stream in smaller chunks. For the purpose of O-DF/O-MI
+parsing, a state machine was built for the eOMI, as shown in Figure 5.1. For
+example, the parsing starts in the state preRoot, because before the XML
+root element the parser might encounter XML processing instructions, like
+the definition of a character set. Then, if the XML element start event is
+encountered and the tag name is omiEnvelope, the system transitions to the
+next state of that tag name. While in a state, the element can also have attributes, which can be interpreted correctly since the current state specifies
+which element the system is processing. The red state transitions mean that
+instead of the element start event, the element end event of the current node
+is required. The remainder of the state machine functions similarly with a
+few exceptions. The different O-MI request types have been reduced to a
+single state, request, for simplicity, as they have a quite similar structure. In
+
+CHAPTER 5. IMPLEMENTATION
+
+49
+
+addition, the O-DF hierarchy needs to be implemented with a stack, otherwise the number of states would grow indefinitely as the hierarchy depth
+increases. The stack operations are indicated with the labels push and pop
+near the transition. Finally, the ending transition needs an extra check for
+the stack; when an Object tag is closed, either the stack is reduced, or the
+end is reached if it is empty.
+preRoot
+
+Objectbegin
+
+omiEnvelope
+
+request
+
+msg
+
+Objects
+
+response
+
+result
+
+return
+
+requestID
+
+id
+
+push
+
+Objectitems
+push
+
+pop
+
+pop
+
+Objectobjs
+
+empty stack
+
+End
+
+pop
+
+push
+
+MetaData
+
+InfoItem
+
+description
+
+pop
+
+value
+
+Figure 5.1: State machine for parsing O-DF / O-MI. Different O-MI request
+types are combined. The red transitions indicate the XML element end
+event of the current node, otherwise the link represents the XML element
+start event of the next node. A stack is used to push and pop hierarchy path
+segments to track the location in the O-DF hierarchy and decide which state
+to return on the element end event.
+While the eOMI processes the parser events, the parser needs to build
+and access the memory structures that store the required information for
+request handling. Most requests need processing of the O-DF nodes with
+paths to the O-DF tree, and in the case an Object-leaf, also a subtree needs
+to be computed from it. To accomplish these tasks, a similar approach is
+taken as the open source reference implementation of O-DF/O-MI standards,
+O-MI Node [41]. It uses two structures: A hash map from O-DF path hash
+to the node data structure and a specially sorted set of paths. The hash
+map provides fast access to single O-DF paths and the sorted set provides
+a fast method to construct subtrees. The ordering of the set is otherwise a
+
+CHAPTER 5. IMPLEMENTATION
+
+50
+
+normal lexicographic order but is done for each hierarchy level separately. In
+other words, it will result in a similar order as one would find in a file system
+directory tree, where the directory contents being the tree descendants, are
+listed below the directory they belong to, then the next directory, its contents
+and so on. As the set is sorted, a simple sorted array can be used to store the
+elements, and a single O-DF path can be found with the binary search. To
+further simplify the eOMI implementation, the path elements are extended
+with a pointer to the node data structure, removing the need for the hash
+map.
+In the eOMI, the stored value structure contains all the variables needed
+to process write or read requests for a single path. Moreover, any string value
+is allocated in the PSRAM with a skip list structure, which has hash of the
+string as the key. This way any repetitive InfoItem names, metadata fields,
+descriptions or scripts consumes no extra memory.
+
+5.1.2
+
+O-MI requests
+
+In O-MI [3], the requests are specified as read, write, cancel, delete and
+call, where the subscription functionality belong to the read request. In the
+eOMI, the subscriptions are detected in the parser and divided internally
+into interval or event subscription requests. The implementation for reading a single value is trivially achieved by fetching the requested nodes from
+the data structures, which were described in Section 5.1.1. Similarly, writing and deleting are performed by updating the data structures accordingly.
+Subscriptions are more involved and discussed next.
+Subscriptions must be optimized, because they might generate a notification response on every write. Event subscriptions are implemented similarly
+to the O-MI reference implementation, which has a mapping from O-DF path
+to sequence of subscriptions and each path in write request is fetched from
+this map [41]. In the eOMI, the O-DF tree structure is reused to store a
+pointer to the subscription information. Since expiration time is checked on
+every event or new subscription, no extra timers are required, while keeping
+the subscription storage sufficiently clean. However, the interval subscriptions need one scheduling timer and a different technique is used than in the
+reference implementation, because the selected environment supports only
+single-threaded execution.
+Algorithm 1 shows the procedure for handling interval subscriptions in the
+eOMI. It is evaluated when a scheduled timer interrupt is triggered, where the
+timer is always set to the nearest triggering time of all interval subscriptions.
+Accordingly, interval subscriptions are stored in a queue, which is sorted by
+their next triggering times, that is, when is the next time for them to send
+
+CHAPTER 5. IMPLEMENTATION
+
+51
+
+data. The procedure loops through the queue until the next candidate is
+early, which then specifies the wait time for the scheduler. After sending the
+subscribed data and the subscription is not expired, the next trigger time for
+it is calculated with its interval, and the subscription is put back into the
+ordered queue.
+Finally, the cancel subscription request is implemented by looping over
+all the subscriptions to find the correct one by its identifier.
+Input: intervalSubQueue
+// intervalSubQueue is sorted by subscription triggerTime
+repeat
+sub ← intervalSubQueue.pop();
+if sub = NULL then
+break;
+end
+if sub.triggerT ime ≤ getCurrentTime() then
+sendSubscriptionResult(sub);
+else
+/* All triggered subscriptions are processed, put
+it back to the front
+*/
+intervalSubQueue.pushFront(sub);
+break;
+end
+// New trigger time for this subscription
+sub.triggerT ime ← sub.triggerT ime + sub.interval;
+if sub.triggerT ime ≤ sub.expiry then
+intervalSubQueue.push(sub);
+intervalSubQueue.sort();
+end
+until false; // loop until break
+if sub ̸= N U LL then
+// Schedule the next run for this procedure
+schedule(sub.triggerT ime);
+end
+Algorithm 1: Interval subscription handling procedure; Triggered
+from scheduler
+
+CHAPTER 5. IMPLEMENTATION
+
+5.2
+
+52
+
+O-DF/O-MI scripting support
+
+The scripting support in the eOMI is implemented with JerryScript [42]
+JavaScript engine. Since it supports the earlier model ESP32 chip, it only
+required a couple of modifications to compile for the ESP32-S2. All supported
+features fit into the flash memory, but the working memory of the scripts had
+to be changed to the external PSRAM, which has a greater capacity. In the
+Arduino-ESP32 core [32], the PSRAM is configured to be manual use only,
+but on the other hand, that enables precise control of which components are
+stored to which memory.
+The script engine is connected to the rest of the eOMI in two places.
+First, when a MetaData InfoItem named “onwrite” is being written, its value
+is passed to the script engine parser to check for syntax errors. Such errors
+are returned as an error response to the sender. If it was successful, the
+script is stored similarly to a normal MetaData InfoItem, but an internal
+event subscription is also made for the parent InfoItem, containing the script
+execution callback. The callback is the second connection to the script engine,
+where the script is fetched from the MetaData and executed by the script
+engine. Before execution, extra variables are created to contain contextual
+information that the script can utilize, in addition to the global API functions
+that have been added when the engine was initialized.
+
+5.3
+
+Real life scenario test
+
+Case A
+A simple real-life scenario was implemented to test the feasibility of the
+system. Using the developed embedded system, a humidity sensor and a
+servo motor, a smart object device was constructed to control an existing
+bathroom exhaust air fan. The fan includes a rope that needs to be pulled
+to start or stop the fan. The servo motor is used to perform the pulling. The
+finished prototype installation is shown in Figure 5.2. The purpose of the
+setup is to start the fan if high humidity is detected and turn it off when a
+lower humidity level is reached. Although similar systems are available as
+an integrated product containing the fan, sensor and control circuitry, this
+system provides three extra features: Firstly, it has wireless connectivity to
+extend the functionality with other devices. Secondly, the parameters of the
+control logic can be modified. Thirdly, the device can be reconfigured to do
+something completely different.
+
+CHAPTER 5. IMPLEMENTATION
+
+53
+
+Figure 5.2: The bathroom fan switch installation. The device pulls the rope
+when commanded to turn the fan on or off.
+The bathroom fan scenario data flow is depicted in Figure 5.3. The
+sensors and actuators are connected to their respective ESP32-S2 microcontroller units (MCUs) with physical connections and protocols, which are hard
+coded as drivers into the eOMI firmware. The remainder of the connections
+are configurable with O-MI. Subscriptions are used to transfer data only
+when values are updated. Subscriptions are set up between the ESP32-S2
+MCUs to transfer the humidity sensor values to the servo controlling MCU.
+All data from the MCUs are subscribed to the data collection server, where
+O-MI-Node reference implementation is adopted to store the data in a local
+database. Finally, the data is visualized with the Grafana data visualization
+server.
+
+CHAPTER 5. IMPLEMENTATION
+
+Graph drawing
+service
+
+Read /
+Subscription
+
+MCU
+
+-Node
+
+Data collection
+server
+
+Subscriptions
+
+TM
+
+54
+
+I2C
+
+Temperature
+Humidity
+sensor
+
+Subscription
+
+MCU
+JS
+
+PWM
+
+Servo
+Switch
+
+Figure 5.3: The data flow for the bathroom exhaust air fan scenario.
+Configuration
+The configurator app was not implemented, but instead it was simulated
+by sending the requests manually from a computer. To filter or modify
+the available scripts to fit devices of different models or manufacturers, the
+configurator app first needs to read the device data with a regular O-MI read
+request of the root, Objects. The eOMI response includes the versions of the
+firmware and model of the processor, along with all sensors and actuators.
+The beginning of the response is shown in Listing 5.1 and see Appendix A
+for the whole. Further details of each item can be fetched by requesting
+their MetaData and description elements, of which the former is primarily
+intended for machines and the latter for humans.
+Listing 5.1: Beginning of the read request response from the device showing
+info about the device and its capabilities
+<omiEnvelope xmlns="http://www.opengroup.org/xsd/omi/2.0/" ttl="10.0"
+version="2.0">
+<response>
+<result msgformat="odf">
+<return returnCode="200"/>
+<msg>
+<Objects xmlns="http://www.opengroup.org/xsd/odf/2.0/"
+version="2.0">
+<Object>
+<id>Device</id>
+<InfoItem name="ChipModel">
+
+CHAPTER 5. IMPLEMENTATION
+
+55
+
+<value unixTime="20">ESP32-S2</value>
+</InfoItem>
+<InfoItem name="FirmwareBuildVersion">
+<value unixTime="20">ed579a0-dirty</value>
+</InfoItem>
+...
+
+The next step is to send the scripts which contain the locally executed
+functionality. Two scripts are used to achieve the task, and they are written
+with the O-MI write request to the servo controlling device as shown in
+Listing 5.2. The first script tests for two thresholds of humidity values that
+are received via a subscription. Since the switch is of toggle type, the state of
+it is stored in the global variable triggered. If the variable is still undefined,
+it is created on the first line. Then the thresholds are checked, and the switch
+action is written to “/Servo/Switch” InfoItem, which contains the second
+script. It controls the servo angle InfoItem, which is internally connected to
+the physical servo interface. The challenge with the second script was that
+the servo motor takes time to turn, and it also needs to be returned to the
+original position. The problem was solved by creating a sleep function that
+uses a busy loop to check the current time until it has advanced the required
+amount of time.
+Listing 5.2: The write request containing the two scripts used for the bathroom fan use case. Due to the XML syntax rules, the characters ‘<’, ‘>’ and
+‘&’ must be escaped as &lt;, &gt; and &amp;.
+<?xml version="1.0"?>
+<omiEnvelope xmlns="http://www.opengroup.org/xsd/omi/2.0/"
+version="2.0" ttl="20">
+<write msgformat="odf">
+<msg>
+<Objects xmlns="http://www.opengroup.org/xsd/odf/2.0/" version="2.0">
+<Object>
+<id>Dht11</id>
+<InfoItem name="RelativeHumidity">
+<MetaData>
+<InfoItem name="onwrite" type="javascript">
+<value unixTime="1621611193">
+if (!global.hasOwnProperty("triggered")) global.triggered = false;
+if (event.value &gt; 46 &amp;&amp; !global.triggered) {
+global.triggered = true;
+odf.writeItem(true, "Objects/Servo/Switch");
+}
+if (event.value &lt; 35 &amp;&amp; global.triggered) {
+global.triggered = false;
+odf.writeItem(false, "Objects/Servo/Switch");
+}
+
+CHAPTER 5. IMPLEMENTATION
+
+56
+
+</value>
+</InfoItem>
+</MetaData>
+</InfoItem>
+</Object>
+<Object>
+<id>Servo</id>
+<InfoItem name="Switch">
+<MetaData>
+<InfoItem name="onwrite" type="javascript">
+<value unixTime="1621611193">
+var sleep = function (milliseconds) {
+const date = Date.now();
+let curDate = null;
+do {
+curtDate = Date.now();
+} while (curtDate - date &lt; milliseconds);
+};
+odf.writeItem(0, "Objects/Servo/SetDegrees");
+sleep(2000);
+odf.writeItem(180, "Objects/Servo/SetDegrees");
+</value>
+</InfoItem>
+</MetaData>
+<value unixTime="1" type="xs:boolean">false</value>
+</InfoItem>
+</Object>
+</Objects>
+</msg>
+</write>
+</omiEnvelope>
+
+Finally, the configurator app would make the subscriptions. Humidity
+sensor is subscribed from the corresponding MCU, in Listing 5.3. The subscription for everything in Listing 5.4, is sent to all devices from the database
+server, in order to collect data for visualization. The callback parameter defines where event data are sent, ttl of −1 defines that the subscription is valid
+forever or until canceled, and interval of −1 defines that only updates are
+sent instead of periodic responses.
+Listing 5.3: Humidity sensor subscription
+<?xml version="1.0"?>
+<omiEnvelope xmlns="http://www.opengroup.org/xsd/omi/2.0/"
+version="2.0" ttl="-1">
+<read msgformat="odf" callback="ws://bathroom-fan.local" interval="-1">
+<msg>
+<Objects xmlns="http://www.opengroup.org/xsd/odf/2.0/" version="2.0">
+<Object>
+
+CHAPTER 5. IMPLEMENTATION
+
+57
+
+<id>Dht11</id>
+<InfoItem name="RelativeHumidity" />
+</Object>
+</Objects>
+</msg>
+</write>
+</omiEnvelope>
+
+Listing 5.4: Subscribe for everything by specifying only the root: Objects
+<?xml version="1.0"?>
+<omiEnvelope xmlns="http://www.opengroup.org/xsd/omi/2.0/"
+version="2.0" ttl="-1">
+<read msgformat="odf" callback="ws://axolotl.local:8080" interval="-1">
+<msg>
+<Objects xmlns="http://www.opengroup.org/xsd/odf/2.0/"
+version="2.0" />
+</msg>
+</write>
+</omiEnvelope>
+
+Case B
+A similar test was made with a portable air conditioning machine. The machine is noisy, uses a lot of power and does not have an automatic sleep mode
+for its fan, thus, the users wanted it to activate for short amounts of time and
+only when the temperature rises to discomfortable levels. Accordingly, the
+same bang-bang control script from the Case A can be reused with different
+parameters. It was set to turn on when 28 degrees Celsius is reached and
+then turn off at 25 degrees. The resulting configuration request is provided
+in Appendix B. The same temperature-humidity-device was reused from the
+Case A, but this time, the temperature was subscribed to the A/C controlling device. The AC was controlled with a relay to press the power button
+as it could be installed more reliably than a servo. The setup is shown in
+Figure 5.4.
+
+CHAPTER 5. IMPLEMENTATION
+
+Figure 5.4: The A/C machine with the relay and ESP32-S2 attached
+
+58
+
+Chapter 6
+
+Results
+The Reconfigurable Smart Object System (RSOS) for home automation
+was designed in this study, fulfilling the SO requirements reported in prior
+literature, as described in Section 4.1. The system architecture was designed to consist of the service layer, the management layer, and the device layer. Of these, the device layer consists of an embedded system,
+which was implemented. It contains an open source implementation of
+O-DF and O-MI standards with scripting support, and it is available on
+https://github.com/TK009/embedded-o-mi.
+From the proposed components, not all were implemented and tested as
+they were not in the scope of this study. Specifically, the functionality of configurator app was only simulated, without the proposed script and adapter
+combination system. It might reveal unforeseen problems when more thoroughly implemented and tested. Also, some features specified in the RSOS
+were ignored or malfunctioned, but enough was implemented to run the test
+cases. Furthermore, the overall RSOS architecture design did not cover all
+required components to be commercially ready. The security features are
+lacking as anyone who has access to the LAN has full control of the devices.
+In Case A, the system was tested in a bathroom when taking a shower
+and then waiting until the bathroom dried, while collecting all data to the
+O-MI-Node server for visualization. The device was correctly found with an
+mDNS service query and a subsequent mDNS host name resolving query.
+Furthermore, the device accepted the O-MI write request of the scripts and
+subscriptions. Visualization of humidity and the fan switch can be seen in
+Figure 6.1. The fan correctly turned on around 46% relative humidity and
+off at 35%. The showering ended before the sensor could reach its highest
+value of around 61%, but the fan was able to reduce the humidity and finally
+dry the bathroom floor.
+
+59
+
+CHAPTER 6. RESULTS
+
+60
+
+Figure 6.1: Collected data during and after a shower. The blue line shows
+the humidity on left y-axis and the green line shows the fan switch actions
+on the right y-axis.
+Case B results of the air conditioning machine and temperature from a
+five-days period are shown in Figure 6.2. The low accuracy of the temperature sensor can be seen as a staircase pattern; however, the sensor was precise
+and successfully kept the temperature below 28 degrees Celsius. The largest
+heat increase was observed during sunny mornings, as the test room resides
+on east side of the building. The final day was warmer than others, and the
+A/C was run five times. In conclusion, Case B could use almost the same
+setup as Case A, with only modifications to the thresholds and the data
+source.
+
+Figure 6.2: Five days of collected data. The red line shows the temperature
+sensor readings and the blue shows when the A/C is switched on.
+Most of the programmed memory allocations in the embedded system are
+
+CHAPTER 6. RESULTS
+
+61
+
+static and the compiler toolset reported static RAM use of 117 KB which
+is only 36% of the total RAM of 320 KB. However, in this case the chip
+architecture limitations allow a maximum of half of the RAM for the heap,
+and once the system is booted, various kernel and library code allocations
+were measured only 26 KB of free space in the heap. Furthermore, the minimum amount of free space during execution was 19 KB. The main reason for
+low memory is that the communication part of the code is poorly memory
+optimized, and the leftover memory was intentionally used to support more
+concurrent connections to reach the maximum of six connections. Hence,
+some room of improvement was left for future versions. Finally, the external
+PSRAM is mostly empty at 9.5% usage, because it is only used for string
+values of the O-DF tree, like scripts and descriptions, in addition to script
+engine memory. None of them were used much in the test. Further performance was measured by how long the device took to process and respond to
+requests. The read Objects request took approximately 36 ms to fetch all 22
+items in the response. See Appendix A for the items. Moreover, it took 199
+ms to parse and store the scripts in Listing 5.2. In conclusion, the device
+resources and performance are adequate for real world use of the proposed
+system.
+All in all, the main result is that using heavier but more interoperable
+and human-readable protocols are feasible on a modern Wi-Fi SoC, even
+with a minimal scripting engine. This is the foundation for the rest of the
+proposed smart home system and was tested to work successfully in a real
+home setting.
+
+Chapter 7
+
+Discussion
+Implications
+The proposed system improves many aspects of IoT solutions. In addition
+to useful new features, it improves most software quality categories, such as
+reliability, efficiency, interoperability, maintainability, security, privacy and
+usability.
+Reliability can be improved with more autonomous solutions by using
+scripting and P2P subscriptions. P2P links reduce the amount of links between the data producer and consumer devices, which results in less probability of cut connections. Furthermore, it improves efficiency and latency
+as the network packets need not travel to a data center and back, only to
+transfer data to a nearby device.
+IoT devices will have higher longevity as new features can be added in
+an instant with marketplaces or free repositories of scripts. To further boost
+reliability, it will be possible to add redundant devices in the presence of a
+script capable of combining them.
+Interoperability allows the same apps to work in multiple devices which
+can bring economies of scale. It increases the amount and quality of the
+software that is available for the devices. It also improves maintainability, as
+replacing a broken device is easier when the same settings and logic can be
+uploaded to the new one with scripts.
+Security and privacy aspects are improved by the proposed solution, by
+providing the user with full visibility and control of all data connections to
+the Internet, while most of the connections are established P2P in the local
+area network. By having all Internet connections initiated from the LAN,
+the attack surface is reduced, while also gaining high usability, as no firewall
+settings are needed.
+Usability is also improved with device provisioning and device discovery,
+62
+
+CHAPTER 7. DISCUSSION
+
+63
+
+which helps device installation and configuration by finding all local devices.
+Furthermore, it provides an easier entry point to the software of the system
+on operating systems that have support for it.
+All these quality improvements are important for the core platform to be
+able to support IoT system innovation. New ideas can be developed faster
+and more easily, and be reused in the next projects. To manage the large
+amounts of IoT devices and data forecasted for the future, the platform
+provides tools to handle the data and logic locally, rather than in cloud
+services.
+
+Limitations
+The proposed system suffers from a few limitations and trade-offs.
+The DNS-SD is not currently possible in browsers, which limits the options of implementing discovery for the browser-based configurator app. Even
+the basic Multicast DNS is not supported or enabled for browsers on all operating systems, which also limits the ways of providing the entry point for
+the app.
+Outside LAN remote control and monitoring require that all the wanted
+data and controls are sent to an external service, which reduces the security
+and efficiency benefits discussed above. All related devices would need to
+open their own connection to the remote monitoring/control service, unless
+a more complicated setup with a gateway-like device is implemented.
+Some IoT software might have high computational requirements for their
+business logic, such as machine learning. Thus, it might not be feasible to
+implement them into a script running in a low-performance SoC. However,
+it would be possible to design a separate device that has more computing
+power and provides its computing capabilities as a service to other devices. It
+could be implemented either by extending scripting API or by adding O-MI
+call methods.
+The proposed system would need market entry and subsequent popularity
+to be able to test the real interoperability level and achieve the vision of
+compatible devices as presented in this study.
+
+Future research
+Future research directions are plentiful, spanning categories such as security,
+power usage, P2P networking, autoconfiguration and marketplaces.
+The security side of the proposed platform presents a good future research
+topic, as security was not in the focus of the current study. For example,
+write access to the device could be limited to the owner of the device, who
+
+CHAPTER 7. DISCUSSION
+
+64
+
+is set in the provisioning step. Similarly, the discovery system should only
+include owned devices. Security could be further customized if the script
+system is extended to allow scripts to block requests.
+Another aspect not explored is the power consumption of the devices. If
+the device needs to run on battery power, it should be allowed to sleep most
+of the time, but then it typically cannot receive any requests. Wakeup sources
+include sensors or a timer, thus, some clock synchronization strategy could
+be investigated. The sleep functionality or switches to some internal circuitry
+could be given to the scripts via an additional script API or info items. Script
+API should also have a subscription method to establish subscriptions only
+when required, as discussed in Section 4.2.2.
+The network adopted was limited to LAN, but it would be useful to explore a combination of multiple LAN networks. Specifically, solutions are
+required to transfer data between networks possibly handling firewalls. Once
+a solution for passing O-MI messages between networks is established, then
+discovery, device configuration and subscriptions can use O-MI to pass the required information. Also, other than multicast-based discovery methods can
+be explored to reduce unnecessary traffic on larger networks. A yet further
+network-related research direction would focus on improving provisioning.
+Such solutions could include devices having another connection method, for
+example as any longer-range radio protocol or a public mesh network. The
+network could be used to facilitate provisioning and work as a backup if the
+Wi-Fi connection was lost, improving reliability.
+To reach the full Plug-and-Play experience, the topic of automatic app
+configuration could be explored by adopting different schemes. For instance,
+configurator app could detect when a device is being replaced by a similar new
+device in the same location and automatically select the same IoT application
+for it. Furthermore, similar nearby devices could be used as a template, that
+is, to automatically add the same IoT application as in the similar devices.
+An indoor location system or signal distance measuring would be useful in
+such cases.
+Finally, the system would need a marketplace, but there are multiple options on how it could be implemented. It could provide a collection of free
+essential IoT applications like manual controls, alerting, bang-bang switching or more advanced control loop algorithms. Paid IoT applications could
+have proprietary algorithms, a fancier setup, and control user interfaces, in
+addition to connecting online services. Optionally, the marketplace could
+experiment buying and selling of user data with different pricing methods.
+
+Chapter 8
+
+Conclusions
+The objective of this study was to advance the interoperability of IoT devices
+for home automation. The objective was pursued by designing a system architecture for smart objects, which can be configured to send data to other
+devices and to process data locally. An embedded system component of the
+proposed architecture was implemented and tested in a real home environment to confirm the feasibility of the approach.
+The architecture contains three layers: service layer, management layer
+and device layer. The service layer contains online services for installing IoT
+applications and any services used by IoT applications that need to be on
+the Internet. The management layer consists of the configurator application
+that is used to configure the devices for their connections and applications.
+The device layer contains the embedded system that manages hardware input/output, and can run scripts for local data processing and handle subscriptions for data sending. Three sets of protocols are applied: mDNS
+with DNS-SD for device discovery, HTTP WebSocket for communication
+and O-MI with O-DF for application-layer IoT data handling. Furthermore,
+O-DF/O-MI was extended with scripting capability, which is triggered on
+write, read or call requests. Using the scripting capability, the system improves interoperability by providing a repository of adapters that can convert
+otherwise incompatible value formats to the same type, in addition to providing local processing for IoT applications. Finally, the architecture was
+validated by four SO requirements identified in the literature.
+The embedded system was implemented for Espressif ESP32-S2 SoC
+mostly using C and hardware integration with C++ language and Arduino.
+The embedded system consists of four major components: connection manager, request parser, request handler and scripting engine. Connection manager was implemented with existing libraries to handle mDNS and WebSocket connections. Parser uses the YXML streaming XML parser library
+65
+
+CHAPTER 8. CONCLUSIONS
+
+66
+
+and a novel state machine approach to parse O-MI and O-DF efficiently as a
+stream. Then, the request handler selects the correct actions and responses
+for the request and implements the subscriptions. Finally, JerryScript was
+used as the scripting engine with a small API implemented for modifying the
+device O-DF tree.
+The system was tested with two use cases. The first was bathroom exhaust fan, which activates on high humidity during a shower, and deactivates
+when low humidity is reached. It was built with two smart objects, one with
+a humidity sensor and one with a servo motor to control an existing fan. The
+second use case demonstrates reconfiguration by controlling air conditioning
+with similar devices. In both use cases, the data and control signals were
+collected to an O-MI database service and visualized with Grafana.
+The embedded system was able to execute the use cases successfully, proving that the concept is feasible. This work provides the first implementation
+of O-MI and O-DF for resource constrained devices. On the other hand,
+the configurator application was simulated by sending the configuration requests manually, but was neither implemented nor tested, which might lead
+to unforeseen challenges.
+The proposed system would imply higher-quality IoT home automation
+systems. IoT applications would be more reliable when the communication
+and processing is accomplished locally, instead of messages having a roundtrip to an Internet service or a centralized gateway. Interoperability allows
+the same applications to work on devices of different manufacturers, and fosters innovation for application development. Moreover, security and privacy
+are improved as well, as the user can view and control where data streams
+flow. The main limitation that the architecture requires industry approval to
+achieve the full vision of interoperability, and due to focus on LAN, remote
+controlling from Internet would require an active connection for each controllable device. Other limitations are that the system is designed for single LAN
+network, and without any security considerations. These limitations could
+be addressed in future studies, together with an exploration of automated
+configuration of devices or different styles of IoT app and data marketplaces.
+
+Bibliography
+[1] A. J. Brush, Bongshin Lee, Ratul Mahajan, Sharad Agarwal, Stefan
+Saroiu, and Colin Dixon. Home automation in the wild. Proceedings of
+the SIGCHI Conference on human factors in computing systems, pages
+2115–2124, May 2011. doi: 10.1145/1978942.1979249. URL http://dl.
+acm.org/citation.cfm?id=1979249.
+[2] G. Kortuem, F. Kawsar, D. Fitton, and V. Sundramoorthy. Smart
+objects as building blocks for the Internet of things, 2010. URL https:
+//ieeexplore.ieee.org/document/5342399.
+[3] The Open Group. Open Messaging Interface (O-MI), the Open Group
+Standard for the Internet of Things (IoT), Version 2.0. The Open
+Group, December 2019. ISBN US 1-947754-42-3. URL https://
+publications.opengroup.org/c19e.
+[4] The Open Group. Open Data Format (O-DF), the Open Group Standard for the Internet of Things (IoT), Version 2.0. The Open Group,
+December 2019. ISBN US 1-947754-41-6. URL https://publications.
+opengroup.org/c19d.
+[5] Soma Bandyopadhyay, Munmun Sengupta, Souvik Maiti, and Subhajit
+Dutta. Role Of Middleware For Internet Of Things: A Study. International Journal of Computer Science & Engineering Survey, 2(3):94–105,
+Aug 30, 2011. doi: 10.5121/ijcses.2011.2307.
+[6] Yohanes Yohanie Fridelin Panduman, Sritrusta Sukaridhoto, and Anang
+Tjahjono. A Survey of IoT Platform Comparison for Building CyberPhysical System Architecture. In - 2019 International Seminar on
+Research of Information Technology and Intelligent Systems (ISRITI),
+pages 238–243, 2019. ISBN NULL-. doi: 10.1109/ISRITI48646.2019.
+9034650. URL https://ieeexplore.ieee.org/document/9034650. ID: 1.
+[7] IFTTT. Documentation, 2021. URL https://platform.ifttt.com/
+docs. Accessed 15.06.2021.
+67
+
+BIBLIOGRAPHY
+
+68
+
+[8] The openHAB Community and the openHAB Foundation e.V. openHAB, 2021. URL https://www.openhab.org/. Accessed 15.06.2021.
+[9] Z. Shelby, ARM, K. Hartke, C. Bormann, and Universitaet Bremen TZI.
+The Constrained Application Protocol (CoAP), Jun 2014. ISSN 20701721. URL https://datatracker.ietf.org/doc/html/rfc7252. IETF.
+Status: Proposed standard.
+[10] I. Fette and A. Melnikov. The WebSocket Protocol, Dec 2011. ISSN
+2070-1721. URL https://tools.ietf.org/html/rfc6455. IETF. Status:
+Proposed standard.
+[11] Andrew Banks, Ed Briggs, Ken Borgendale, and Rahul Gupta. MQTT
+Version 5.0. OASIS Standard, March 07 2019. URL https://docs.
+oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html.
+[12] Andrew Donohono, Bryan Roe, Maarten Bodlaender, John
+Gildred, Alan Messer, YoonSoo Kim, Bruce Fairman, and
+Jonathan Tourzan.
+UPnP Device Architecture 2.0, Apr
+2020.
+URL
+https://openconnectivity.org/upnp-specs/
+UPnP-arch-DeviceArchitecture-v2.0-20200417.pdf.
+Open Connectivity Foundation, Inc.
+[13] B. Aboba, D. Thaler, L. Esibov, and Microsoft Corporation. LinkLocal Multicast Name Resolution (LLMNR), Jan 2007. URL https:
+//datatracker.ietf.org/doc/html/rfc4795. IETF. Status: Informational.
+[14] S. Cheshire and M. Krochmal. Multicast DNS, Feb 2013. ISSN 20701721. URL https://tools.ietf.org/html/rfc6762. IETF. Status: Proposed standard.
+[15] S. Cheshire and M. Krochmal. DNS-Based Service Discovery, Feb 2013.
+ISSN 2070-1721. URL https://tools.ietf.org/html/rfc6763. IETF.
+Status: Proposed standard.
+[16] Giancarlo Fortino, Antonio Guerrieri, Wilma Russo, and Claudio
+Savaglio. Middlewares for Smart Objects and Smart Environments:
+Overview and Comparison, pages 1–27. Internet of Things Based on
+Smart Objects. Springer International Publishing, Cham, 2014. ISBN
+9783319004907. doi: 10.1007/978-3-319-00491-4 1. URL http://link.
+springer.com/10.1007/978-3-319-00491-4_1.
+
+BIBLIOGRAPHY
+
+69
+
+[17] Luis Roalter, Matthias Kranz, and Andreas Möller. A Middleware
+for Intelligent Environments and the Internet of Things, pages 267–
+281. Ubiquitous Intelligence and Computing. Springer Berlin Heidelberg, Berlin, Heidelberg, 2010. ISBN 9783642163548. doi: 10.
+1007/978-3-642-16355-5 23. URL http://link.springer.com/10.1007/
+978-3-642-16355-5_23.
+[18] F. Kawsar and T. Nakajima. A Document Centric Framework for
+Building Distributed Smart Object Systems. In 2009 IEEE International Symposium on Object/Component/Service-Oriented Real-Time
+Distributed Computing, pages 71–79. IEEE, March 2009. ISBN 15550885. doi: 10.1109/ISORC.2009.16. URL https://ieeexplore.ieee.
+org/document/5232005.
+[19] Jan Nyman, Kary Främling, and Vincent Michel. Gathering Product
+Data from Smart Products. In José Cordeiro and Joaquim Filipe, editors, ICEIS Proceedings of the Tenth International Conference on Enterprise Information Systems, Volume DISI, Barcelona, Spain, June 12-16,
+pages 252–257, 2008.
+[20] Sylvain Kubler, Kary Främling, and William Derigent. P2P Data
+synchronization for product lifecycle management. Computers in Industry, 66:82–98, 2015. doi: https://doi.org/10.1016/j.compind.2014.
+10.009. URL https://www.sciencedirect.com/science/article/pii/
+S0166361514001870?
+
+[21] G. Fortino, A. Guerrieri, and W. Russo. Agent-oriented smart objects development. In - Proceedings of the 2012 IEEE 16th International Conference on Computer Supported Cooperative Work in Design
+(CSCWD), pages 907–912, 2012. doi: 10.1109/CSCWD.2012.6221929.
+URL https://ieeexplore.ieee.org/document/6221929.
+[22] Marco E. Perez Hernandez and Stephan Reiff-Marganiec. Autonomous
+and Self Controlling Smart Objects for the Future Internet. In - 2015
+3rd International Conference on Future Internet of Things and Cloud,
+pages 301–308, 2015. doi: 10.1109/FiCloud.2015.89. URL https://
+ieeexplore.ieee.org/document/7300832.
+[23] V. Stirbu. Towards a RESTful Plug and Play Experience in the Web
+of Things. In - 2008 IEEE International Conference on Semantic
+Computing, pages 512–517, 2008. doi: 10.1109/ICSC.2008.51. URL
+https://ieeexplore.ieee.org/document/4597240.
+
+BIBLIOGRAPHY
+
+70
+
+[24] Arne Wall, Vlado Altmann, Johannes Muller, Hannes Raddatz, and
+Dirk Timmermann. Decentralized configuration of embedded web services for smart home applications. In - 2017 Annual IEEE International
+Systems Conference (SysCon), pages 1–6, 2017. ISBN 2472-9647. doi:
+10.1109/SYSCON.2017.7934759. URL https://ieeexplore.ieee.org/
+document/7934759.
+[25] Fan Yang, Danny Hughes, Nelson Matthys, and Kalok Lok Man. The
+PnP Web Tag: A plug-and-play programming model for connecting IoT
+devices to the web of things. In - 2016 IEEE Asia Pacific Conference on
+Circuits and Systems (APCCAS), pages 452–455, 2016. doi: 10.1109/
+APCCAS.2016.7804000.
+[26] Wei He, Jingbin Zhang, Meng Ma, and Ping Wang. MODE: A ContextAware IoT Middleware Supporting On-Demand Deployment for Mobile
+Devices. In - 2017 IEEE 23rd International Conference on Parallel
+and Distributed Systems (ICPADS), pages 81–88, 2017. ISBN 15219097. doi: 10.1109/ICPADS.2017.00022. URL https://ieeexplore.
+ieee.org/document/8368351.
+[27] Han-Chuan Hsieh, Kai-Di Chang, Ling-Feng Wang, Jiann-Liang Chen,
+and Han-Chieh Chao. ScriptIoT: A Script Framework for and Internetof-Things Applications, 2016. URL https://ieeexplore.ieee.org/
+document/7279058.
+[28] Sarthak Grover, Mi Seon Park, Srikanth Sundaresan, Sam Burnett, Hyojoon Kim, Bharath Ravi, and Nick Feamster. Peeking behind the NAT.
+Proceedings of the 2013 conference on internet measurement conference,
+pages 377–390, Oct 23, 2013. doi: 10.1145/2504730.2504736. URL
+http://dl.acm.org/citation.cfm?id=2504736.
+[29] Espressif Systems.
+
+ESP32-S2 Family Datasheet V1.2, 2020.
+
+URL
+
+https://www.espressif.com/sites/default/files/documentation/
+esp32-s2_datasheet_en.pdf.
+
+[30] Espressif Systems.
+ESP32-S2-WROVER ESP32-S2-WROVER-I
+Datasheet V1.1, 2020.
+URL https://www.espressif.com/sites/
+default/files/documentation/esp32-s2-wrover_esp32-s2-wrover-i_
+datasheet_en.pdf.
+
+[31] Espressif Systems.
+
+ESP32-S2-Saola-1 V1.2, March 2020.
+
+URL
+
+https://dl.espressif.com/dl/schematics/ESP32-S2-SAOLA-1_V1.1_
+schematics.pdf.
+
+BIBLIOGRAPHY
+
+71
+
+[32] Espressif. Arduino core for the ESP32, 2021. URL https://github.
+com/espressif/arduino-esp32.
+[33] PlatformIO.
+
+What is PlatformIO?, June 2020.
+
+URL https://
+docs.platformio.org/en/latest/what-is-platformio.html. Accessed
+15.02.2021.
+
+[34] Rich Tibbett. Network Service Discovery, Jan 2017. URL https://www.
+w3.org/TR/discovery-api/. W3C Working Group Note.
+[35] Sylvain Kubler, Kary Främling, and Andrea Buda. A standardized approach to deal with firewall and mobility policies in the IoT. Pervasive
+and mobile computing, 20:100–114, Jul 2015. doi: 10.1016/j.pmcj.2014.
+09.005. URL http://dx.doi.org/10.1016/j.pmcj.2014.09.005.
+[36] Alexandros Bartzas, Francky Catthoor, Stylianos Mamagkakis, Miguel
+Peón-Quirós, Christophe Poucet, Dimitrios Soudris, and David Atienza
+Alonso. Dynamic Memory Management for Embedded Systems. Springer
+International Publishing AG, Cham, 2014. ISBN 9783319105710. URL
+https://link.springer.com/book/10.1007%2F978-3-319-10572-7.
+[37] Gil Reiter. A primer to Wi-Fi® provisioning for IoT applications. Texas
+Instruments White Paper, 2014. URL https://networking.report/
+Resources/Whitepapers/4db8e4b9-fda8-4818-a3d8-4a1d52471824_
+swry011.pdf.
+
+[38] Asad Javed, Avleen Malhi, Tuomas Kinnunen, and Kary Framling.
+Scalable IoT Platform for Heterogeneous Devices in Smart Environments. IEEE access, 8:211973–211985, 2020. doi: 10.1109/ACCESS.
+2020.3039368. URL https://ieeexplore.ieee.org/document/9264173.
+[39] Matthieu Labas. sxmlc - simple, lightweight xml parser in c, statically
+or dynamically linked., 2020. URL https://sourceforge.net/projects/
+sxmlc/. Accessed 15.02.2021.
+[40] Yoran Heling. Yxml - A small, fast and correct* XML parser, 2020.
+URL https://dev.yorhel.nl/yxml. Accessed 15.02.2021.
+[41] AaltoAsia team Aalto-yliopisto. O-MI Node Server v3.1.4. GitHub repository, 2021. URL https://github.com/AaltoAsia/O-MI/.
+[42] JS Foundation and other contributors. JerryScript: JavaScript engine for the Internet of Things, 2021. URL https://github.com/
+jerryscript-project/jerryscript.
+
+Appendix A
+
+Read request response
+Listing A.1: Read response from the device showing information about the
+device and its capabilities
+<omiEnvelope xmlns="http://www.opengroup.org/xsd/omi/2.0/" ttl="10.0"
+version="2.0">
+<response>
+<result msgformat="odf">
+<return returnCode="200"/>
+<msg>
+<Objects xmlns="http://www.opengroup.org/xsd/odf/2.0/"
+version="2.0">
+<Object>
+<id>Device</id>
+<InfoItem name="ChipModel">
+<value unixTime="20">ESP32-S2</value>
+</InfoItem>
+<InfoItem name="ChipRevision">
+<value unixTime="20" type="xs:int">0</value>
+</InfoItem>
+<InfoItem name="FirmwareCoreVersion">
+<value unixTime="20">2.0.0-alpha1-25-ga1d8b959</value>
+</InfoItem>
+<InfoItem name="SdkVersion">
+<value unixTime="20">v4.4-dev-960-gcf457d412</value>
+</InfoItem>
+<InfoItem name="FirmwareBuildVersion">
+<value unixTime="20">ed579a0-dirty</value>
+</InfoItem>
+<InfoItem name="FirmwareBuildDate">
+<value unixTime="20">2021-05-23</value>
+</InfoItem>
+<InfoItem name="FirmwareBuildTime">
+<value unixTime="20">14:53:40</value>
+</InfoItem>
+
+72
+
+APPENDIX A. READ REQUEST RESPONSE
+<InfoItem name="ChipTemperature">
+<value unixTime="33080" type="xs:float">43.9208</value>
+</InfoItem>
+<Object>
+<id>Memory</id>
+<InfoItem name="FirmwareSize">
+<value unixTime="18" type="xs:int">1225472</value>
+</InfoItem>
+<InfoItem name="FirmwareSizeFree">
+<value unixTime="18" type="xs:int">1310720</value>
+</InfoItem>
+<InfoItem name="PSRAMMinFree">
+<value unixTime="33060" type="xs:int">1894471</value>
+</InfoItem>
+<InfoItem name="PSRAMTotal">
+<value unixTime="20" type="xs:int">2094171</value>
+</InfoItem>
+<InfoItem name="PSRAMFree">
+<value unixTime="33060" type="xs:int">1926951</value>
+</InfoItem>
+<InfoItem name="PSRAMLargestFreeBlock">
+<value unixTime="33060" type="xs:int">1048564</value>
+</InfoItem>
+<InfoItem name="HeapTotal">
+<value unixTime="20" type="xs:int">157727</value>
+</InfoItem>
+<InfoItem name="HeapMinFree">
+<value unixTime="33060" type="xs:int">18143</value>
+</InfoItem>
+<InfoItem name="HeapFree">
+<value unixTime="33060" type="xs:int">25983</value>
+</InfoItem>
+<InfoItem name="HeapLargestFreeBlock">
+<value unixTime="33060" type="xs:int">8180</value>
+</InfoItem>
+</Object>
+</Object>
+<Object>
+<id>Dht11</id>
+<InfoItem name="RelativeHumidity">
+<MetaData>
+<InfoItem name="UnitOfMeasurement">
+<value unixTime="20">%</value>
+</InfoItem>
+</MetaData>
+<value unixTime="33080" type="xs:float">42.056316</value>
+</InfoItem>
+<InfoItem name="Temperature">
+<MetaData>
+
+73
+
+APPENDIX A. READ REQUEST RESPONSE
+<InfoItem name="UnitOfMeasurement">
+<value unixTime="20">°C</value>
+</InfoItem>
+</MetaData>
+<value unixTime="33080" type="xs:float">24.000004</value>
+</InfoItem>
+</Object>
+<Object>
+<id>RgbLed</id>
+<InfoItem name="ColorRGB">
+<value unixTime="20" type="xs:int">0</value>
+</InfoItem>
+</Object>
+</Objects>
+</msg>
+</result>
+</response>
+</omiEnvelope>
+
+74
+
+Appendix B
+
+The A/C use case configuration
+Listing B.1: Write request to configure AC control
+<?xml version="1.0"?>
+<omiEnvelope xmlns="http://www.opengroup.org/xsd/omi/2.0/" version="2.0"
+ttl="20">
+<write msgformat="odf">
+<msg>
+<Objects xmlns="http://www.opengroup.org/xsd/odf/2.0/" version="2.0">
+<Object>
+<id>Relay</id>
+<InfoItem name="Switch">
+<MetaData>
+<InfoItem name="onwrite">
+<value unixTime="1621611193">
+var sleep = function (ms) {
+const date = Date.now();
+let now = null;
+do {
+now = Date.now();
+} while (now - date &lt; ms);
+};
+// stop initial write for triggering
+if (global.hasOwnProperty("triggered")) {
+odf.writeItem(true, "Objects/Relay/State");
+sleep(1000);
+odf.writeItem(false, "Objects/Relay/State");
+}
+</value>
+</InfoItem>
+</MetaData>
+<value type="xs:boolean">0</value>
+</InfoItem>
+</Object>
+<Object>
+
+75
+
+APPENDIX B. THE A/C USE CASE CONFIGURATION
+<id>Dht11</id>
+<InfoItem name="Temperature">
+<MetaData>
+<InfoItem name="onwrite">
+<value unixTime="1621611193">
+if (!global.hasOwnProperty("triggered")) global.triggered = false;
+if (event.value &gt; 27 &amp;&amp; !global.triggered) {
+global.triggered = true;
+odf.writeItem(true, "Objects/Relay/Switch");
+}
+if (event.value &lt; 25 &amp;&amp; global.triggered) {
+global.triggered = false;
+odf.writeItem(false, "Objects/Relay/Switch");
+}
+</value>
+</InfoItem>
+</MetaData>
+<value type="xs:float">21</value>
+</InfoItem>
+</Object>
+</Objects>
+</msg>
+</write>
+</omiEnvelope>
+
+76
+
+

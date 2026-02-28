@@ -1,0 +1,11 @@
+# Rust often needs a bit of an extra main task stack size compared to C (the default is 3K)
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Wi-Fi
+CONFIG_ESP_WIFI_ENABLED=y
+
+# HTTP server: allow reasonable header sizes for POST payloads
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+
+# Use 1000 Hz tick for 1ms sleep granularity
+CONFIG_FREERTOS_HZ=1000

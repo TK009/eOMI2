@@ -78,41 +78,48 @@ fn uri_path(uri: &str) -> &str {
     uri.split('?').next().unwrap_or(uri)
 }
 
-/// Read request body up to `max` bytes. Returns None and sends error response if
-/// content-length is missing/zero or exceeds the limit.
+enum BodyError {
+    Empty,
+    TooLarge,
+}
+
+/// Read request body up to `max` bytes.
 fn read_body(
     req: &mut esp_idf_svc::http::server::Request<&mut esp_idf_svc::http::server::EspHttpConnection>,
     max: usize,
-) -> Result<Option<Vec<u8>>, anyhow::Error> {
+) -> Result<std::result::Result<Vec<u8>, BodyError>, anyhow::Error> {
     let content_len = req
         .header("content-length")
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(0);
     if content_len == 0 {
-        return Ok(None);
+        return Ok(Err(BodyError::Empty));
     }
     if content_len > max {
-        return Ok(None);
+        return Ok(Err(BodyError::TooLarge));
     }
     let mut buf = vec![0u8; content_len];
     req.read_exact(&mut buf)?;
-    Ok(Some(buf))
+    Ok(Ok(buf))
 }
 
 fn start_http_server() -> Result<EspHttpServer<'static>> {
     let config = HttpConfig {
         http_port: 80,
-        uri_match_fn: Some(esp_idf_svc::sys::httpd_uri_match_wildcard),
+        uri_match_wildcard: true,
         ..Default::default()
     };
     let mut server = EspHttpServer::new(&config)?;
 
     let store = Arc::new(Mutex::new(PageStore::new()));
 
-    // GET / — landing page with list of stored pages (exact match, registered first)
+    // IMPORTANT: Exact "/" handlers must be registered before "/*" wildcard
+    // handlers, otherwise the wildcard swallows root requests.
+
+    // GET / — landing page with list of stored pages
     let s = store.clone();
     server.fn_handler::<anyhow::Error, _>("/", Method::Get, move |req| {
-        let store = s.lock().unwrap();
+        let store = s.lock().unwrap_or_else(|e| e.into_inner());
         let html = render_landing_page(&store);
         req.into_ok_response()?
             .write_all(html.as_bytes())?;
@@ -121,28 +128,31 @@ fn start_http_server() -> Result<EspHttpServer<'static>> {
 
     // POST / — accept HTML+JS payload (unchanged behavior)
     server.fn_handler::<anyhow::Error, _>("/", Method::Post, |mut req| {
-        let content_len = req
-            .header("content-length")
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(0);
-        if content_len == 0 {
-            req.into_response(400, Some("Bad Request"), &[])?
-                .write_all(b"Empty payload")?;
-            return Ok(());
-        }
-
+        // Cap at 64KB to prevent OOM on constrained devices
         const MAX_PAYLOAD: usize = 64 * 1024;
-        if content_len > MAX_PAYLOAD {
-            req.into_response(413, Some("Payload Too Large"), &[])?
-                .write_all(b"Payload exceeds 64KB limit")?;
-            return Ok(());
-        }
+        let buf = match read_body(&mut req, MAX_PAYLOAD)? {
+            Ok(b) => b,
+            Err(BodyError::Empty) => {
+                req.into_response(400, Some("Bad Request"), &[])?
+                    .write_all(b"Empty payload")?;
+                return Ok(());
+            }
+            Err(BodyError::TooLarge) => {
+                req.into_response(413, Some("Payload Too Large"), &[])?
+                    .write_all(b"Payload exceeds 64KB limit")?;
+                return Ok(());
+            }
+        };
 
-        let mut buf = vec![0u8; content_len];
-        req.read_exact(&mut buf)?;
-
-        let body = String::from_utf8_lossy(&buf);
-        info!("POST / received {} bytes", content_len);
+        let body = match String::from_utf8(buf) {
+            Ok(s) => s,
+            Err(_) => {
+                req.into_response(400, Some("Bad Request"), &[])?
+                    .write_all(b"Invalid UTF-8")?;
+                return Ok(());
+            }
+        };
+        info!("POST / received {} bytes", body.len());
         info!("Payload:\n{}", body);
 
         // TODO: parse HTML, extract <script> tags, execute JS
@@ -158,16 +168,28 @@ fn start_http_server() -> Result<EspHttpServer<'static>> {
 
         const MAX_PAYLOAD: usize = 64 * 1024;
         let body = match read_body(&mut req, MAX_PAYLOAD)? {
-            Some(b) => b,
-            None => {
+            Ok(b) => b,
+            Err(BodyError::Empty) => {
                 req.into_response(400, Some("Bad Request"), &[])?
-                    .write_all(b"Empty or oversized payload")?;
+                    .write_all(b"Empty payload")?;
+                return Ok(());
+            }
+            Err(BodyError::TooLarge) => {
+                req.into_response(413, Some("Payload Too Large"), &[])?
+                    .write_all(b"Payload exceeds 64KB limit")?;
                 return Ok(());
             }
         };
 
-        let html = String::from_utf8_lossy(&body);
-        let mut store = s.lock().unwrap();
+        let html = match String::from_utf8(body) {
+            Ok(s) => s,
+            Err(_) => {
+                req.into_response(400, Some("Bad Request"), &[])?
+                    .write_all(b"Invalid UTF-8")?;
+                return Ok(());
+            }
+        };
+        let mut store = s.lock().unwrap_or_else(|e| e.into_inner());
         match store.store(&path, &html) {
             Ok(()) => {
                 info!("PATCH {} — stored {} bytes", path, html.len());
@@ -202,7 +224,7 @@ fn start_http_server() -> Result<EspHttpServer<'static>> {
     let s = store.clone();
     server.fn_handler::<anyhow::Error, _>("/*", Method::Delete, move |req| {
         let path = uri_path(req.uri()).to_string();
-        let mut store = s.lock().unwrap();
+        let mut store = s.lock().unwrap_or_else(|e| e.into_inner());
         match store.remove(&path) {
             Ok(()) => {
                 info!("DELETE {} — removed", path);
@@ -225,7 +247,7 @@ fn start_http_server() -> Result<EspHttpServer<'static>> {
     let s = store.clone();
     server.fn_handler::<anyhow::Error, _>("/*", Method::Get, move |req| {
         let path = uri_path(req.uri()).to_string();
-        let store = s.lock().unwrap();
+        let store = s.lock().unwrap_or_else(|e| e.into_inner());
         match store.get(&path) {
             Some(html) => {
                 let headers = [("Content-Type", "text/html")];

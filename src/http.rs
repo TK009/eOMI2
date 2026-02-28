@@ -4,6 +4,22 @@
 
 use crate::pages::PageStore;
 
+/// Escape HTML special characters to prevent XSS.
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#x27;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Render the landing page HTML, including links to all stored pages.
 pub fn render_landing_page(store: &PageStore) -> String {
     let pages = store.list();
@@ -12,10 +28,11 @@ pub fn render_landing_page(store: &PageStore) -> String {
     } else {
         let mut s = String::from("<ul>");
         for path in &pages {
+            let escaped = html_escape(path);
             s.push_str("<li><a href=\"");
-            s.push_str(path);
+            s.push_str(&escaped);
             s.push_str("\">");
-            s.push_str(path);
+            s.push_str(&escaped);
             s.push_str("</a></li>");
         }
         s.push_str("</ul>");
@@ -38,6 +55,15 @@ pub fn render_landing_page(store: &PageStore) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn html_escape_special_chars() {
+        assert_eq!(html_escape("<script>"), "&lt;script&gt;");
+        assert_eq!(html_escape("a&b"), "a&amp;b");
+        assert_eq!(html_escape("x\"y"), "x&quot;y");
+        assert_eq!(html_escape("a'b"), "a&#x27;b");
+        assert_eq!(html_escape("/normal/path"), "/normal/path");
+    }
 
     #[test]
     fn landing_page_empty() {

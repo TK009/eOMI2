@@ -22,6 +22,7 @@ pub enum PageError {
 
 pub struct PageStore {
     pages: BTreeMap<String, String>,
+    /// Tracks total heap usage: path keys + HTML content.
     total_bytes: usize,
     max_total_bytes: usize,
 }
@@ -51,13 +52,15 @@ impl PageStore {
         if path == "/" {
             return Err(PageError::ReservedPath);
         }
-        // Reserved prefixes
-        if path.starts_with("/omi") || path.starts_with("/odf/") || path.starts_with("/Objects/") {
-            return Err(PageError::ReservedPath);
+        // Reserved prefixes (exact match or with trailing slash)
+        for prefix in &["/omi", "/odf", "/Objects"] {
+            if path == *prefix || path.starts_with(&format!("{}/", prefix)) {
+                return Err(PageError::ReservedPath);
+            }
         }
-        // Reject ".." segments and empty segments
+        // Reject ".", ".." segments and empty segments
         for segment in path[1..].split('/') {
-            if segment.is_empty() || segment == ".." {
+            if segment.is_empty() || segment == "." || segment == ".." {
                 return Err(PageError::InvalidPath);
             }
         }
@@ -72,9 +75,11 @@ impl PageStore {
             return Err(PageError::PageTooLarge);
         }
 
-        // Reclaim old size if replacing
+        // Reclaim old size if replacing (account for both path key and HTML value)
+        let is_new = !self.pages.contains_key(path);
         let old_size = self.pages.get(path).map(|p| p.len()).unwrap_or(0);
-        let new_total = self.total_bytes - old_size + html.len();
+        let key_cost = if is_new { path.len() } else { 0 };
+        let new_total = self.total_bytes - old_size + html.len() + key_cost;
 
         if new_total > self.max_total_bytes {
             return Err(PageError::StorageFull);
@@ -97,7 +102,7 @@ impl PageStore {
     pub fn remove(&mut self, path: &str) -> Result<(), PageError> {
         match self.pages.remove(path) {
             Some(html) => {
-                self.total_bytes -= html.len();
+                self.total_bytes -= html.len() + path.len();
                 Ok(())
             }
             None => Err(PageError::NotFound),
@@ -142,6 +147,10 @@ mod tests {
             store.store("/odf/foo", "<h1>X</h1>"),
             Err(PageError::ReservedPath)
         );
+        assert_eq!(
+            store.store("/odf", "<h1>X</h1>"),
+            Err(PageError::ReservedPath)
+        );
     }
 
     #[test]
@@ -151,6 +160,18 @@ mod tests {
             store.store("/Objects/1", "<h1>X</h1>"),
             Err(PageError::ReservedPath)
         );
+        assert_eq!(
+            store.store("/Objects", "<h1>X</h1>"),
+            Err(PageError::ReservedPath)
+        );
+    }
+
+    #[test]
+    fn non_reserved_prefix_allowed() {
+        let mut store = PageStore::new();
+        // "/omission" should NOT be blocked — it's not "/omi" or "/omi/*"
+        store.store("/omission", "<h1>X</h1>").unwrap();
+        assert_eq!(store.get("/omission"), Some("<h1>X</h1>"));
     }
 
     #[test]
@@ -183,18 +204,20 @@ mod tests {
     #[test]
     fn replace_updates_total_bytes() {
         let mut store = PageStore::with_capacity(200);
-        store.store("/a", "aaaa").unwrap(); // 4 bytes
+        // total_bytes includes path key ("/a" = 2) + value
+        store.store("/a", "aaaa").unwrap(); // 2 + 4 = 6
+        assert_eq!(store.total_bytes, 6);
+        store.store("/a", "bb").unwrap(); // key already exists, so 6 - 4 + 2 = 4
         assert_eq!(store.total_bytes, 4);
-        store.store("/a", "bb").unwrap(); // 2 bytes replaces 4
-        assert_eq!(store.total_bytes, 2);
         assert_eq!(store.get("/a"), Some("bb"));
     }
 
     #[test]
     fn storage_cap_enforced() {
+        // /a = 2 key + 3 value = 5, /b = 2 key + 3 value = 5, total = 10
         let mut store = PageStore::with_capacity(10);
-        store.store("/a", "12345").unwrap();
-        store.store("/b", "12345").unwrap();
+        store.store("/a", "123").unwrap();
+        store.store("/b", "123").unwrap();
         assert_eq!(
             store.store("/c", "1"),
             Err(PageError::StorageFull)
@@ -219,20 +242,41 @@ mod tests {
 
     #[test]
     fn remove_frees_space() {
-        let mut store = PageStore::with_capacity(10);
-        store.store("/a", "12345").unwrap();
-        store.store("/b", "12345").unwrap();
-        assert_eq!(store.total_bytes, 10);
+        // /a = 2 key + 2 value = 4, /b = 2 key + 2 value = 4, total = 8
+        let mut store = PageStore::with_capacity(8);
+        store.store("/a", "12").unwrap();
+        store.store("/b", "12").unwrap();
+        assert_eq!(store.total_bytes, 8);
         store.remove("/a").unwrap();
-        assert_eq!(store.total_bytes, 5);
+        assert_eq!(store.total_bytes, 4);
         assert_eq!(store.get("/a"), None);
         // Now there's room again
-        store.store("/c", "12345").unwrap();
+        store.store("/c", "12").unwrap();
     }
 
     #[test]
     fn remove_not_found() {
         let mut store = PageStore::new();
         assert_eq!(store.remove("/nope"), Err(PageError::NotFound));
+    }
+
+    #[test]
+    fn invalid_path_dot_segment() {
+        let mut store = PageStore::new();
+        assert_eq!(
+            store.store("/foo/./bar", "<h1>X</h1>"),
+            Err(PageError::InvalidPath)
+        );
+    }
+
+    #[test]
+    fn total_bytes_includes_path_key() {
+        let mut store = PageStore::with_capacity(100);
+        // "/hello" = 6 bytes key + "x" = 1 byte value = 7 total
+        store.store("/hello", "x").unwrap();
+        assert_eq!(store.total_bytes, 7);
+        // Removing frees both key and value
+        store.remove("/hello").unwrap();
+        assert_eq!(store.total_bytes, 0);
     }
 }

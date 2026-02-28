@@ -15,3 +15,5 @@ pub mod odf;
 pub mod omi;
 #[cfg(feature = "std")]
 pub mod pages;
+#[cfg(feature = "std")]
+pub mod http;

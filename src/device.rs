@@ -64,7 +64,7 @@ pub struct SavedItem {
 #[cfg(feature = "std")]
 pub fn collect_writable_items(tree: &ObjectTree) -> Vec<SavedItem> {
     let mut result = Vec::new();
-    for (obj_id, obj) in &tree.objects {
+    for (obj_id, obj) in tree.root_objects() {
         collect_from_object(obj, &format!("/{}", obj_id), &mut result);
     }
     result

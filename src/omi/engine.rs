@@ -877,7 +877,7 @@ mod tests {
     #[test]
     fn write_to_object_path_rejected() {
         let mut e = Engine::new();
-        e.tree.objects.insert("Device".into(), Object::new("Device"));
+        e.tree.insert_root(Object::new("Device"));
         let resp = e.process(write_msg("/Device", OmiValue::Number(1.0)), 0.0, None);
         assert_eq!(status(&resp), 400);
     }
@@ -924,7 +924,7 @@ mod tests {
         let mut e = setup();
         let resp = e.process(delete_msg("/Sensor1"), 0.0, None);
         assert_eq!(status(&resp), 200);
-        assert!(e.tree.objects.is_empty());
+        assert!(e.tree.is_empty());
     }
 
     #[test]

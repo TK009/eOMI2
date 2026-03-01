@@ -85,7 +85,7 @@ fn parse_path(path: &str) -> Result<Vec<&str>, TreeError> {
 
 /// The root object tree. Entry point for path-based operations.
 pub struct ObjectTree {
-    pub objects: BTreeMap<String, Object>,
+    objects: BTreeMap<String, Object>,
     /// Default ring buffer capacity for auto-created InfoItems.
     pub default_capacity: usize,
 }
@@ -106,6 +106,26 @@ impl ObjectTree {
             objects: BTreeMap::new(),
             default_capacity,
         }
+    }
+
+    /// Iterate over root-level objects.
+    pub fn root_objects(&self) -> impl Iterator<Item = (&String, &Object)> {
+        self.objects.iter()
+    }
+
+    /// Insert an object at root level, keyed by its `id`.
+    pub fn insert_root(&mut self, obj: Object) -> Option<Object> {
+        self.objects.insert(obj.id.clone(), obj)
+    }
+
+    /// True if the tree has no root-level objects.
+    pub fn is_empty(&self) -> bool {
+        self.objects.is_empty()
+    }
+
+    /// True if a root-level object with the given id exists.
+    pub fn root_contains(&self, id: &str) -> bool {
+        self.objects.contains_key(id)
     }
 
     /// Resolve an immutable reference from a path.
@@ -498,7 +518,7 @@ mod tests {
 
         sub.add_item("Voltage".into(), InfoItem::new(10));
         device.add_child(sub);
-        tree.objects.insert("DeviceA".into(), device);
+        tree.insert_root(device);
         tree
     }
 
@@ -646,13 +666,13 @@ mod tests {
         objects.insert("DeviceB".into(), dev);
 
         tree.write_tree("/", objects).unwrap();
-        assert!(tree.objects.contains_key("DeviceB"));
+        assert!(tree.root_contains("DeviceB"));
     }
 
     #[test]
     fn write_tree_at_path() {
         let mut tree = ObjectTree::new();
-        tree.objects.insert("Root".into(), Object::new("Root"));
+        tree.insert_root(Object::new("Root"));
 
         let mut objects = BTreeMap::new();
         objects.insert("Child".into(), Object::new("Child"));
@@ -674,8 +694,8 @@ mod tests {
 
         tree.write_tree("/", objects).unwrap();
         // Should be stored under obj.id, not the map key
-        assert!(tree.objects.contains_key("RealId"));
-        assert!(!tree.objects.contains_key("wrong_key"));
+        assert!(tree.root_contains("RealId"));
+        assert!(!tree.root_contains("wrong_key"));
     }
 
     // --- Delete tests ---
@@ -693,7 +713,7 @@ mod tests {
     fn delete_top_level_object() {
         let mut tree = sample_tree();
         tree.delete("/DeviceA").unwrap();
-        assert!(tree.objects.is_empty());
+        assert!(tree.is_empty());
     }
 
     #[test]

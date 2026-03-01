@@ -110,6 +110,12 @@ impl PageStore {
     }
 }
 
+impl Default for PageStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

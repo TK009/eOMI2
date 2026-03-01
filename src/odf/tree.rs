@@ -87,7 +87,7 @@ fn parse_path(path: &str) -> Result<Vec<&str>, TreeError> {
 pub struct ObjectTree {
     objects: BTreeMap<String, Object>,
     /// Default ring buffer capacity for auto-created InfoItems.
-    pub default_capacity: usize,
+    default_capacity: usize,
 }
 
 /// Default ring buffer capacity for auto-created InfoItems.
@@ -109,8 +109,8 @@ impl ObjectTree {
     }
 
     /// Iterate over root-level objects.
-    pub fn root_objects(&self) -> impl Iterator<Item = (&String, &Object)> {
-        self.objects.iter()
+    pub fn root_objects(&self) -> impl Iterator<Item = (&str, &Object)> {
+        self.objects.iter().map(|(k, v)| (k.as_str(), v))
     }
 
     /// Insert an object at root level, keyed by its `id`.

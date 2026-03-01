@@ -17,8 +17,14 @@ use reconfigurable_device::omi::{Engine, OmiMessage, OmiResponse};
 use reconfigurable_device::omi::subscriptions::DeliveryTarget;
 use reconfigurable_device::pages::{PageError, PageStore};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Monotonic counter for assigning unique WebSocket session IDs.
+/// Avoids fd-reuse races where a new connection gets the same fd as a
+/// recently closed one before the close handler fires.
+static NEXT_WS_SESSION: AtomicU64 = AtomicU64::new(1);
 
 const WIFI_SSID: &str = env!("WIFI_SSID");
 const WIFI_PASS: &str = env!("WIFI_PASS");
@@ -71,26 +77,48 @@ fn main() -> Result<()> {
             let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());
             eng.tick(now_secs())
         };
-        for d in &deliveries {
-            match &d.target {
-                DeliveryTarget::WebSocket(session) => {
-                    let mut senders = ws_senders.lock().unwrap_or_else(|e| e.into_inner());
-                    if let Some(sender) = senders.get_mut(session) {
-                        let resp = OmiResponse::subscription_event(&d.rid, &d.path, &d.values);
-                        if let Ok(json) = serde_json::to_string(&resp) {
-                            if sender.send(FrameType::Text(false), json.as_bytes()).is_err() {
-                                info!("WS send failed for session {}, will clean up on close", session);
+        let mut failed_sessions: Vec<u64> = Vec::new();
+        {
+            let mut senders = ws_senders.lock().unwrap_or_else(|e| e.into_inner());
+            for d in &deliveries {
+                match &d.target {
+                    DeliveryTarget::WebSocket(session) => {
+                        if let Some(sender) = senders.get_mut(session) {
+                            let resp = OmiResponse::subscription_event(&d.rid, &d.path, &d.values);
+                            match serde_json::to_string(&resp) {
+                                Ok(json) => {
+                                    if sender.send(FrameType::Text(false), json.as_bytes()).is_err() {
+                                        info!("WS send failed for session {}, removing", session);
+                                        if !failed_sessions.contains(session) {
+                                            failed_sessions.push(*session);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("WS delivery serialization failed: {}", e);
+                                }
                             }
                         }
                     }
+                    DeliveryTarget::Callback(_url) => {
+                        info!(
+                            "Sub delivery: rid={}, path={}, {} values (callback not yet implemented)",
+                            d.rid, d.path, d.values.len()
+                        );
+                    }
+                    DeliveryTarget::Poll => {} // handled via poll()
                 }
-                DeliveryTarget::Callback(_url) => {
-                    info!(
-                        "Sub delivery: rid={}, path={}, {} values (callback not yet implemented)",
-                        d.rid, d.path, d.values.len()
-                    );
-                }
-                DeliveryTarget::Poll => {} // handled via poll()
+            }
+            // Remove failed senders
+            for sid in &failed_sessions {
+                senders.remove(sid);
+            }
+        }
+        // Cancel subscriptions for failed sessions outside the senders lock
+        if !failed_sessions.is_empty() {
+            let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());
+            for sid in &failed_sessions {
+                eng.subscriptions().cancel_by_ws_session(*sid);
             }
         }
     }
@@ -150,7 +178,10 @@ fn send_omi_json(
     Ok(())
 }
 
-type WsSenders = Arc<Mutex<BTreeMap<i32, EspHttpWsDetachedSender>>>;
+type WsSenders = Arc<Mutex<BTreeMap<u64, EspHttpWsDetachedSender>>>;
+/// Maps raw fd → monotonic session ID so the WS handler can look up the
+/// session ID for an existing connection without allocating new IDs.
+type FdToSession = Arc<Mutex<BTreeMap<i32, u64>>>;
 
 fn start_http_server() -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>, WsSenders)> {
     let config = HttpConfig {
@@ -163,6 +194,7 @@ fn start_http_server() -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>, Ws
     let store = Arc::new(Mutex::new(PageStore::new()));
     let engine = Arc::new(Mutex::new(Engine::new()));
     let ws_senders: WsSenders = Arc::new(Mutex::new(BTreeMap::new()));
+    let fd_to_session: FdToSession = Arc::new(Mutex::new(BTreeMap::new()));
 
     // Route registration order: exact before wildcard, OMI wildcard before page wildcard.
 
@@ -301,34 +333,66 @@ fn start_http_server() -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>, Ws
     // WS /omi/ws — WebSocket endpoint for persistent OMI connections
     let eng = engine.clone();
     let ws = ws_senders.clone();
+    let fd_map = fd_to_session.clone();
     server.ws_handler("/omi/ws", move |conn| {
         if conn.is_new() {
             let sender = conn.create_detached_sender()?;
-            let session = conn.session();
-            info!("WS connect: session {}", session);
-            ws.lock().unwrap_or_else(|e| e.into_inner()).insert(session, sender);
+            let fd = conn.session();
+            let session_id = NEXT_WS_SESSION.fetch_add(1, Ordering::Relaxed);
+            info!("WS connect: fd={}, session={}", fd, session_id);
+            fd_map.lock().unwrap_or_else(|e| e.into_inner()).insert(fd, session_id);
+            ws.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id, sender);
             return Ok(());
         }
         if conn.is_closed() {
-            let session = conn.session();
-            info!("WS close: session {}", session);
-            ws.lock().unwrap_or_else(|e| e.into_inner()).remove(&session);
-            eng.lock().unwrap_or_else(|e| e.into_inner())
-                .subscriptions()
-                .cancel_by_ws_session(session);
+            let fd = conn.session();
+            let session_id = fd_map.lock().unwrap_or_else(|e| e.into_inner()).remove(&fd);
+            if let Some(sid) = session_id {
+                info!("WS close: fd={}, session={}", fd, sid);
+                ws.lock().unwrap_or_else(|e| e.into_inner()).remove(&sid);
+                eng.lock().unwrap_or_else(|e| e.into_inner())
+                    .subscriptions()
+                    .cancel_by_ws_session(sid);
+            }
             return Ok(());
         }
-        // Receive frame — first call with empty buf to get length
+        // Receive frame — first call with empty buf to get length and type
         const MAX_WS_MSG: usize = 16 * 1024;
-        let (_frame_type, len) = conn.recv(&mut [])?;
+        let (frame_type, len) = conn.recv(&mut [])?;
+
+        // Handle control and non-text frames
+        match frame_type {
+            FrameType::Text(_) | FrameType::Continue(_) => {} // process below
+            FrameType::Ping => {
+                conn.send(FrameType::Pong, &[])?;
+                return Ok(());
+            }
+            FrameType::Pong | FrameType::Close | FrameType::SocketClose => {
+                return Ok(());
+            }
+            FrameType::Binary(_) => {
+                let err = r#"{"omi":"1.0","ttl":0,"response":{"status":400,"desc":"Binary frames not supported"}}"#;
+                conn.send(FrameType::Text(false), err.as_bytes())?;
+                return Ok(());
+            }
+        }
+
         if len > MAX_WS_MSG {
             let err = r#"{"omi":"1.0","ttl":0,"response":{"status":413,"desc":"Message too large"}}"#;
             conn.send(FrameType::Text(false), err.as_bytes())?;
             return Ok(());
         }
-        let mut buf = vec![0u8; len];
-        conn.recv(&mut buf)?;
-        let text = match std::str::from_utf8(&buf) {
+        // Use stack buffer for small messages to avoid heap allocation
+        let mut stack_buf = [0u8; 512];
+        let mut heap_buf = Vec::new();
+        let buf: &mut [u8] = if len <= stack_buf.len() {
+            &mut stack_buf[..len]
+        } else {
+            heap_buf.resize(len, 0);
+            &mut heap_buf
+        };
+        conn.recv(buf)?;
+        let text = match std::str::from_utf8(buf) {
             Ok(s) => s,
             Err(_) => {
                 let err = r#"{"omi":"1.0","ttl":0,"response":{"status":400,"desc":"Invalid UTF-8"}}"#;
@@ -347,13 +411,21 @@ fn start_http_server() -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>, Ws
                 return Ok(());
             }
         };
-        let session = conn.session();
+        let fd = conn.session();
+        let session_id = fd_map.lock().unwrap_or_else(|e| e.into_inner())
+            .get(&fd).copied().unwrap_or(0);
         let resp = {
             let mut eng = eng.lock().unwrap_or_else(|e| e.into_inner());
-            eng.process(msg, now_secs(), Some(session))
+            eng.process(msg, now_secs(), Some(session_id))
         };
-        let json = serde_json::to_string(&resp).unwrap_or_default();
-        conn.send(FrameType::Text(false), json.as_bytes())?;
+        match serde_json::to_string(&resp) {
+            Ok(json) => conn.send(FrameType::Text(false), json.as_bytes())?,
+            Err(e) => {
+                warn!("WS response serialization failed: {}", e);
+                let err = r#"{"omi":"1.0","ttl":0,"response":{"status":500,"desc":"Serialization error"}}"#;
+                conn.send(FrameType::Text(false), err.as_bytes())?;
+            }
+        }
         Ok(())
     })?;
 

@@ -30,10 +30,10 @@ impl Engine {
     /// `now` is the current time as seconds since UNIX epoch, used for
     /// subscription TTL and expiry calculations.
     ///
-    /// `ws_session` is the WebSocket session fd when the request arrives over
-    /// a WebSocket connection. Subscriptions created without a callback will
-    /// use WebSocket delivery instead of poll when this is `Some`.
-    pub fn process(&mut self, msg: OmiMessage, now: f64, ws_session: Option<i32>) -> OmiMessage {
+    /// `ws_session` is the monotonic WebSocket session ID when the request
+    /// arrives over a WebSocket connection. Subscriptions created without a
+    /// callback will use WebSocket delivery instead of poll when this is `Some`.
+    pub fn process(&mut self, msg: OmiMessage, now: f64, ws_session: Option<u64>) -> OmiMessage {
         let ttl = msg.ttl;
         match msg.operation {
             Operation::Read(op) => self.process_read(op, ttl, now, ws_session),
@@ -114,7 +114,7 @@ impl Engine {
 
     // --- Read ---
 
-    fn process_read(&mut self, op: ReadOp, ttl: i64, now: f64, ws_session: Option<i32>) -> OmiMessage {
+    fn process_read(&mut self, op: ReadOp, ttl: i64, now: f64, ws_session: Option<u64>) -> OmiMessage {
         match op.kind() {
             ReadKind::OneTime => self.process_read_one_time(&op),
             ReadKind::Subscription => self.process_read_subscription(op, ttl, now, ws_session),
@@ -156,7 +156,7 @@ impl Engine {
         }
     }
 
-    fn process_read_subscription(&mut self, op: ReadOp, ttl: i64, now: f64, ws_session: Option<i32>) -> OmiMessage {
+    fn process_read_subscription(&mut self, op: ReadOp, ttl: i64, now: f64, ws_session: Option<u64>) -> OmiMessage {
         if ttl <= 0 {
             return OmiResponse::bad_request("Subscription requires ttl > 0");
         }

@@ -10,8 +10,8 @@ pub enum DeliveryTarget {
     Callback(String),
     /// Client polls via rid.
     Poll,
-    /// Push via WebSocket. The i32 is an opaque session fd.
-    WebSocket(i32),
+    /// Push via WebSocket. The u64 is a monotonic session ID (not the raw fd).
+    WebSocket(u64),
 }
 
 /// A single subscription entry.
@@ -243,7 +243,7 @@ impl SubscriptionRegistry {
 
     /// Cancel all subscriptions bound to a WebSocket session.
     /// Returns the number of subscriptions removed.
-    pub fn cancel_by_ws_session(&mut self, session: i32) -> usize {
+    pub fn cancel_by_ws_session(&mut self, session: u64) -> usize {
         let rids: Vec<String> = self
             .subscriptions
             .iter()
@@ -1083,8 +1083,6 @@ mod tests {
         reg.cancel(&[event_rid.clone(), interval_rid.clone()]);
         assert!(reg.is_empty());
     }
-
-    // --- Query methods ---
 
     // --- WebSocket ---
 

@@ -3,8 +3,8 @@
 // Parses the pre-built ELF binary to verify that DRAM, IRAM, and flash usage
 // stay within the chip and module hardware limits.  Run after an ESP build:
 //
-//   . ~/export-esp.sh && cargo build
-//   cargo test --no-default-features --features std,json --test memory_budget
+//   rustup override set esp && cargo build
+//   cargo test-host --test memory_budget
 //
 // Only compiles when the `esp` feature is disabled (host tests).
 

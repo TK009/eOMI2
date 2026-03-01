@@ -9,3 +9,22 @@ The API can be accessed with HTTP or WebSocket and includes a simple data storag
 This project is only the software for the embedded devices of the whole system, which is an improved version of the one implemented in ./doc/master_thesis.pdf.
 
 Main Target devices: Espressif ESP* family
+
+## Development
+
+### Host tests (no hardware needed)
+
+Requires only stable Rust:
+
+    cargo test-host
+
+### Device build (requires ESP toolchain)
+
+Install the ESP toolchain with [espup](https://github.com/esp-rs/espup), then:
+
+    rustup override set esp   # one-time, in the project directory
+    cargo build
+
+### Wi-Fi credentials
+
+Copy `.env.example` to `.env` and fill in your network name and password before building for the device.

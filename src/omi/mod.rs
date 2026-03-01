@@ -13,15 +13,14 @@ use serde::{Deserialize, Serialize, Serializer};
 use serde::ser::SerializeMap;
 
 use self::error::ParseError;
-use self::read::ReadOp;
+pub use self::read::{ReadKind, ReadOp};
 use self::write::WriteOp;
 use self::delete::DeleteOp;
 use self::cancel::CancelOp;
 use self::response::ResponseBody;
-
-pub use self::read::ReadKind;
 pub use self::write::WriteItem;
 pub use self::response::{StatusCode, ResponseResult, ItemStatus, OmiResponse};
+pub use self::subscriptions::Delivery;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OmiMessage {

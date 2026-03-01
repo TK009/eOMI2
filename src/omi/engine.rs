@@ -42,6 +42,24 @@ impl Engine {
         }
     }
 
+    /// Tick interval subscriptions and return any callback deliveries.
+    ///
+    /// For each due subscription, reads the newest value from the tree.
+    /// Poll subscriptions buffer internally; callback subscriptions produce
+    /// `Delivery` entries in the returned vec.
+    pub fn tick(&mut self, now: f64) -> Vec<super::subscriptions::Delivery> {
+        let tree = &self.tree;
+        let (deliveries, _) = self.subscriptions.tick_intervals(now, &|path| {
+            match tree.resolve(path) {
+                Ok(PathTarget::InfoItem(item)) => {
+                    Some(item.query_values(Some(1), None, None, None))
+                }
+                _ => None,
+            }
+        });
+        deliveries
+    }
+
     /// Provide access to the subscription registry for event notification
     /// and interval ticking by platform code.
     pub fn subscriptions(&mut self) -> &mut SubscriptionRegistry {

@@ -17,3 +17,7 @@ pub mod omi;
 pub mod pages;
 #[cfg(feature = "std")]
 pub mod http;
+#[cfg(feature = "esp")]
+pub mod dht11;
+#[cfg(feature = "esp")]
+pub mod nvs;

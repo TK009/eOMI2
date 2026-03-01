@@ -1,6 +1,7 @@
 use anyhow::Result;
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
+    hal::gpio::{AnyIOPin, InputOutput, OpenDrain, PinDriver},
     hal::prelude::Peripherals,
     http::server::{Configuration as HttpConfig, EspHttpServer, ws::EspHttpWsDetachedSender},
     http::Method,
@@ -10,14 +11,20 @@ use esp_idf_svc::{
     ws::FrameType,
 };
 use log::{info, warn};
-use reconfigurable_device::http::{
-    build_read_op, render_landing_page, uri_path, uri_query, omi_uri_to_odf_path, OmiReadParams,
+use reconfigurable_device::device::{
+    build_sensor_tree, collect_writable_items, PATH_HUMIDITY, PATH_TEMPERATURE,
 };
-use reconfigurable_device::omi::{Engine, OmiMessage, OmiResponse};
+use reconfigurable_device::dht11::read_dht11;
+use reconfigurable_device::http::{
+    build_read_op, omi_uri_to_odf_path, render_landing_page, uri_path, uri_query, OmiReadParams,
+};
+use reconfigurable_device::nvs::{load_writable_items, open_nvs, save_writable_items};
+use reconfigurable_device::odf::{OmiValue, PathTargetMut};
+use reconfigurable_device::omi::{Engine, OmiMessage, OmiResponse, Operation};
 use reconfigurable_device::omi::subscriptions::DeliveryTarget;
 use reconfigurable_device::pages::{PageError, PageStore};
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -52,6 +59,13 @@ fn main() -> Result<()> {
     let sys_loop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
 
+    // Clone NVS partition for OMI tree persistence (Wi-Fi consumes the other)
+    let nvs_omi = nvs.clone();
+
+    // Take GPIO4 for DHT11 sensor (open-drain mode)
+    let any_pin: AnyIOPin = peripherals.pins.gpio4.into();
+    let mut dht_pin = PinDriver::input_output_od(any_pin)?;
+
     // Connect to Wi-Fi
     let mut wifi = BlockingWifi::wrap(
         EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs))?,
@@ -62,17 +76,63 @@ fn main() -> Result<()> {
     let ip_info = wifi.wifi().sta_netif().get_ip_info()?;
     info!("Wi-Fi connected. IP: {}", ip_info.ip);
 
+    // Dirty flag: set by HTTP handlers on successful writes, cleared by main loop after NVS save
+    let nvs_dirty = Arc::new(AtomicBool::new(false));
+
     // Start HTTP server
-    let (_server, engine, ws_senders) = start_http_server()?;
+    let (_server, engine, ws_senders) = start_http_server(nvs_dirty.clone())?;
     info!("HTTP server listening on port 80");
 
-    // Main loop — tick subscriptions and keep Wi-Fi alive
+    // Populate sensor tree
+    {
+        let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());
+        eng.tree.write_tree("/", build_sensor_tree()).unwrap();
+        info!("Sensor tree populated: Dht11/Temperature, Dht11/RelativeHumidity");
+    }
+
+    // Load and replay NVS-persisted writable items
+    let mut nvs_store = open_nvs(nvs_omi)?;
+    {
+        let saved_items = load_writable_items(&nvs_store);
+        if !saved_items.is_empty() {
+            let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());
+            for saved in &saved_items {
+                if let Err(e) = eng.tree.write_value(&saved.path, saved.v.clone(), saved.t) {
+                    warn!("Failed to restore {}: {}", saved.path, e);
+                    continue;
+                }
+                // Mark writable (same as engine.mark_writable but that's private)
+                if let Ok(PathTargetMut::InfoItem(item)) = eng.tree.resolve_mut(&saved.path) {
+                    let meta = item.meta.get_or_insert_with(BTreeMap::new);
+                    meta.insert("writable".into(), OmiValue::Bool(true));
+                }
+            }
+            info!("Restored {} writable items from NVS", saved_items.len());
+        }
+    }
+
+    // Main loop — read sensor, tick subscriptions, persist, keep Wi-Fi alive
     loop {
         std::thread::sleep(std::time::Duration::from_secs(5));
         if !wifi.is_connected()? {
             warn!("Wi-Fi disconnected, reconnecting...");
             connect_wifi(&mut wifi)?;
         }
+
+        // Read DHT11 sensor
+        match read_dht11(&mut dht_pin) {
+            Ok(reading) => {
+                let now = now_secs();
+                let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());
+                let _ = eng.tree.write_value(PATH_TEMPERATURE, OmiValue::Number(reading.temperature), Some(now));
+                let _ = eng.tree.write_value(PATH_HUMIDITY, OmiValue::Number(reading.humidity), Some(now));
+            }
+            Err(e) => {
+                warn!("DHT11 read failed: {}, will retry next tick", e);
+            }
+        }
+
+        // Tick subscriptions
         let deliveries = {
             let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());
             eng.tick(now_secs())
@@ -120,6 +180,13 @@ fn main() -> Result<()> {
             for sid in &failed_sessions {
                 eng.subscriptions().cancel_by_ws_session(*sid);
             }
+        }
+
+        // Persist writable items to NVS if dirty
+        if nvs_dirty.swap(false, Ordering::Relaxed) {
+            let eng = engine.lock().unwrap_or_else(|e| e.into_inner());
+            let items = collect_writable_items(&eng.tree);
+            save_writable_items(&mut nvs_store, &items);
         }
     }
 }
@@ -178,12 +245,23 @@ fn send_omi_json(
     Ok(())
 }
 
+/// Check if an OMI response indicates a successful write (status 200 or 201).
+fn is_successful_write_response(resp: &OmiMessage) -> bool {
+    if let Operation::Response(body) = &resp.operation {
+        body.status == 200 || body.status == 201
+    } else {
+        false
+    }
+}
+
 type WsSenders = Arc<Mutex<BTreeMap<u64, EspHttpWsDetachedSender>>>;
 /// Maps raw fd → monotonic session ID so the WS handler can look up the
 /// session ID for an existing connection without allocating new IDs.
 type FdToSession = Arc<Mutex<BTreeMap<i32, u64>>>;
 
-fn start_http_server() -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>, WsSenders)> {
+fn start_http_server(
+    nvs_dirty: Arc<AtomicBool>,
+) -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>, WsSenders)> {
     let config = HttpConfig {
         http_port: 80,
         uri_match_wildcard: true,
@@ -245,6 +323,7 @@ fn start_http_server() -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>, Ws
 
     // POST /omi — OMI message endpoint
     let eng = engine.clone();
+    let dirty = nvs_dirty.clone();
     server.fn_handler::<anyhow::Error, _>("/omi", Method::Post, move |mut req| {
         // Content-Type check: reject non-JSON (allow missing/empty)
         if let Some(ct) = req.header("content-type") {
@@ -289,10 +368,14 @@ fn start_http_server() -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>, Ws
             }
         };
 
+        let is_write = matches!(&msg.operation, Operation::Write(_));
         let resp = {
             let mut eng = eng.lock().unwrap_or_else(|e| e.into_inner());
             eng.process(msg, now_secs(), None)
         };
+        if is_write && is_successful_write_response(&resp) {
+            dirty.store(true, Ordering::Relaxed);
+        }
         send_omi_json(req, &resp)?;
         Ok(())
     })?;
@@ -334,6 +417,7 @@ fn start_http_server() -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>, Ws
     let eng = engine.clone();
     let ws = ws_senders.clone();
     let fd_map = fd_to_session.clone();
+    let dirty = nvs_dirty.clone();
     server.ws_handler("/omi/ws", move |conn| {
         if conn.is_new() {
             let sender = conn.create_detached_sender()?;
@@ -411,6 +495,7 @@ fn start_http_server() -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>, Ws
                 return Ok(());
             }
         };
+        let is_write = matches!(&msg.operation, Operation::Write(_));
         let fd = conn.session();
         let session_id = fd_map.lock().unwrap_or_else(|e| e.into_inner())
             .get(&fd).copied().unwrap_or(0);
@@ -418,6 +503,9 @@ fn start_http_server() -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>, Ws
             let mut eng = eng.lock().unwrap_or_else(|e| e.into_inner());
             eng.process(msg, now_secs(), Some(session_id))
         };
+        if is_write && is_successful_write_response(&resp) {
+            dirty.store(true, Ordering::Relaxed);
+        }
         match serde_json::to_string(&resp) {
             Ok(json) => conn.send(FrameType::Text(false), json.as_bytes())?,
             Err(e) => {

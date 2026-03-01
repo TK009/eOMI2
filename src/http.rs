@@ -6,6 +6,25 @@ use crate::omi::{OmiMessage, Operation, ReadOp};
 use crate::pages::PageStore;
 
 // ---------------------------------------------------------------------------
+// Body / response helpers (platform-independent)
+// ---------------------------------------------------------------------------
+
+/// Body reading error — empty or too large.
+pub enum BodyError {
+    Empty,
+    TooLarge,
+}
+
+/// Check if an OMI response indicates a successful write (status 200 or 201).
+pub fn is_successful_write_response(resp: &OmiMessage) -> bool {
+    if let Operation::Response(body) = &resp.operation {
+        body.status == 200 || body.status == 201
+    } else {
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
 // URI / query-string helpers
 // ---------------------------------------------------------------------------
 
@@ -322,6 +341,35 @@ mod tests {
     #[test]
     fn uri_path_empty_string() {
         assert_eq!(uri_path(""), "");
+    }
+
+    // --- is_successful_write_response ---
+
+    #[test]
+    fn successful_write_200() {
+        use crate::omi::OmiResponse;
+        let msg = OmiResponse::ok(serde_json::json!(null));
+        assert!(is_successful_write_response(&msg));
+    }
+
+    #[test]
+    fn successful_write_201() {
+        use crate::omi::OmiResponse;
+        let msg = OmiResponse::created();
+        assert!(is_successful_write_response(&msg));
+    }
+
+    #[test]
+    fn non_success_response() {
+        use crate::omi::OmiResponse;
+        let msg = OmiResponse::not_found("/Missing");
+        assert!(!is_successful_write_response(&msg));
+    }
+
+    #[test]
+    fn non_response_operation() {
+        let msg = build_read_op("/Foo", &OmiReadParams::default());
+        assert!(!is_successful_write_response(&msg));
     }
 
     // --- build_read_op ---

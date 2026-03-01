@@ -2,14 +2,28 @@
 //
 // Pure functions — no ESP deps — so they're testable on the host.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crate::omi::{OmiMessage, Operation, ReadOp};
 use crate::pages::PageStore;
+
+// ---------------------------------------------------------------------------
+// Time helpers
+// ---------------------------------------------------------------------------
+
+pub fn now_secs() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+}
 
 // ---------------------------------------------------------------------------
 // Body / response helpers (platform-independent)
 // ---------------------------------------------------------------------------
 
 /// Body reading error — empty or too large.
+#[derive(Debug)]
 pub enum BodyError {
     Empty,
     TooLarge,

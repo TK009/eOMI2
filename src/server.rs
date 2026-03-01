@@ -6,7 +6,6 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use esp_idf_svc::{
@@ -18,8 +17,8 @@ use esp_idf_svc::{
 use log::{info, warn};
 
 use crate::http::{
-    build_read_op, is_successful_write_response, omi_uri_to_odf_path, render_landing_page,
-    uri_path, uri_query, BodyError, OmiReadParams,
+    build_read_op, is_successful_write_response, now_secs, omi_uri_to_odf_path,
+    render_landing_page, uri_path, uri_query, BodyError, OmiReadParams,
 };
 use crate::omi::{Engine, OmiMessage, OmiResponse, Operation};
 use crate::pages::{PageError, PageStore};
@@ -33,13 +32,6 @@ pub type WsSenders = Arc<Mutex<BTreeMap<u64, EspHttpWsDetachedSender>>>;
 /// Maps raw fd → monotonic session ID so the WS handler can look up the
 /// session ID for an existing connection without allocating new IDs.
 type FdToSession = Arc<Mutex<BTreeMap<i32, u64>>>;
-
-pub fn now_secs() -> f64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs_f64()
-}
 
 /// Read request body up to `max` bytes.
 fn read_body(
@@ -249,10 +241,11 @@ pub fn start_http_server(
             let session_id = fd_map.lock().unwrap_or_else(|e| e.into_inner()).remove(&fd);
             if let Some(sid) = session_id {
                 info!("WS close: fd={}, session={}", fd, sid);
-                ws.lock().unwrap_or_else(|e| e.into_inner()).remove(&sid);
+                // Lock Engine before WsSenders (documented ordering invariant)
                 eng.lock().unwrap_or_else(|e| e.into_inner())
                     .subscriptions()
                     .cancel_by_ws_session(sid);
+                ws.lock().unwrap_or_else(|e| e.into_inner()).remove(&sid);
             }
             return Ok(());
         }

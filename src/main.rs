@@ -16,7 +16,8 @@ use reconfigurable_device::nvs::{load_writable_items, open_nvs, save_writable_it
 use reconfigurable_device::odf::OmiValue;
 use reconfigurable_device::omi::OmiResponse;
 use reconfigurable_device::omi::subscriptions::DeliveryTarget;
-use reconfigurable_device::server::{now_secs, start_http_server};
+use reconfigurable_device::http::now_secs;
+use reconfigurable_device::server::start_http_server;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 

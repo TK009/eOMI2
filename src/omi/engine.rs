@@ -15,6 +15,8 @@ pub struct Engine {
     /// The O-DF object tree. Public so platform code can populate it on boot.
     pub tree: ObjectTree,
     subscriptions: SubscriptionRegistry,
+    #[cfg(feature = "scripting")]
+    script_engine: Option<crate::scripting::ScriptEngine>,
 }
 
 impl Engine {
@@ -22,6 +24,10 @@ impl Engine {
         Self {
             tree: ObjectTree::new(),
             subscriptions: SubscriptionRegistry::new(),
+            #[cfg(feature = "scripting")]
+            script_engine: crate::scripting::ScriptEngine::new()
+                .map_err(|e| log::warn!("Script engine init failed: {}", e))
+                .ok(),
         }
     }
 
@@ -215,35 +221,60 @@ impl Engine {
     }
 
     fn write_single(&mut self, path: &str, v: OmiValue, t: Option<f64>) -> OmiMessage {
+        // write_single_inner always returns Ok for user-initiated writes
+        self.write_single_inner(path, v, t, 0).unwrap_or_else(|()| {
+            OmiResponse::error("internal write error")
+        })
+    }
+
+    /// Inner write logic with depth tracking for script cascading.
+    ///
+    /// `depth` starts at 0 for user-initiated writes and increments for each
+    /// cascading write triggered by an onwrite script.
+    pub(crate) fn write_single_inner(
+        &mut self,
+        path: &str,
+        v: OmiValue,
+        t: Option<f64>,
+        #[cfg_attr(not(feature = "scripting"), allow(unused))]
+        depth: u8,
+    ) -> Result<OmiMessage, ()> {
         match self.tree.resolve(path) {
             Ok(PathTarget::InfoItem(item)) => {
                 if !item.is_writable() {
-                    return OmiResponse::forbidden(&format!(
+                    return Ok(OmiResponse::forbidden(&format!(
                         "InfoItem at '{}' is not writable",
                         path
-                    ));
+                    )));
                 }
             }
             Ok(PathTarget::Object(_)) | Ok(PathTarget::Root(_)) => {
-                return OmiResponse::bad_request(&format!(
+                return Ok(OmiResponse::bad_request(&format!(
                     "Cannot write value to object path '{}'",
                     path
-                ));
+                )));
             }
             Err(TreeError::NotFound(_)) => {} // will auto-create
-            Err(e) => return Self::tree_error_to_response(e),
+            Err(e) => return Ok(Self::tree_error_to_response(e)),
         }
 
+        let write_value = v.clone();
         match self.tree.write_value(path, v, t) {
             Ok(created) => {
                 if created {
                     self.mark_writable(path);
+                }
+
+                #[cfg(feature = "scripting")]
+                self.run_onwrite_script(path, &write_value, t, depth);
+
+                Ok(if created {
                     OmiResponse::created()
                 } else {
                     OmiResponse::ok(serde_json::json!(null))
-                }
+                })
             }
-            Err(e) => Self::tree_error_to_response(e),
+            Err(e) => Ok(Self::tree_error_to_response(e)),
         }
     }
 
@@ -281,10 +312,17 @@ impl Engine {
             Err(e) => return Self::tree_error_to_item_status(&path, e),
         }
 
+        let write_value = v.clone();
         match self.tree.write_value(&path, v, t) {
             Ok(created) => {
                 if created {
                     self.mark_writable(&path);
+                }
+
+                #[cfg(feature = "scripting")]
+                self.run_onwrite_script(&path, &write_value, t, 0);
+
+                if created {
                     ItemStatus {
                         path,
                         status: StatusCode::Created.as_u16(),
@@ -306,6 +344,107 @@ impl Engine {
         if let Ok(PathTargetMut::InfoItem(item)) = self.tree.resolve_mut(path) {
             let meta = item.meta.get_or_insert_with(BTreeMap::new);
             meta.insert("writable".into(), OmiValue::Bool(true));
+        }
+    }
+
+    /// Execute an onwrite script if the InfoItem at `path` has one in its metadata.
+    ///
+    /// Errors are logged but never fail the write — the value is already written.
+    #[cfg(feature = "scripting")]
+    fn run_onwrite_script(
+        &mut self,
+        path: &str,
+        value: &OmiValue,
+        timestamp: Option<f64>,
+        depth: u8,
+    ) {
+        use crate::scripting::bindings::{MAX_SCRIPT_DEPTH, ScriptCallbackCtx, js_odf_write_item};
+        use crate::scripting::ffi;
+        use crate::scripting::convert::omi_to_mjs;
+
+        if depth >= MAX_SCRIPT_DEPTH {
+            return;
+        }
+
+        // Look up the onwrite script from metadata
+        let script_src = match self.tree.resolve(path) {
+            Ok(PathTarget::InfoItem(item)) => {
+                match item.meta.as_ref().and_then(|m| m.get("onwrite")) {
+                    Some(OmiValue::Str(src)) => src.clone(),
+                    _ => return,
+                }
+            }
+            _ => return,
+        };
+
+        // Get the raw mJS pointer. We do all FFI through raw pointers to avoid
+        // borrowing self.script_engine while also needing &mut self for the ctx.
+        let mjs = match self.script_engine.as_mut() {
+            Some(se) => se.raw(),
+            None => return,
+        };
+
+        // Safety: mjs is valid for the duration of this function. All FFI calls
+        // below are safe because we hold exclusive access via &mut self.
+        unsafe {
+            // Set up `event` object with { value, path, timestamp }
+            let event = ffi::mjs_mk_object(mjs);
+            let js_val = omi_to_mjs(mjs, value);
+            ffi::mjs_set(mjs, event, "value\0".as_ptr() as *const _, 5, js_val);
+            let js_path = ffi::mjs_mk_string(mjs, path.as_ptr() as *const _, path.len(), 1);
+            ffi::mjs_set(mjs, event, "path\0".as_ptr() as *const _, 4, js_path);
+            let js_ts = match timestamp {
+                Some(t) => ffi::mjs_mk_number(mjs, t),
+                None => ffi::mjs_mk_null(),
+            };
+            ffi::mjs_set(mjs, event, "timestamp\0".as_ptr() as *const _, 9, js_ts);
+
+            let global = ffi::mjs_get_global(mjs);
+            ffi::mjs_set(mjs, global, "event\0".as_ptr() as *const _, 5, event);
+
+            // Set up `odf.writeItem` binding
+            let odf = ffi::mjs_mk_object(mjs);
+            let write_fn = ffi::mjs_mk_foreign_func(
+                mjs,
+                Some(std::mem::transmute::<unsafe extern "C" fn(*mut ffi::mjs), extern "C" fn()>(js_odf_write_item)),
+            );
+            ffi::mjs_set(mjs, odf, "writeItem\0".as_ptr() as *const _, 9, write_fn);
+            ffi::mjs_set(mjs, global, "odf\0".as_ptr() as *const _, 3, odf);
+
+            // Set up callback context on the stack
+            let mut ctx = ScriptCallbackCtx {
+                engine: self as *mut Engine,
+                depth,
+                timestamp,
+            };
+            let ctx_foreign = ffi::mjs_mk_foreign(mjs, &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void);
+            ffi::mjs_set(mjs, global, "__ctx\0".as_ptr() as *const _, 5, ctx_foreign);
+
+            // Execute the script
+            let c_src = match std::ffi::CString::new(script_src.as_str()) {
+                Ok(c) => c,
+                Err(_) => {
+                    log::warn!("onwrite script at '{}' contains NUL byte", path);
+                    let null_val = ffi::mjs_mk_null();
+                    ffi::mjs_set(mjs, global, "__ctx\0".as_ptr() as *const _, 5, null_val);
+                    return;
+                }
+            };
+            let mut res: ffi::mjs_val_t = 0;
+            let err = ffi::mjs_exec(mjs, c_src.as_ptr(), &mut res);
+            if err != ffi::MJS_OK {
+                let err_ptr = ffi::mjs_strerror(mjs, err);
+                let msg = if err_ptr.is_null() {
+                    "unknown error"
+                } else {
+                    std::ffi::CStr::from_ptr(err_ptr).to_str().unwrap_or("unknown error")
+                };
+                log::warn!("onwrite script error at '{}': {}", path, msg);
+            }
+
+            // Clear context to prevent stale use
+            let null_val = ffi::mjs_mk_null();
+            ffi::mjs_set(mjs, global, "__ctx\0".as_ptr() as *const _, 5, null_val);
         }
     }
 
@@ -918,6 +1057,121 @@ mod tests {
                 assert_eq!(values[0]["v"], 22.0);
             }
             _ => panic!("expected Single"),
+        }
+    }
+
+    // --- Scripting integration ---
+
+    #[cfg(feature = "scripting")]
+    mod scripting {
+        use super::*;
+
+        /// Set an onwrite script on a writable InfoItem.
+        fn set_onwrite(e: &mut Engine, path: &str, script: &str) {
+            if let Ok(PathTargetMut::InfoItem(item)) = e.tree.resolve_mut(path) {
+                let meta = item.meta.get_or_insert_with(BTreeMap::new);
+                meta.insert("onwrite".into(), OmiValue::Str(script.into()));
+            }
+        }
+
+        /// Read the newest value at a path.
+        fn newest_value(e: &mut Engine, path: &str) -> OmiValue {
+            match e.tree.resolve(path) {
+                Ok(PathTarget::InfoItem(item)) => {
+                    let vals = item.query_values(Some(1), None, None, None);
+                    vals.into_iter().next().map(|v| v.v).unwrap_or(OmiValue::Null)
+                }
+                _ => OmiValue::Null,
+            }
+        }
+
+        #[test]
+        fn onwrite_script_cascades_to_another_path() {
+            let mut e = Engine::new();
+            // Create TempC (writable)
+            e.process(write_msg("/Dev/TempC", OmiValue::Number(0.0)), 0.0, None);
+            // Create TempF (writable)
+            e.process(write_msg("/Dev/TempF", OmiValue::Number(0.0)), 0.0, None);
+            // Set onwrite on TempC to convert C→F
+            set_onwrite(&mut e, "/Dev/TempC",
+                "odf.writeItem(event.value * 9 / 5 + 32, '/Dev/TempF');");
+            // Write 25°C → should cascade to 77°F
+            e.process(write_msg("/Dev/TempC", OmiValue::Number(25.0)), 0.0, None);
+            let temp_f = newest_value(&mut e, "/Dev/TempF");
+            assert_eq!(temp_f, OmiValue::Number(77.0));
+        }
+
+        #[test]
+        fn onwrite_depth_limit_prevents_infinite_recursion() {
+            let mut e = Engine::new();
+            // Create item that writes back to itself
+            e.process(write_msg("/Dev/Loop", OmiValue::Number(0.0)), 0.0, None);
+            set_onwrite(&mut e, "/Dev/Loop",
+                "odf.writeItem(event.value + 1, '/Dev/Loop');");
+            // Write → cascades up to depth limit (4), then stops
+            e.process(write_msg("/Dev/Loop", OmiValue::Number(1.0)), 0.0, None);
+            // Value should be 1 + MAX_SCRIPT_DEPTH - 1 increments = at most 4
+            let val = newest_value(&mut e, "/Dev/Loop");
+            match val {
+                OmiValue::Number(n) => {
+                    // Should have incremented several times but stopped
+                    assert!(n > 1.0, "expected cascading to increment value");
+                    assert!(n <= 5.0, "expected depth limit to stop recursion, got {}", n);
+                }
+                _ => panic!("expected Number, got {:?}", val),
+            }
+        }
+
+        #[test]
+        fn onwrite_script_error_does_not_fail_write() {
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/Temp", OmiValue::Number(0.0)), 0.0, None);
+            // Set a script with a syntax error
+            set_onwrite(&mut e, "/Dev/Temp", "this is not valid javascript!!!");
+            // Write should still succeed (script error is logged, not propagated)
+            let resp = e.process(write_msg("/Dev/Temp", OmiValue::Number(42.0)), 0.0, None);
+            assert_eq!(status(&resp), 200);
+            // Value should be written
+            assert_eq!(newest_value(&mut e, "/Dev/Temp"), OmiValue::Number(42.0));
+        }
+
+        #[test]
+        fn onwrite_chain_a_b_c() {
+            let mut e = Engine::new();
+            // Create three items
+            e.process(write_msg("/Dev/A", OmiValue::Number(0.0)), 0.0, None);
+            e.process(write_msg("/Dev/B", OmiValue::Number(0.0)), 0.0, None);
+            e.process(write_msg("/Dev/C", OmiValue::Number(0.0)), 0.0, None);
+            // A → B (double), B → C (add 10)
+            set_onwrite(&mut e, "/Dev/A",
+                "odf.writeItem(event.value * 2, '/Dev/B');");
+            set_onwrite(&mut e, "/Dev/B",
+                "odf.writeItem(event.value + 10, '/Dev/C');");
+            // Write A=5 → B=10 → C=20
+            e.process(write_msg("/Dev/A", OmiValue::Number(5.0)), 0.0, None);
+            assert_eq!(newest_value(&mut e, "/Dev/A"), OmiValue::Number(5.0));
+            assert_eq!(newest_value(&mut e, "/Dev/B"), OmiValue::Number(10.0));
+            assert_eq!(newest_value(&mut e, "/Dev/C"), OmiValue::Number(20.0));
+        }
+
+        #[test]
+        fn onwrite_global_state_persists() {
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/Counter", OmiValue::Number(0.0)), 0.0, None);
+            e.process(write_msg("/Dev/Total", OmiValue::Number(0.0)), 0.0, None);
+            // Pre-initialize global accumulator via the script engine
+            if let Some(se) = e.script_engine.as_mut() {
+                se.exec("let total = 0;").unwrap();
+            }
+            // Script accumulates a running total in the global variable
+            set_onwrite(&mut e, "/Dev/Counter",
+                "total = total + event.value; odf.writeItem(total, '/Dev/Total');");
+            // Write 10 → total=10
+            e.process(write_msg("/Dev/Counter", OmiValue::Number(10.0)), 0.0, None);
+            assert_eq!(newest_value(&mut e, "/Dev/Total"), OmiValue::Number(10.0));
+            // Write 5 → total=15
+            e.process(write_msg("/Dev/Counter", OmiValue::Number(5.0)), 0.0, None);
+            assert_eq!(newest_value(&mut e, "/Dev/Total"), OmiValue::Number(15.0));
         }
     }
 }

@@ -17,6 +17,8 @@ pub mod omi;
 pub mod pages;
 #[cfg(feature = "std")]
 pub mod http;
+#[cfg(feature = "scripting")]
+pub mod scripting;
 #[cfg(feature = "esp")]
 pub mod dht11;
 #[cfg(feature = "esp")]

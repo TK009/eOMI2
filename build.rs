@@ -1,4 +1,36 @@
 fn main() {
+    #[cfg(feature = "scripting")]
+    {
+        println!("cargo:rerun-if-changed=vendor/mjs/mjs.c");
+        println!("cargo:rerun-if-changed=vendor/mjs/mjs.h");
+        let mut build = cc::Build::new();
+        build
+            .file("vendor/mjs/mjs.c")
+            .include("vendor/mjs")
+            .define("CS_ENABLE_STDIO", Some("0"))
+            .opt_level_str("s")
+            .warnings(false);
+        // When cross-compiling for ESP-IDF targets, the xtensa toolchain
+        // doesn't define ESP_PLATFORM automatically. mJS needs it to select
+        // the correct platform headers.
+        let target = std::env::var("TARGET").unwrap_or_default();
+        if target.contains("espidf") {
+            build.define("ESP_PLATFORM", None);
+        }
+        build.compile("mjs");
+    }
+
+    #[cfg(all(feature = "esp", feature = "psram"))]
+    {
+        // SAFETY: build.rs is single-threaded; set_var is fine here.
+        unsafe {
+            std::env::set_var(
+                "ESP_IDF_SDKCONFIG_DEFAULTS",
+                "sdkconfig.defaults;sdkconfig.psram.defaults",
+            );
+        }
+    }
+
     #[cfg(feature = "esp")]
     {
         embuild::espidf::sysenv::output();

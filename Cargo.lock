@@ -1096,6 +1096,7 @@ name = "reconfigurable-device"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cc",
  "embuild",
  "esp-idf-svc",
  "log",

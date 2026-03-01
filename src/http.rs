@@ -5,6 +5,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::omi::{OmiMessage, Operation, ReadOp};
+use crate::omi::read::ReadKind;
 use crate::pages::PageStore;
 
 // ---------------------------------------------------------------------------
@@ -35,6 +36,15 @@ pub fn is_successful_write_response(resp: &OmiMessage) -> bool {
         body.status == 200 || body.status == 201
     } else {
         false
+    }
+}
+
+/// Check if an OMI operation mutates state (write, delete, cancel, or subscription).
+pub fn is_mutating_operation(op: &Operation) -> bool {
+    match op {
+        Operation::Write(_) | Operation::Delete(_) | Operation::Cancel(_) => true,
+        Operation::Read(read_op) => read_op.kind() == ReadKind::Subscription,
+        Operation::Response(_) => false,
     }
 }
 
@@ -384,6 +394,89 @@ mod tests {
     fn non_response_operation() {
         let msg = build_read_op("/Foo", &OmiReadParams::default());
         assert!(!is_successful_write_response(&msg));
+    }
+
+    // --- is_mutating_operation ---
+
+    #[test]
+    fn mutating_write_single() {
+        let op = Operation::Write(crate::omi::write::WriteOp::Single {
+            path: "/A/B".into(),
+            v: crate::odf::OmiValue::Number(1.0),
+            t: None,
+        });
+        assert!(is_mutating_operation(&op));
+    }
+
+    #[test]
+    fn mutating_delete() {
+        let op = Operation::Delete(crate::omi::delete::DeleteOp {
+            path: "/A".into(),
+        });
+        assert!(is_mutating_operation(&op));
+    }
+
+    #[test]
+    fn mutating_cancel() {
+        let op = Operation::Cancel(crate::omi::cancel::CancelOp {
+            rid: vec!["req-1".into()],
+        });
+        assert!(is_mutating_operation(&op));
+    }
+
+    #[test]
+    fn mutating_subscription() {
+        let op = Operation::Read(ReadOp {
+            path: Some("/A/B".into()),
+            rid: None,
+            newest: None,
+            oldest: None,
+            begin: None,
+            end: None,
+            depth: None,
+            interval: Some(10.0),
+            callback: None,
+        });
+        assert!(is_mutating_operation(&op));
+    }
+
+    #[test]
+    fn non_mutating_read() {
+        let op = Operation::Read(ReadOp {
+            path: Some("/A/B".into()),
+            rid: None,
+            newest: Some(1),
+            oldest: None,
+            begin: None,
+            end: None,
+            depth: None,
+            interval: None,
+            callback: None,
+        });
+        assert!(!is_mutating_operation(&op));
+    }
+
+    #[test]
+    fn non_mutating_poll() {
+        let op = Operation::Read(ReadOp {
+            path: None,
+            rid: Some("req-1".into()),
+            newest: None,
+            oldest: None,
+            begin: None,
+            end: None,
+            depth: None,
+            interval: None,
+            callback: None,
+        });
+        assert!(!is_mutating_operation(&op));
+    }
+
+    #[test]
+    fn non_mutating_response() {
+        use crate::omi::OmiResponse;
+        let msg = OmiResponse::ok(serde_json::json!(null));
+        assert!(!is_mutating_operation(&msg.operation));
     }
 
     // --- build_read_op ---

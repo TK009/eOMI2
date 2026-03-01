@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 const WIFI_SSID: &str = env!("WIFI_SSID");
 const WIFI_PASS: &str = env!("WIFI_PASS");
+const API_TOKEN: &str = env!("API_TOKEN");
 
 fn main() -> Result<()> {
     // Link ESP-IDF patches and initialize logging
@@ -61,7 +62,7 @@ fn main() -> Result<()> {
     let nvs_dirty = Arc::new(AtomicBool::new(false));
 
     // Start HTTP server
-    let (_server, engine, ws_senders) = start_http_server(nvs_dirty.clone())?;
+    let (_server, engine, ws_senders) = start_http_server(nvs_dirty.clone(), API_TOKEN)?;
     info!("HTTP server listening on port 80");
 
     // Populate sensor tree
@@ -164,7 +165,7 @@ fn main() -> Result<()> {
         }
 
         // Persist writable items to NVS if dirty
-        if nvs_dirty.swap(false, Ordering::Acquire) {
+        if nvs_dirty.swap(false, Ordering::SeqCst) {
             let eng = engine.lock().unwrap_or_else(|e| e.into_inner());
             let items = collect_writable_items(&eng.tree);
             save_writable_items(&mut nvs_store, &items);

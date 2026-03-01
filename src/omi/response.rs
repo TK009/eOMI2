@@ -9,9 +9,11 @@ pub enum StatusCode {
     Ok = 200,
     Created = 201,
     BadRequest = 400,
+    Unauthorized = 401,
     Forbidden = 403,
     NotFound = 404,
     Timeout = 408,
+    PayloadTooLarge = 413,
     InternalError = 500,
     NotImplemented = 501,
 }
@@ -26,9 +28,11 @@ impl StatusCode {
             StatusCode::Ok => "OK",
             StatusCode::Created => "Created",
             StatusCode::BadRequest => "Bad Request",
+            StatusCode::Unauthorized => "Unauthorized",
             StatusCode::Forbidden => "Forbidden",
             StatusCode::NotFound => "Not Found",
             StatusCode::Timeout => "Timeout",
+            StatusCode::PayloadTooLarge => "Payload Too Large",
             StatusCode::InternalError => "Internal Server Error",
             StatusCode::NotImplemented => "Not Implemented",
         }
@@ -133,6 +137,24 @@ impl OmiResponse {
         })
     }
 
+    pub fn unauthorized(desc: &str) -> OmiMessage {
+        Self::wrap(ResponseBody {
+            status: StatusCode::Unauthorized.as_u16(),
+            rid: None,
+            desc: Some(desc.into()),
+            result: None,
+        })
+    }
+
+    pub fn payload_too_large(desc: &str) -> OmiMessage {
+        Self::wrap(ResponseBody {
+            status: StatusCode::PayloadTooLarge.as_u16(),
+            rid: None,
+            desc: Some(desc.into()),
+            result: None,
+        })
+    }
+
     pub fn error(desc: &str) -> OmiMessage {
         Self::wrap(ResponseBody {
             status: StatusCode::InternalError.as_u16(),
@@ -193,9 +215,11 @@ mod tests {
         assert_eq!(StatusCode::Ok.as_u16(), 200);
         assert_eq!(StatusCode::Created.as_u16(), 201);
         assert_eq!(StatusCode::BadRequest.as_u16(), 400);
+        assert_eq!(StatusCode::Unauthorized.as_u16(), 401);
         assert_eq!(StatusCode::Forbidden.as_u16(), 403);
         assert_eq!(StatusCode::NotFound.as_u16(), 404);
         assert_eq!(StatusCode::Timeout.as_u16(), 408);
+        assert_eq!(StatusCode::PayloadTooLarge.as_u16(), 413);
         assert_eq!(StatusCode::InternalError.as_u16(), 500);
         assert_eq!(StatusCode::NotImplemented.as_u16(), 501);
     }
@@ -284,6 +308,40 @@ mod tests {
                 }
                 _ => panic!("expected Response"),
             }
+        }
+
+        #[test]
+        fn unauthorized_response() {
+            let msg = OmiResponse::unauthorized("missing token");
+            match &msg.operation {
+                Operation::Response(body) => {
+                    assert_eq!(body.status, 401);
+                    assert_eq!(body.desc.as_deref(), Some("missing token"));
+                }
+                _ => panic!("expected Response"),
+            }
+        }
+
+        #[test]
+        fn payload_too_large_response() {
+            let msg = OmiResponse::payload_too_large("Message too large");
+            match &msg.operation {
+                Operation::Response(body) => {
+                    assert_eq!(body.status, 413);
+                    assert_eq!(body.desc.as_deref(), Some("Message too large"));
+                }
+                _ => panic!("expected Response"),
+            }
+        }
+
+        #[test]
+        fn serialize_payload_too_large() {
+            let msg = OmiResponse::payload_too_large("too big");
+            let json = serde_json::to_value(&msg).unwrap();
+            assert_eq!(json["omi"], "1.0");
+            assert_eq!(json["ttl"], 0);
+            assert_eq!(json["response"]["status"], 413);
+            assert_eq!(json["response"]["desc"], "too big");
         }
 
         #[test]

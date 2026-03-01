@@ -17,8 +17,8 @@ use esp_idf_svc::{
 use log::{info, warn};
 
 use crate::http::{
-    build_read_op, is_successful_write_response, now_secs, omi_uri_to_odf_path,
-    render_landing_page, uri_path, uri_query, BodyError, OmiReadParams,
+    build_read_op, is_mutating_operation, is_successful_write_response, now_secs,
+    omi_uri_to_odf_path, render_landing_page, uri_path, uri_query, BodyError, OmiReadParams,
 };
 use crate::omi::{Engine, OmiMessage, OmiResponse, Operation};
 use crate::pages::{PageError, PageStore};
@@ -31,6 +31,10 @@ static NEXT_WS_SESSION: AtomicU64 = AtomicU64::new(1);
 pub type WsSenders = Arc<Mutex<BTreeMap<u64, EspHttpWsDetachedSender>>>;
 /// Maps raw fd → monotonic session ID so the WS handler can look up the
 /// session ID for an existing connection without allocating new IDs.
+///
+/// Note: WS connections are not authenticated because `EspHttpWsConnection`
+/// does not expose HTTP upgrade headers.  Auth is enforced on the HTTP
+/// endpoints (POST /omi, PATCH, DELETE).
 type FdToSession = Arc<Mutex<BTreeMap<i32, u64>>>;
 
 /// Read request body up to `max` bytes.
@@ -65,8 +69,20 @@ fn send_omi_json(
     Ok(())
 }
 
+/// Check if the request carries a valid `Authorization: Bearer <token>` header.
+fn check_auth(
+    req: &esp_idf_svc::http::server::Request<&mut esp_idf_svc::http::server::EspHttpConnection>,
+    token: &str,
+) -> bool {
+    req.header("authorization")
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .map(|t| t == token)
+        .unwrap_or(false)
+}
+
 pub fn start_http_server(
     nvs_dirty: Arc<AtomicBool>,
+    api_token: &'static str,
 ) -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>, WsSenders)> {
     let config = HttpConfig {
         http_port: 80,
@@ -174,15 +190,35 @@ pub fn start_http_server(
             }
         };
 
+        if is_mutating_operation(&msg.operation) && !check_auth(&req, api_token) {
+            let err = OmiResponse::unauthorized("Authentication required");
+            send_omi_json(req, &err)?;
+            return Ok(());
+        }
+
         let is_write = matches!(&msg.operation, Operation::Write(_));
         let resp = {
             let mut eng = eng.lock().unwrap_or_else(|e| e.into_inner());
             eng.process(msg, now_secs(), None)
         };
         if is_write && is_successful_write_response(&resp) {
-            dirty.store(true, Ordering::Release);
+            dirty.store(true, Ordering::SeqCst);
         }
-        send_omi_json(req, &resp)?;
+        match serde_json::to_string(&resp) {
+            Ok(json) => {
+                let headers = [("Content-Type", "application/json")];
+                req.into_response(200, Some("OK"), &headers)?
+                    .write_all(json.as_bytes())?;
+            }
+            Err(e) => {
+                warn!("OMI response serialization failed: {}", e);
+                let err = OmiResponse::error("Serialization error");
+                let json = serde_json::to_string(&err).unwrap_or_default();
+                let headers = [("Content-Type", "application/json")];
+                req.into_response(500, Some("Internal Server Error"), &headers)?
+                    .write_all(json.as_bytes())?;
+            }
+        }
         Ok(())
     })?;
 
@@ -249,6 +285,16 @@ pub fn start_http_server(
             }
             return Ok(());
         }
+        // Helper: serialize an OmiMessage and send as WS text frame.
+        // Falls back to a hand-written JSON string if serialization itself fails.
+        let send_omi = |conn: &mut esp_idf_svc::http::server::EspHttpWsConnection, msg: OmiMessage| -> Result<()> {
+            let json = serde_json::to_string(&msg).unwrap_or_else(|_|
+                r#"{"omi":"1.0","ttl":0,"response":{"status":500,"desc":"Serialization error"}}"#.into()
+            );
+            conn.send(FrameType::Text(false), json.as_bytes())?;
+            Ok(())
+        };
+
         // Receive frame — first call with empty buf to get length and type
         const MAX_WS_MSG: usize = 16 * 1024;
         let (frame_type, len) = conn.recv(&mut [])?;
@@ -264,15 +310,13 @@ pub fn start_http_server(
                 return Ok(());
             }
             FrameType::Binary(_) => {
-                let err = r#"{"omi":"1.0","ttl":0,"response":{"status":400,"desc":"Binary frames not supported"}}"#;
-                conn.send(FrameType::Text(false), err.as_bytes())?;
+                send_omi(conn, OmiResponse::bad_request("Binary frames not supported"))?;
                 return Ok(());
             }
         }
 
         if len > MAX_WS_MSG {
-            let err = r#"{"omi":"1.0","ttl":0,"response":{"status":413,"desc":"Message too large"}}"#;
-            conn.send(FrameType::Text(false), err.as_bytes())?;
+            send_omi(conn, OmiResponse::payload_too_large("Message too large"))?;
             return Ok(());
         }
         // Use stack buffer for small messages to avoid heap allocation
@@ -288,19 +332,14 @@ pub fn start_http_server(
         let text = match std::str::from_utf8(buf) {
             Ok(s) => s,
             Err(_) => {
-                let err = r#"{"omi":"1.0","ttl":0,"response":{"status":400,"desc":"Invalid UTF-8"}}"#;
-                conn.send(FrameType::Text(false), err.as_bytes())?;
+                send_omi(conn, OmiResponse::bad_request("Invalid UTF-8"))?;
                 return Ok(());
             }
         };
         let msg = match OmiMessage::parse(text) {
             Ok(m) => m,
             Err(e) => {
-                let err = format!(
-                    r#"{{"omi":"1.0","ttl":0,"response":{{"status":400,"desc":"Parse error: {}"}}}}"#,
-                    e
-                );
-                conn.send(FrameType::Text(false), err.as_bytes())?;
+                send_omi(conn, OmiResponse::bad_request(&format!("Parse error: {}", e)))?;
                 return Ok(());
             }
         };
@@ -313,14 +352,13 @@ pub fn start_http_server(
             eng.process(msg, now_secs(), Some(session_id))
         };
         if is_write && is_successful_write_response(&resp) {
-            dirty.store(true, Ordering::Release);
+            dirty.store(true, Ordering::SeqCst);
         }
         match serde_json::to_string(&resp) {
             Ok(json) => conn.send(FrameType::Text(false), json.as_bytes())?,
             Err(e) => {
                 warn!("WS response serialization failed: {}", e);
-                let err = r#"{"omi":"1.0","ttl":0,"response":{"status":500,"desc":"Serialization error"}}"#;
-                conn.send(FrameType::Text(false), err.as_bytes())?;
+                send_omi(conn, OmiResponse::error("Serialization error"))?;
             }
         }
         Ok(())
@@ -329,6 +367,11 @@ pub fn start_http_server(
     // PATCH /* — store an HTML page at the given path
     let s = store.clone();
     server.fn_handler::<anyhow::Error, _>("/*", Method::Patch, move |mut req| {
+        if !check_auth(&req, api_token) {
+            req.into_response(401, Some("Unauthorized"), &[])?
+                .write_all(b"Authentication required")?;
+            return Ok(());
+        }
         let path = uri_path(req.uri()).to_string();
 
         const MAX_PAYLOAD: usize = 64 * 1024;
@@ -388,6 +431,11 @@ pub fn start_http_server(
     // DELETE /* — remove a stored page
     let s = store.clone();
     server.fn_handler::<anyhow::Error, _>("/*", Method::Delete, move |req| {
+        if !check_auth(&req, api_token) {
+            req.into_response(401, Some("Unauthorized"), &[])?
+                .write_all(b"Authentication required")?;
+            return Ok(());
+        }
         let path = uri_path(req.uri()).to_string();
         let mut store = s.lock().unwrap_or_else(|e| e.into_inner());
         match store.remove(&path) {

@@ -19,7 +19,7 @@ use reconfigurable_device::http::{
     build_read_op, omi_uri_to_odf_path, render_landing_page, uri_path, uri_query, OmiReadParams,
 };
 use reconfigurable_device::nvs::{load_writable_items, open_nvs, save_writable_items};
-use reconfigurable_device::odf::{OmiValue, PathTargetMut};
+use reconfigurable_device::odf::OmiValue;
 use reconfigurable_device::omi::{Engine, OmiMessage, OmiResponse, Operation};
 use reconfigurable_device::omi::subscriptions::DeliveryTarget;
 use reconfigurable_device::pages::{PageError, PageStore};
@@ -101,11 +101,7 @@ fn main() -> Result<()> {
                     warn!("Failed to restore {}: {}", saved.path, e);
                     continue;
                 }
-                // Mark writable (same as engine.mark_writable but that's private)
-                if let Ok(PathTargetMut::InfoItem(item)) = eng.tree.resolve_mut(&saved.path) {
-                    let meta = item.meta.get_or_insert_with(BTreeMap::new);
-                    meta.insert("writable".into(), OmiValue::Bool(true));
-                }
+                eng.mark_writable(&saved.path);
             }
             info!("Restored {} writable items from NVS", saved_items.len());
         }
@@ -124,8 +120,12 @@ fn main() -> Result<()> {
             Ok(reading) => {
                 let now = now_secs();
                 let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());
-                let _ = eng.tree.write_value(PATH_TEMPERATURE, OmiValue::Number(reading.temperature), Some(now));
-                let _ = eng.tree.write_value(PATH_HUMIDITY, OmiValue::Number(reading.humidity), Some(now));
+                if let Err(e) = eng.tree.write_value(PATH_TEMPERATURE, OmiValue::Number(reading.temperature as f64), Some(now)) {
+                    warn!("Failed to write {}: {}", PATH_TEMPERATURE, e);
+                }
+                if let Err(e) = eng.tree.write_value(PATH_HUMIDITY, OmiValue::Number(reading.humidity as f64), Some(now)) {
+                    warn!("Failed to write {}: {}", PATH_HUMIDITY, e);
+                }
             }
             Err(e) => {
                 warn!("DHT11 read failed: {}, will retry next tick", e);
@@ -183,7 +183,7 @@ fn main() -> Result<()> {
         }
 
         // Persist writable items to NVS if dirty
-        if nvs_dirty.swap(false, Ordering::Relaxed) {
+        if nvs_dirty.swap(false, Ordering::Acquire) {
             let eng = engine.lock().unwrap_or_else(|e| e.into_inner());
             let items = collect_writable_items(&eng.tree);
             save_writable_items(&mut nvs_store, &items);
@@ -374,7 +374,7 @@ fn start_http_server(
             eng.process(msg, now_secs(), None)
         };
         if is_write && is_successful_write_response(&resp) {
-            dirty.store(true, Ordering::Relaxed);
+            dirty.store(true, Ordering::Release);
         }
         send_omi_json(req, &resp)?;
         Ok(())
@@ -504,7 +504,7 @@ fn start_http_server(
             eng.process(msg, now_secs(), Some(session_id))
         };
         if is_write && is_successful_write_response(&resp) {
-            dirty.store(true, Ordering::Relaxed);
+            dirty.store(true, Ordering::Release);
         }
         match serde_json::to_string(&resp) {
             Ok(json) => conn.send(FrameType::Text(false), json.as_bytes())?,

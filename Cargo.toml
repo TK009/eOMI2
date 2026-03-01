@@ -21,7 +21,7 @@ opt-level = "z"
 [features]
 default = ["std", "esp", "json"]
 std = []
-esp = ["dep:esp-idf-svc", "dep:embuild"]
+esp = ["dep:esp-idf-svc", "dep:embuild", "json"]
 json = ["dep:serde", "dep:serde_json"]
 
 experimental = ["esp-idf-svc/experimental"]

@@ -14,6 +14,11 @@ const NVS_NAMESPACE: &str = "omi_tree";
 /// NVS key for the writable items blob.
 const NVS_KEY: &str = "writable";
 
+/// Maximum blob size to write to NVS. Leave headroom below the NVS page
+/// size (~4096 bytes) to avoid write failures that could leave NVS in an
+/// inconsistent state.
+const MAX_BLOB_SIZE: usize = 4000;
+
 /// Open the NVS namespace for OMI tree persistence.
 pub fn open_nvs(partition: EspNvsPartition<NvsDefault>) -> Result<EspNvs<NvsDefault>, esp_idf_svc::sys::EspError> {
     EspNvs::new(partition, NVS_NAMESPACE, true)
@@ -63,8 +68,13 @@ pub fn load_writable_items(nvs: &EspNvs<NvsDefault>) -> Vec<SavedItem> {
 pub fn save_writable_items(nvs: &mut EspNvs<NvsDefault>, items: &[SavedItem]) {
     match serde_json::to_vec(items) {
         Ok(blob) => {
-            if blob.len() > 4096 {
-                warn!("NVS: writable items blob is {} bytes (>4KB), may exceed NVS limits", blob.len());
+            if blob.len() > MAX_BLOB_SIZE {
+                warn!(
+                    "NVS: writable items blob is {} bytes (>{} limit), skipping write to avoid NVS corruption",
+                    blob.len(),
+                    MAX_BLOB_SIZE,
+                );
+                return;
             }
             match nvs.set_blob(NVS_KEY, &blob) {
                 Ok(()) => {

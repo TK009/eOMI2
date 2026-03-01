@@ -302,7 +302,7 @@ impl Engine {
         }
     }
 
-    fn mark_writable(&mut self, path: &str) {
+    pub fn mark_writable(&mut self, path: &str) {
         if let Ok(PathTargetMut::InfoItem(item)) = self.tree.resolve_mut(path) {
             let meta = item.meta.get_or_insert_with(BTreeMap::new);
             meta.insert("writable".into(), OmiValue::Bool(true));

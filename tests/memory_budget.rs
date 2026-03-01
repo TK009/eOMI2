@@ -85,7 +85,7 @@ fn esp32s2_memory_fits() {
             }
             eprintln!(
                 "SKIP: ESP32-S2 ELF not found.  Build first:\n\
-                 \n  . ~/export-esp.sh && cargo build\n"
+                 \n  rustup override set esp && cargo build\n"
             );
             return;
         }

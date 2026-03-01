@@ -18,6 +18,10 @@ Requires only stable Rust:
 
     cargo test-host
 
+> **Note:** The alias defaults to `x86_64-unknown-linux-gnu`. On other
+> architectures (e.g. Apple Silicon), edit the target triple in
+> `.cargo/config.toml`.
+
 ### Device build (requires ESP toolchain)
 
 Install the ESP toolchain with [espup](https://github.com/esp-rs/espup), then:

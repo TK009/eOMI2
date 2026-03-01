@@ -2,18 +2,21 @@ use anyhow::Result;
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     hal::prelude::Peripherals,
-    http::server::{Configuration as HttpConfig, EspHttpServer},
+    http::server::{Configuration as HttpConfig, EspHttpServer, ws::EspHttpWsDetachedSender},
     http::Method,
     io::{Read, Write},
     nvs::EspDefaultNvsPartition,
     wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi},
+    ws::FrameType,
 };
 use log::{info, warn};
 use reconfigurable_device::http::{
     build_read_op, render_landing_page, uri_path, uri_query, omi_uri_to_odf_path, OmiReadParams,
 };
 use reconfigurable_device::omi::{Engine, OmiMessage, OmiResponse};
+use reconfigurable_device::omi::subscriptions::DeliveryTarget;
 use reconfigurable_device::pages::{PageError, PageStore};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -54,7 +57,7 @@ fn main() -> Result<()> {
     info!("Wi-Fi connected. IP: {}", ip_info.ip);
 
     // Start HTTP server
-    let (_server, engine) = start_http_server()?;
+    let (_server, engine, ws_senders) = start_http_server()?;
     info!("HTTP server listening on port 80");
 
     // Main loop — tick subscriptions and keep Wi-Fi alive
@@ -69,10 +72,26 @@ fn main() -> Result<()> {
             eng.tick(now_secs())
         };
         for d in &deliveries {
-            info!(
-                "Sub delivery: rid={}, path={}, {} values (callback not yet implemented)",
-                d.rid, d.path, d.values.len()
-            );
+            match &d.target {
+                DeliveryTarget::WebSocket(session) => {
+                    let mut senders = ws_senders.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(sender) = senders.get_mut(session) {
+                        let resp = OmiResponse::subscription_event(&d.rid, &d.path, &d.values);
+                        if let Ok(json) = serde_json::to_string(&resp) {
+                            if sender.send(FrameType::Text(false), json.as_bytes()).is_err() {
+                                info!("WS send failed for session {}, will clean up on close", session);
+                            }
+                        }
+                    }
+                }
+                DeliveryTarget::Callback(_url) => {
+                    info!(
+                        "Sub delivery: rid={}, path={}, {} values (callback not yet implemented)",
+                        d.rid, d.path, d.values.len()
+                    );
+                }
+                DeliveryTarget::Poll => {} // handled via poll()
+            }
         }
     }
 }
@@ -131,7 +150,9 @@ fn send_omi_json(
     Ok(())
 }
 
-fn start_http_server() -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>)> {
+type WsSenders = Arc<Mutex<BTreeMap<i32, EspHttpWsDetachedSender>>>;
+
+fn start_http_server() -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>, WsSenders)> {
     let config = HttpConfig {
         http_port: 80,
         uri_match_wildcard: true,
@@ -141,6 +162,7 @@ fn start_http_server() -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>)> {
 
     let store = Arc::new(Mutex::new(PageStore::new()));
     let engine = Arc::new(Mutex::new(Engine::new()));
+    let ws_senders: WsSenders = Arc::new(Mutex::new(BTreeMap::new()));
 
     // Route registration order: exact before wildcard, OMI wildcard before page wildcard.
 
@@ -237,7 +259,7 @@ fn start_http_server() -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>)> {
 
         let resp = {
             let mut eng = eng.lock().unwrap_or_else(|e| e.into_inner());
-            eng.process(msg, now_secs())
+            eng.process(msg, now_secs(), None)
         };
         send_omi_json(req, &resp)?;
         Ok(())
@@ -252,7 +274,7 @@ fn start_http_server() -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>)> {
         let read_msg = build_read_op("/", &params);
         let resp = {
             let mut eng = eng.lock().unwrap_or_else(|e| e.into_inner());
-            eng.process(read_msg, now_secs())
+            eng.process(read_msg, now_secs(), None)
         };
         send_omi_json(req, &resp)?;
         Ok(())
@@ -270,9 +292,68 @@ fn start_http_server() -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>)> {
         let read_msg = build_read_op(odf_path, &params);
         let resp = {
             let mut eng = eng.lock().unwrap_or_else(|e| e.into_inner());
-            eng.process(read_msg, now_secs())
+            eng.process(read_msg, now_secs(), None)
         };
         send_omi_json(req, &resp)?;
+        Ok(())
+    })?;
+
+    // WS /omi/ws — WebSocket endpoint for persistent OMI connections
+    let eng = engine.clone();
+    let ws = ws_senders.clone();
+    server.ws_handler("/omi/ws", move |conn| {
+        if conn.is_new() {
+            let sender = conn.create_detached_sender()?;
+            let session = conn.session();
+            info!("WS connect: session {}", session);
+            ws.lock().unwrap_or_else(|e| e.into_inner()).insert(session, sender);
+            return Ok(());
+        }
+        if conn.is_closed() {
+            let session = conn.session();
+            info!("WS close: session {}", session);
+            ws.lock().unwrap_or_else(|e| e.into_inner()).remove(&session);
+            eng.lock().unwrap_or_else(|e| e.into_inner())
+                .subscriptions()
+                .cancel_by_ws_session(session);
+            return Ok(());
+        }
+        // Receive frame — first call with empty buf to get length
+        const MAX_WS_MSG: usize = 16 * 1024;
+        let (_frame_type, len) = conn.recv(&mut [])?;
+        if len > MAX_WS_MSG {
+            let err = r#"{"omi":"1.0","ttl":0,"response":{"status":413,"desc":"Message too large"}}"#;
+            conn.send(FrameType::Text(false), err.as_bytes())?;
+            return Ok(());
+        }
+        let mut buf = vec![0u8; len];
+        conn.recv(&mut buf)?;
+        let text = match std::str::from_utf8(&buf) {
+            Ok(s) => s,
+            Err(_) => {
+                let err = r#"{"omi":"1.0","ttl":0,"response":{"status":400,"desc":"Invalid UTF-8"}}"#;
+                conn.send(FrameType::Text(false), err.as_bytes())?;
+                return Ok(());
+            }
+        };
+        let msg = match OmiMessage::parse(text) {
+            Ok(m) => m,
+            Err(e) => {
+                let err = format!(
+                    r#"{{"omi":"1.0","ttl":0,"response":{{"status":400,"desc":"Parse error: {}"}}}}"#,
+                    e
+                );
+                conn.send(FrameType::Text(false), err.as_bytes())?;
+                return Ok(());
+            }
+        };
+        let session = conn.session();
+        let resp = {
+            let mut eng = eng.lock().unwrap_or_else(|e| e.into_inner());
+            eng.process(msg, now_secs(), Some(session))
+        };
+        let json = serde_json::to_string(&resp).unwrap_or_default();
+        conn.send(FrameType::Text(false), json.as_bytes())?;
         Ok(())
     })?;
 
@@ -377,5 +458,5 @@ fn start_http_server() -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>)> {
         Ok(())
     })?;
 
-    Ok((server, engine))
+    Ok((server, engine, ws_senders))
 }

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::odf::Value;
 use super::error::ParseError;
 use super::{OmiMessage, Operation};
 
@@ -165,6 +166,20 @@ impl OmiResponse {
             rid: None,
             desc: None,
             result: Some(ResponseResult::Batch(items)),
+        })
+    }
+
+    /// Build a subscription event delivery message (for WebSocket push).
+    #[cfg(feature = "json")]
+    pub fn subscription_event(rid: &str, path: &str, values: &[Value]) -> OmiMessage {
+        Self::wrap(ResponseBody {
+            status: StatusCode::Ok.as_u16(),
+            rid: Some(rid.to_string()),
+            desc: None,
+            result: Some(ResponseResult::Single(serde_json::json!({
+                "path": path,
+                "values": values,
+            }))),
         })
     }
 }

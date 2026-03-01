@@ -64,6 +64,8 @@ impl OmiReadParams {
 
 /// Convert an HTTP URI path to an O-DF path by stripping the `/omi` prefix.
 ///
+/// Paths without the `/omi` prefix are returned as-is.
+///
 /// Returns `(odf_path, has_trailing_slash)`.
 ///
 /// Examples:
@@ -71,6 +73,7 @@ impl OmiReadParams {
 /// - `/omi/`       → `("/", true)`
 /// - `/omi/DevA/`  → `("/DevA", true)`
 /// - `/omi/DevA/T` → `("/DevA/T", false)`
+/// - `/other`      → `("/other", false)`
 pub fn omi_uri_to_odf_path(uri_path: &str) -> (&str, bool) {
     // Strip the "/omi" prefix (exact match only, not "/omission" etc.)
     let rest = if uri_path == "/omi" {
@@ -314,6 +317,11 @@ mod tests {
     #[test]
     fn uri_path_empty_query() {
         assert_eq!(uri_path("/omi?"), "/omi");
+    }
+
+    #[test]
+    fn uri_path_empty_string() {
+        assert_eq!(uri_path(""), "");
     }
 
     // --- build_read_op ---

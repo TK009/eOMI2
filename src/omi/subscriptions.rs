@@ -10,6 +10,8 @@ pub enum DeliveryTarget {
     Callback(String),
     /// Client polls via rid.
     Poll,
+    /// Push via WebSocket. The i32 is an opaque session fd.
+    WebSocket(i32),
 }
 
 /// A single subscription entry.
@@ -145,14 +147,14 @@ impl SubscriptionRegistry {
     /// Create a new subscription.
     ///
     /// - `interval`: -1.0 for event-based, >0 for interval-based
-    /// - `callback`: Some(url) for callback delivery, None for poll
+    /// - `target`: delivery mechanism (Callback, Poll, or WebSocket)
     /// - `ttl`: lifetime in seconds, -1.0 for never expires
     /// - `now`: current unix timestamp
     pub fn create(
         &mut self,
         path: &str,
         interval: f64,
-        callback: Option<&str>,
+        target: DeliveryTarget,
         ttl: f64,
         now: f64,
     ) -> Result<String, &'static str> {
@@ -171,10 +173,6 @@ impl SubscriptionRegistry {
         }
 
         let rid = self.generate_rid();
-        let target = match callback {
-            Some(url) => DeliveryTarget::Callback(url.to_string()),
-            None => DeliveryTarget::Poll,
-        };
 
         let trigger_time = if interval > 0.0 {
             now + interval
@@ -182,11 +180,13 @@ impl SubscriptionRegistry {
             0.0 // unused for event subs
         };
 
+        let is_poll = target == DeliveryTarget::Poll;
+
         let sub = Subscription {
             rid: rid.clone(),
             path: path.to_string(),
             interval,
-            target: target.clone(),
+            target,
             created_at: now,
             ttl,
             trigger_time,
@@ -206,7 +206,7 @@ impl SubscriptionRegistry {
         }
 
         // Create poll buffer if needed
-        if target == DeliveryTarget::Poll {
+        if is_poll {
             self.poll_buffers
                 .insert(rid.clone(), PollBuffer::new(DEFAULT_POLL_CAPACITY));
         }
@@ -241,6 +241,22 @@ impl SubscriptionRegistry {
         removed
     }
 
+    /// Cancel all subscriptions bound to a WebSocket session.
+    /// Returns the number of subscriptions removed.
+    pub fn cancel_by_ws_session(&mut self, session: i32) -> usize {
+        let rids: Vec<String> = self
+            .subscriptions
+            .iter()
+            .filter(|(_, sub)| sub.target == DeliveryTarget::WebSocket(session))
+            .map(|(rid, _)| rid.clone())
+            .collect();
+        let count = rids.len();
+        if count > 0 {
+            self.cancel(&rids);
+        }
+        count
+    }
+
     /// Notify all event-based subscriptions watching the given path.
     ///
     /// - Callback subs produce a `Delivery` in the returned vec.
@@ -267,7 +283,7 @@ impl SubscriptionRegistry {
             }
 
             match &sub.target {
-                DeliveryTarget::Callback(_) => {
+                DeliveryTarget::Callback(_) | DeliveryTarget::WebSocket(_) => {
                     deliveries.push(Delivery {
                         rid: rid.clone(),
                         path: path.to_string(),
@@ -368,7 +384,7 @@ impl SubscriptionRegistry {
             let values = read_current(&sub.path).unwrap_or_default();
 
             match &sub.target {
-                DeliveryTarget::Callback(_) => {
+                DeliveryTarget::Callback(_) | DeliveryTarget::WebSocket(_) => {
                     deliveries.push(Delivery {
                         rid: rid.clone(),
                         path: sub.path.clone(),
@@ -535,7 +551,7 @@ mod tests {
     #[test]
     fn create_event_subscription() {
         let mut reg = SubscriptionRegistry::new();
-        let rid = reg.create("/A/Temp", -1.0, Some("http://cb.example.com"), 60.0, 1000.0).unwrap();
+        let rid = reg.create("/A/Temp", -1.0, DeliveryTarget::Callback("http://cb.example.com".into()), 60.0, 1000.0).unwrap();
         assert!(rid.starts_with("sub-"));
         assert_eq!(reg.len(), 1);
         assert!(reg.contains(&rid));
@@ -550,7 +566,7 @@ mod tests {
     #[test]
     fn create_interval_subscription() {
         let mut reg = SubscriptionRegistry::new();
-        let rid = reg.create("/A/Temp", 5.0, Some("http://cb.example.com"), 60.0, 1000.0).unwrap();
+        let rid = reg.create("/A/Temp", 5.0, DeliveryTarget::Callback("http://cb.example.com".into()), 60.0, 1000.0).unwrap();
         assert_eq!(reg.len(), 1);
 
         // Should be in interval queue, not event index
@@ -566,7 +582,7 @@ mod tests {
     #[test]
     fn create_poll_subscription() {
         let mut reg = SubscriptionRegistry::new();
-        let rid = reg.create("/A/Temp", -1.0, None, 60.0, 1000.0).unwrap();
+        let rid = reg.create("/A/Temp", -1.0, DeliveryTarget::Poll, 60.0, 1000.0).unwrap();
         assert_eq!(reg.len(), 1);
 
         // Should have a poll buffer
@@ -576,28 +592,28 @@ mod tests {
     #[test]
     fn create_reject_zero_interval() {
         let mut reg = SubscriptionRegistry::new();
-        let err = reg.create("/A/Temp", 0.0, None, 60.0, 1000.0).unwrap_err();
+        let err = reg.create("/A/Temp", 0.0, DeliveryTarget::Poll, 60.0, 1000.0).unwrap_err();
         assert_eq!(err, "interval must be -1 or positive");
     }
 
     #[test]
     fn create_reject_negative_interval() {
         let mut reg = SubscriptionRegistry::new();
-        let err = reg.create("/A/Temp", -2.0, None, 60.0, 1000.0).unwrap_err();
+        let err = reg.create("/A/Temp", -2.0, DeliveryTarget::Poll, 60.0, 1000.0).unwrap_err();
         assert_eq!(err, "interval must be -1 or positive");
     }
 
     #[test]
     fn create_reject_too_small_interval() {
         let mut reg = SubscriptionRegistry::new();
-        let err = reg.create("/A/Temp", 0.05, None, 60.0, 1000.0).unwrap_err();
+        let err = reg.create("/A/Temp", 0.05, DeliveryTarget::Poll, 60.0, 1000.0).unwrap_err();
         assert_eq!(err, "interval must be >= 0.1 seconds");
     }
 
     #[test]
     fn create_reject_fractional_negative() {
         let mut reg = SubscriptionRegistry::new();
-        let err = reg.create("/A/Temp", -0.5, None, 60.0, 1000.0).unwrap_err();
+        let err = reg.create("/A/Temp", -0.5, DeliveryTarget::Poll, 60.0, 1000.0).unwrap_err();
         assert_eq!(err, "interval must be -1 or positive");
     }
 
@@ -608,13 +624,13 @@ mod tests {
             reg.create(
                 &format!("/path/{}", i),
                 -1.0,
-                Some("http://cb"),
+                DeliveryTarget::Callback("http://cb".into()),
                 -1.0,
                 1000.0,
             )
             .unwrap();
         }
-        let err = reg.create("/overflow", -1.0, Some("http://cb"), -1.0, 1000.0).unwrap_err();
+        let err = reg.create("/overflow", -1.0, DeliveryTarget::Callback("http://cb".into()), -1.0, 1000.0).unwrap_err();
         assert_eq!(err, "subscription limit reached");
         assert_eq!(reg.len(), MAX_SUBSCRIPTIONS);
     }
@@ -622,8 +638,8 @@ mod tests {
     #[test]
     fn create_multiple_on_same_path() {
         let mut reg = SubscriptionRegistry::new();
-        let r1 = reg.create("/A/Temp", -1.0, Some("http://cb1"), 60.0, 1000.0).unwrap();
-        let r2 = reg.create("/A/Temp", -1.0, Some("http://cb2"), 60.0, 1000.0).unwrap();
+        let r1 = reg.create("/A/Temp", -1.0, DeliveryTarget::Callback("http://cb1".into()), 60.0, 1000.0).unwrap();
+        let r2 = reg.create("/A/Temp", -1.0, DeliveryTarget::Callback("http://cb2".into()), 60.0, 1000.0).unwrap();
         assert_ne!(r1, r2);
         assert_eq!(reg.len(), 2);
 
@@ -636,7 +652,7 @@ mod tests {
     #[test]
     fn cancel_single() {
         let mut reg = SubscriptionRegistry::new();
-        let rid = reg.create("/A/Temp", -1.0, Some("http://cb"), 60.0, 1000.0).unwrap();
+        let rid = reg.create("/A/Temp", -1.0, DeliveryTarget::Callback("http://cb".into()), 60.0, 1000.0).unwrap();
         let removed = reg.cancel(&[rid.clone()]);
         assert_eq!(removed, 1);
         assert_eq!(reg.len(), 0);
@@ -646,9 +662,9 @@ mod tests {
     #[test]
     fn cancel_multi() {
         let mut reg = SubscriptionRegistry::new();
-        let r1 = reg.create("/A", -1.0, Some("http://cb"), 60.0, 1000.0).unwrap();
-        let r2 = reg.create("/B", 5.0, Some("http://cb"), 60.0, 1000.0).unwrap();
-        let r3 = reg.create("/C", -1.0, None, 60.0, 1000.0).unwrap();
+        let r1 = reg.create("/A", -1.0, DeliveryTarget::Callback("http://cb".into()), 60.0, 1000.0).unwrap();
+        let r2 = reg.create("/B", 5.0, DeliveryTarget::Callback("http://cb".into()), 60.0, 1000.0).unwrap();
+        let r3 = reg.create("/C", -1.0, DeliveryTarget::Poll, 60.0, 1000.0).unwrap();
         assert_eq!(reg.len(), 3);
 
         let removed = reg.cancel(&[r1, r2, r3]);
@@ -669,7 +685,7 @@ mod tests {
     #[test]
     fn cancel_removes_event_index_and_poll_buffer() {
         let mut reg = SubscriptionRegistry::new();
-        let rid = reg.create("/A/Temp", -1.0, None, 60.0, 1000.0).unwrap();
+        let rid = reg.create("/A/Temp", -1.0, DeliveryTarget::Poll, 60.0, 1000.0).unwrap();
         assert!(reg.event_index.contains_key("/A/Temp"));
         assert!(reg.poll_buffers.contains_key(&rid));
 
@@ -681,7 +697,7 @@ mod tests {
     #[test]
     fn cancel_removes_interval_queue_entry() {
         let mut reg = SubscriptionRegistry::new();
-        let rid = reg.create("/A/Temp", 5.0, Some("http://cb"), 60.0, 1000.0).unwrap();
+        let rid = reg.create("/A/Temp", 5.0, DeliveryTarget::Callback("http://cb".into()), 60.0, 1000.0).unwrap();
         assert_eq!(reg.interval_queue.len(), 1);
 
         reg.cancel(&[rid]);
@@ -693,7 +709,7 @@ mod tests {
     #[test]
     fn notify_event_callback_delivery() {
         let mut reg = SubscriptionRegistry::new();
-        let rid = reg.create("/A/Temp", -1.0, Some("http://cb"), 60.0, 1000.0).unwrap();
+        let rid = reg.create("/A/Temp", -1.0, DeliveryTarget::Callback("http://cb".into()), 60.0, 1000.0).unwrap();
 
         let values = vec![val(22.5, 1010.0)];
         let deliveries = reg.notify_event("/A/Temp", &values, 1010.0);
@@ -707,7 +723,7 @@ mod tests {
     #[test]
     fn notify_event_poll_buffering() {
         let mut reg = SubscriptionRegistry::new();
-        let rid = reg.create("/A/Temp", -1.0, None, 60.0, 1000.0).unwrap();
+        let rid = reg.create("/A/Temp", -1.0, DeliveryTarget::Poll, 60.0, 1000.0).unwrap();
 
         let values = vec![val(22.5, 1010.0)];
         let deliveries = reg.notify_event("/A/Temp", &values, 1010.0);
@@ -729,7 +745,7 @@ mod tests {
     #[test]
     fn notify_event_expired_cleanup() {
         let mut reg = SubscriptionRegistry::new();
-        let rid = reg.create("/A/Temp", -1.0, Some("http://cb"), 10.0, 1000.0).unwrap();
+        let rid = reg.create("/A/Temp", -1.0, DeliveryTarget::Callback("http://cb".into()), 10.0, 1000.0).unwrap();
 
         // Notify after TTL expired (created_at=1000, ttl=10, now=1020 > 1010)
         let deliveries = reg.notify_event("/A/Temp", &[val(1.0, 1020.0)], 1020.0);
@@ -741,7 +757,7 @@ mod tests {
     #[test]
     fn notify_event_ttl_forever() {
         let mut reg = SubscriptionRegistry::new();
-        let _rid = reg.create("/A/Temp", -1.0, Some("http://cb"), -1.0, 1000.0).unwrap();
+        let _rid = reg.create("/A/Temp", -1.0, DeliveryTarget::Callback("http://cb".into()), -1.0, 1000.0).unwrap();
 
         // Should still deliver even at very large timestamps
         let deliveries = reg.notify_event("/A/Temp", &[val(1.0, 999999.0)], 999999.0);
@@ -753,7 +769,7 @@ mod tests {
     #[test]
     fn tick_single_due() {
         let mut reg = SubscriptionRegistry::new();
-        let rid = reg.create("/A/Temp", 5.0, Some("http://cb"), 60.0, 1000.0).unwrap();
+        let rid = reg.create("/A/Temp", 5.0, DeliveryTarget::Callback("http://cb".into()), 60.0, 1000.0).unwrap();
 
         // Trigger at 1005, tick at 1006
         let (deliveries, next) = reg.tick_intervals(1006.0, &|_path| {
@@ -770,7 +786,7 @@ mod tests {
     #[test]
     fn tick_not_yet_due() {
         let mut reg = SubscriptionRegistry::new();
-        let _rid = reg.create("/A/Temp", 5.0, Some("http://cb"), 60.0, 1000.0).unwrap();
+        let _rid = reg.create("/A/Temp", 5.0, DeliveryTarget::Callback("http://cb".into()), 60.0, 1000.0).unwrap();
 
         // Trigger at 1005, tick at 1003 — not due yet
         let (deliveries, next) = reg.tick_intervals(1003.0, &|_| Some(vec![]));
@@ -781,7 +797,7 @@ mod tests {
     #[test]
     fn tick_reschedule() {
         let mut reg = SubscriptionRegistry::new();
-        let _rid = reg.create("/A/Temp", 5.0, Some("http://cb"), 60.0, 1000.0).unwrap();
+        let _rid = reg.create("/A/Temp", 5.0, DeliveryTarget::Callback("http://cb".into()), 60.0, 1000.0).unwrap();
 
         // First tick at 1006 (due at 1005)
         let (_, next) = reg.tick_intervals(1006.0, &|_| Some(vec![val(1.0, 1006.0)]));
@@ -798,7 +814,7 @@ mod tests {
         let mut reg = SubscriptionRegistry::new();
         // TTL=12 means expires at 1012. Interval=5, first trigger at 1005, reschedule to 1010.
         // Next would be 1015 > 1012, so subscription should be removed.
-        let rid = reg.create("/A/Temp", 5.0, Some("http://cb"), 12.0, 1000.0).unwrap();
+        let rid = reg.create("/A/Temp", 5.0, DeliveryTarget::Callback("http://cb".into()), 12.0, 1000.0).unwrap();
 
         // First tick at 1006
         let (deliveries, _) = reg.tick_intervals(1006.0, &|_| Some(vec![val(1.0, 1006.0)]));
@@ -815,8 +831,8 @@ mod tests {
     #[test]
     fn tick_multiple_due() {
         let mut reg = SubscriptionRegistry::new();
-        let r1 = reg.create("/A", 5.0, Some("http://cb"), 60.0, 1000.0).unwrap();
-        let r2 = reg.create("/B", 3.0, Some("http://cb"), 60.0, 1000.0).unwrap();
+        let r1 = reg.create("/A", 5.0, DeliveryTarget::Callback("http://cb".into()), 60.0, 1000.0).unwrap();
+        let r2 = reg.create("/B", 3.0, DeliveryTarget::Callback("http://cb".into()), 60.0, 1000.0).unwrap();
 
         // r2 triggers at 1003, r1 at 1005. Tick at 1006:
         //   - r2 fires (trigger 1003), rescheduled to 1006
@@ -832,9 +848,9 @@ mod tests {
     #[test]
     fn tick_ordering_preserved() {
         let mut reg = SubscriptionRegistry::new();
-        let _r1 = reg.create("/A", 10.0, Some("http://cb"), 60.0, 1000.0).unwrap();
-        let _r2 = reg.create("/B", 3.0, Some("http://cb"), 60.0, 1000.0).unwrap();
-        let _r3 = reg.create("/C", 7.0, Some("http://cb"), 60.0, 1000.0).unwrap();
+        let _r1 = reg.create("/A", 10.0, DeliveryTarget::Callback("http://cb".into()), 60.0, 1000.0).unwrap();
+        let _r2 = reg.create("/B", 3.0, DeliveryTarget::Callback("http://cb".into()), 60.0, 1000.0).unwrap();
+        let _r3 = reg.create("/C", 7.0, DeliveryTarget::Callback("http://cb".into()), 60.0, 1000.0).unwrap();
 
         // Queue should be sorted: r2(1003), r3(1007), r1(1010)
         assert_eq!(reg.next_trigger_time(), Some(1003.0));
@@ -843,7 +859,7 @@ mod tests {
     #[test]
     fn tick_poll_buffering() {
         let mut reg = SubscriptionRegistry::new();
-        let rid = reg.create("/A/Temp", 5.0, None, 60.0, 1000.0).unwrap();
+        let rid = reg.create("/A/Temp", 5.0, DeliveryTarget::Poll, 60.0, 1000.0).unwrap();
 
         let (deliveries, _) = reg.tick_intervals(1006.0, &|_| Some(vec![val(22.5, 1006.0)]));
         // Poll subs don't produce deliveries
@@ -867,7 +883,7 @@ mod tests {
     #[test]
     fn poll_buffered_retrieval() {
         let mut reg = SubscriptionRegistry::new();
-        let rid = reg.create("/A/Temp", -1.0, None, 60.0, 1000.0).unwrap();
+        let rid = reg.create("/A/Temp", -1.0, DeliveryTarget::Poll, 60.0, 1000.0).unwrap();
 
         reg.notify_event("/A/Temp", &[val(22.5, 1010.0), val(23.0, 1011.0)], 1011.0);
         match reg.poll(&rid, 1012.0) {
@@ -888,7 +904,7 @@ mod tests {
     #[test]
     fn poll_expired_sub() {
         let mut reg = SubscriptionRegistry::new();
-        let rid = reg.create("/A/Temp", -1.0, None, 10.0, 1000.0).unwrap();
+        let rid = reg.create("/A/Temp", -1.0, DeliveryTarget::Poll, 10.0, 1000.0).unwrap();
         reg.notify_event("/A/Temp", &[val(1.0, 1005.0)], 1005.0);
 
         // Poll after expiry
@@ -899,7 +915,7 @@ mod tests {
     #[test]
     fn poll_consecutive_drains() {
         let mut reg = SubscriptionRegistry::new();
-        let rid = reg.create("/A/Temp", -1.0, None, 60.0, 1000.0).unwrap();
+        let rid = reg.create("/A/Temp", -1.0, DeliveryTarget::Poll, 60.0, 1000.0).unwrap();
 
         reg.notify_event("/A/Temp", &[val(1.0, 1001.0)], 1001.0);
         match reg.poll(&rid, 1002.0) {
@@ -929,8 +945,8 @@ mod tests {
     #[test]
     fn expire_removes_expired() {
         let mut reg = SubscriptionRegistry::new();
-        reg.create("/A", -1.0, Some("http://cb"), 10.0, 1000.0).unwrap();
-        reg.create("/B", -1.0, Some("http://cb"), 20.0, 1000.0).unwrap();
+        reg.create("/A", -1.0, DeliveryTarget::Callback("http://cb".into()), 10.0, 1000.0).unwrap();
+        reg.create("/B", -1.0, DeliveryTarget::Callback("http://cb".into()), 20.0, 1000.0).unwrap();
 
         // At t=1015, first sub expired (created 1000, ttl 10 → expires 1010)
         // second still active (expires 1020)
@@ -942,7 +958,7 @@ mod tests {
     #[test]
     fn expire_keeps_active() {
         let mut reg = SubscriptionRegistry::new();
-        reg.create("/A", -1.0, Some("http://cb"), 60.0, 1000.0).unwrap();
+        reg.create("/A", -1.0, DeliveryTarget::Callback("http://cb".into()), 60.0, 1000.0).unwrap();
         let removed = reg.expire(1010.0);
         assert_eq!(removed, 0);
         assert_eq!(reg.len(), 1);
@@ -951,7 +967,7 @@ mod tests {
     #[test]
     fn expire_keeps_forever() {
         let mut reg = SubscriptionRegistry::new();
-        reg.create("/A", -1.0, Some("http://cb"), -1.0, 1000.0).unwrap();
+        reg.create("/A", -1.0, DeliveryTarget::Callback("http://cb".into()), -1.0, 1000.0).unwrap();
         let removed = reg.expire(999999.0);
         assert_eq!(removed, 0);
         assert_eq!(reg.len(), 1);
@@ -964,7 +980,7 @@ mod tests {
         let mut reg = SubscriptionRegistry::new();
 
         // Create event poll subscription
-        let rid = reg.create("/Sensor/Temp", -1.0, None, 60.0, 1000.0).unwrap();
+        let rid = reg.create("/Sensor/Temp", -1.0, DeliveryTarget::Poll, 60.0, 1000.0).unwrap();
         assert_eq!(reg.len(), 1);
 
         // Notify event
@@ -997,7 +1013,7 @@ mod tests {
         let mut reg = SubscriptionRegistry::new();
 
         // Create interval callback subscription, TTL=20
-        let rid = reg.create("/Sensor/Temp", 5.0, Some("http://cb"), 20.0, 1000.0).unwrap();
+        let rid = reg.create("/Sensor/Temp", 5.0, DeliveryTarget::Callback("http://cb".into()), 20.0, 1000.0).unwrap();
 
         // Tick at 1006 — first delivery
         let (deliveries, next) = reg.tick_intervals(1006.0, &|_| {
@@ -1037,9 +1053,9 @@ mod tests {
         let mut reg = SubscriptionRegistry::new();
 
         // Event sub (poll)
-        let event_rid = reg.create("/Sensor/Temp", -1.0, None, 60.0, 1000.0).unwrap();
+        let event_rid = reg.create("/Sensor/Temp", -1.0, DeliveryTarget::Poll, 60.0, 1000.0).unwrap();
         // Interval sub (callback)
-        let interval_rid = reg.create("/Sensor/Temp", 5.0, Some("http://cb"), 60.0, 1000.0).unwrap();
+        let interval_rid = reg.create("/Sensor/Temp", 5.0, DeliveryTarget::Callback("http://cb".into()), 60.0, 1000.0).unwrap();
 
         assert_eq!(reg.len(), 2);
 
@@ -1070,6 +1086,67 @@ mod tests {
 
     // --- Query methods ---
 
+    // --- WebSocket ---
+
+    #[test]
+    fn create_websocket_subscription() {
+        let mut reg = SubscriptionRegistry::new();
+        let rid = reg.create("/A/Temp", -1.0, DeliveryTarget::WebSocket(42), 60.0, 1000.0).unwrap();
+        assert_eq!(reg.len(), 1);
+        assert!(reg.contains(&rid));
+        // WebSocket subs should NOT have a poll buffer
+        assert!(!reg.poll_buffers.contains_key(&rid));
+    }
+
+    #[test]
+    fn cancel_by_ws_session_removes_matching() {
+        let mut reg = SubscriptionRegistry::new();
+        let r1 = reg.create("/A", -1.0, DeliveryTarget::WebSocket(10), 60.0, 1000.0).unwrap();
+        let r2 = reg.create("/B", 5.0, DeliveryTarget::WebSocket(10), 60.0, 1000.0).unwrap();
+        let r3 = reg.create("/C", -1.0, DeliveryTarget::WebSocket(20), 60.0, 1000.0).unwrap();
+        let r4 = reg.create("/D", -1.0, DeliveryTarget::Poll, 60.0, 1000.0).unwrap();
+        assert_eq!(reg.len(), 4);
+
+        let removed = reg.cancel_by_ws_session(10);
+        assert_eq!(removed, 2);
+        assert!(!reg.contains(&r1));
+        assert!(!reg.contains(&r2));
+        assert!(reg.contains(&r3));
+        assert!(reg.contains(&r4));
+    }
+
+    #[test]
+    fn cancel_by_ws_session_no_match() {
+        let mut reg = SubscriptionRegistry::new();
+        reg.create("/A", -1.0, DeliveryTarget::WebSocket(10), 60.0, 1000.0).unwrap();
+        let removed = reg.cancel_by_ws_session(99);
+        assert_eq!(removed, 0);
+        assert_eq!(reg.len(), 1);
+    }
+
+    #[test]
+    fn notify_event_websocket_delivery() {
+        let mut reg = SubscriptionRegistry::new();
+        let rid = reg.create("/A/Temp", -1.0, DeliveryTarget::WebSocket(7), 60.0, 1000.0).unwrap();
+        let deliveries = reg.notify_event("/A/Temp", &[val(22.5, 1010.0)], 1010.0);
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].rid, rid);
+        assert_eq!(deliveries[0].target, DeliveryTarget::WebSocket(7));
+    }
+
+    #[test]
+    fn tick_websocket_delivery() {
+        let mut reg = SubscriptionRegistry::new();
+        let rid = reg.create("/A/Temp", 5.0, DeliveryTarget::WebSocket(3), 60.0, 1000.0).unwrap();
+        let (deliveries, next) = reg.tick_intervals(1006.0, &|_| Some(vec![val(22.5, 1006.0)]));
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].rid, rid);
+        assert_eq!(deliveries[0].target, DeliveryTarget::WebSocket(3));
+        assert_eq!(next, Some(1010.0));
+    }
+
+    // --- Query methods ---
+
     #[test]
     fn query_methods() {
         let mut reg = SubscriptionRegistry::new();
@@ -1077,7 +1154,7 @@ mod tests {
         assert_eq!(reg.len(), 0);
         assert_eq!(reg.next_trigger_time(), None);
 
-        let rid = reg.create("/A", 5.0, Some("http://cb"), 60.0, 1000.0).unwrap();
+        let rid = reg.create("/A", 5.0, DeliveryTarget::Callback("http://cb".into()), 60.0, 1000.0).unwrap();
         assert!(!reg.is_empty());
         assert_eq!(reg.len(), 1);
         assert!(reg.contains(&rid));

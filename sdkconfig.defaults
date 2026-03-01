@@ -7,5 +7,8 @@ CONFIG_ESP_WIFI_ENABLED=y
 # HTTP server: allow reasonable header sizes for POST payloads
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
 
+# WebSocket support for the HTTP server
+CONFIG_HTTPD_WS_SUPPORT=y
+
 # Use 1000 Hz tick for 1ms sleep granularity
 CONFIG_FREERTOS_HZ=1000

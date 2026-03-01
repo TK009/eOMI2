@@ -5,7 +5,7 @@ use super::cancel::CancelOp;
 use super::delete::DeleteOp;
 use super::read::{ReadKind, ReadOp};
 use super::response::{ItemStatus, OmiResponse, ResponseBody, StatusCode};
-use super::subscriptions::{PollResult, SubscriptionRegistry};
+use super::subscriptions::{DeliveryTarget, PollResult, SubscriptionRegistry};
 use super::write::{WriteItem, WriteOp};
 use super::{OmiMessage, Operation};
 
@@ -29,10 +29,14 @@ impl Engine {
     ///
     /// `now` is the current time as seconds since UNIX epoch, used for
     /// subscription TTL and expiry calculations.
-    pub fn process(&mut self, msg: OmiMessage, now: f64) -> OmiMessage {
+    ///
+    /// `ws_session` is the WebSocket session fd when the request arrives over
+    /// a WebSocket connection. Subscriptions created without a callback will
+    /// use WebSocket delivery instead of poll when this is `Some`.
+    pub fn process(&mut self, msg: OmiMessage, now: f64, ws_session: Option<i32>) -> OmiMessage {
         let ttl = msg.ttl;
         match msg.operation {
-            Operation::Read(op) => self.process_read(op, ttl, now),
+            Operation::Read(op) => self.process_read(op, ttl, now, ws_session),
             Operation::Write(op) => self.process_write(op),
             Operation::Delete(op) => self.process_delete(op),
             Operation::Cancel(op) => self.process_cancel(op),
@@ -110,10 +114,10 @@ impl Engine {
 
     // --- Read ---
 
-    fn process_read(&mut self, op: ReadOp, ttl: i64, now: f64) -> OmiMessage {
+    fn process_read(&mut self, op: ReadOp, ttl: i64, now: f64, ws_session: Option<i32>) -> OmiMessage {
         match op.kind() {
             ReadKind::OneTime => self.process_read_one_time(&op),
-            ReadKind::Subscription => self.process_read_subscription(op, ttl, now),
+            ReadKind::Subscription => self.process_read_subscription(op, ttl, now, ws_session),
             ReadKind::Poll => self.process_read_poll(&op, now),
         }
     }
@@ -152,7 +156,7 @@ impl Engine {
         }
     }
 
-    fn process_read_subscription(&mut self, op: ReadOp, ttl: i64, now: f64) -> OmiMessage {
+    fn process_read_subscription(&mut self, op: ReadOp, ttl: i64, now: f64, ws_session: Option<i32>) -> OmiMessage {
         if ttl <= 0 {
             return OmiResponse::bad_request("Subscription requires ttl > 0");
         }
@@ -161,7 +165,14 @@ impl Engine {
             return Self::tree_error_to_response(e);
         }
         let interval = op.interval.unwrap_or(-1.0);
-        match self.subscriptions.create(path, interval, op.callback.as_deref(), ttl as f64, now) {
+        let target = if let Some(url) = op.callback {
+            DeliveryTarget::Callback(url)
+        } else if let Some(session) = ws_session {
+            DeliveryTarget::WebSocket(session)
+        } else {
+            DeliveryTarget::Poll
+        };
+        match self.subscriptions.create(path, interval, target, ttl as f64, now) {
             Ok(rid) => OmiResponse::ok_with_rid(rid, serde_json::json!(null)),
             Err(e) => OmiResponse::bad_request(e),
         }
@@ -483,7 +494,7 @@ mod tests {
     #[test]
     fn read_info_item() {
         let mut e = setup();
-        let resp = e.process(read_msg("/Sensor1/Temperature"), 0.0);
+        let resp = e.process(read_msg("/Sensor1/Temperature"), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
             ResponseResult::Single(val) => {
@@ -497,7 +508,7 @@ mod tests {
     #[test]
     fn read_info_item_newest() {
         let mut e = setup();
-        let resp = e.process(read_with("/Sensor1/Temperature", Some(1), None, None, None, None), 0.0);
+        let resp = e.process(read_with("/Sensor1/Temperature", Some(1), None, None, None, None), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
             ResponseResult::Single(val) => {
@@ -512,7 +523,7 @@ mod tests {
     #[test]
     fn read_info_item_oldest() {
         let mut e = setup();
-        let resp = e.process(read_with("/Sensor1/Temperature", None, Some(1), None, None, None), 0.0);
+        let resp = e.process(read_with("/Sensor1/Temperature", None, Some(1), None, None, None), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
             ResponseResult::Single(val) => {
@@ -529,7 +540,7 @@ mod tests {
         let mut e = setup();
         let resp = e.process(read_with(
             "/Sensor1/Temperature", None, None, Some(150.0), Some(250.0), None,
-        ), 0.0);
+        ), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
             ResponseResult::Single(val) => {
@@ -544,7 +555,7 @@ mod tests {
     #[test]
     fn read_object() {
         let mut e = setup();
-        let resp = e.process(read_msg("/Sensor1"), 0.0);
+        let resp = e.process(read_msg("/Sensor1"), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
             ResponseResult::Single(val) => {
@@ -558,7 +569,7 @@ mod tests {
     #[test]
     fn read_root() {
         let mut e = setup();
-        let resp = e.process(read_msg("/"), 0.0);
+        let resp = e.process(read_msg("/"), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
             ResponseResult::Single(val) => {
@@ -571,7 +582,7 @@ mod tests {
     #[test]
     fn read_with_depth() {
         let mut e = setup();
-        let resp = e.process(read_with("/Sensor1", None, None, None, None, Some(0)), 0.0);
+        let resp = e.process(read_with("/Sensor1", None, None, None, None, Some(0)), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
             ResponseResult::Single(val) => {
@@ -585,7 +596,7 @@ mod tests {
     #[test]
     fn read_not_found() {
         let mut e = setup();
-        let resp = e.process(read_msg("/Missing/Path"), 0.0);
+        let resp = e.process(read_msg("/Missing/Path"), 0.0, None);
         assert_eq!(status(&resp), 404);
     }
 
@@ -597,7 +608,7 @@ mod tests {
             let meta = item.meta.get_or_insert_with(BTreeMap::new);
             meta.insert("readable".into(), OmiValue::Bool(false));
         }
-        let resp = e.process(read_msg("/A/B"), 0.0);
+        let resp = e.process(read_msg("/A/B"), 0.0, None);
         assert_eq!(status(&resp), 403);
     }
 
@@ -606,7 +617,7 @@ mod tests {
     #[test]
     fn subscription_returns_rid() {
         let mut e = setup();
-        let resp = e.process(sub_msg("/Sensor1/Temperature", 10.0, 60), 1000.0);
+        let resp = e.process(sub_msg("/Sensor1/Temperature", 10.0, 60), 1000.0, None);
         assert_eq!(status(&resp), 200);
         let b = body(&resp);
         assert!(b.rid.is_some());
@@ -616,7 +627,7 @@ mod tests {
     #[test]
     fn subscription_requires_positive_ttl() {
         let mut e = setup();
-        let resp = e.process(sub_msg("/Sensor1/Temperature", 10.0, 0), 1000.0);
+        let resp = e.process(sub_msg("/Sensor1/Temperature", 10.0, 0), 1000.0, None);
         assert_eq!(status(&resp), 400);
     }
 
@@ -624,10 +635,10 @@ mod tests {
     fn poll_callback_sub_rejected() {
         let mut e = setup();
         // Create a callback subscription (not pollable)
-        let sub = e.process(sub_msg("/Sensor1/Temperature", 10.0, 60), 1000.0);
+        let sub = e.process(sub_msg("/Sensor1/Temperature", 10.0, 60), 1000.0, None);
         let rid = body(&sub).rid.as_ref().unwrap();
         // Polling a callback sub returns 400
-        let resp = e.process(poll_msg(rid), 1001.0);
+        let resp = e.process(poll_msg(rid), 1001.0, None);
         assert_eq!(status(&resp), 400);
     }
 
@@ -635,11 +646,11 @@ mod tests {
     fn poll_returns_empty_buffer() {
         let mut e = setup();
         // Create a poll subscription (no callback)
-        let sub = e.process(poll_sub_msg("/Sensor1/Temperature", 60), 1000.0);
+        let sub = e.process(poll_sub_msg("/Sensor1/Temperature", 60), 1000.0, None);
         assert_eq!(status(&sub), 200);
         let rid = body(&sub).rid.as_ref().unwrap();
         // Poll returns 200 with empty values
-        let resp = e.process(poll_msg(rid), 1001.0);
+        let resp = e.process(poll_msg(rid), 1001.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
             ResponseResult::Single(val) => {
@@ -653,7 +664,7 @@ mod tests {
     #[test]
     fn poll_unknown_rid_returns_404() {
         let mut e = setup();
-        let resp = e.process(poll_msg("nonexistent"), 0.0);
+        let resp = e.process(poll_msg("nonexistent"), 0.0, None);
         assert_eq!(status(&resp), 404);
     }
 
@@ -662,7 +673,7 @@ mod tests {
     #[test]
     fn write_single_new_path() {
         let mut e = Engine::new();
-        let resp = e.process(write_msg("/Dev/Temp", OmiValue::Number(22.5)), 0.0);
+        let resp = e.process(write_msg("/Dev/Temp", OmiValue::Number(22.5)), 0.0, None);
         assert_eq!(status(&resp), 201);
         // Verify it was created
         assert!(matches!(e.tree.resolve("/Dev/Temp"), Ok(PathTarget::InfoItem(_))));
@@ -672,16 +683,16 @@ mod tests {
     fn write_single_existing_writable() {
         let mut e = Engine::new();
         // First write creates the item (marks writable)
-        e.process(write_msg("/Dev/Temp", OmiValue::Number(22.0)), 0.0);
+        e.process(write_msg("/Dev/Temp", OmiValue::Number(22.0)), 0.0, None);
         // Second write updates
-        let resp = e.process(write_msg("/Dev/Temp", OmiValue::Number(23.0)), 0.0);
+        let resp = e.process(write_msg("/Dev/Temp", OmiValue::Number(23.0)), 0.0, None);
         assert_eq!(status(&resp), 200);
     }
 
     #[test]
     fn write_not_writable() {
         let mut e = setup(); // items are not writable
-        let resp = e.process(write_msg("/Sensor1/Temperature", OmiValue::Number(99.0)), 0.0);
+        let resp = e.process(write_msg("/Sensor1/Temperature", OmiValue::Number(99.0)), 0.0, None);
         assert_eq!(status(&resp), 403);
     }
 
@@ -689,10 +700,10 @@ mod tests {
     fn auto_created_item_writable_on_second_write() {
         let mut e = Engine::new();
         // Engine creates the item → marks writable
-        let r1 = e.process(write_msg("/X/Y", OmiValue::Number(1.0)), 0.0);
+        let r1 = e.process(write_msg("/X/Y", OmiValue::Number(1.0)), 0.0, None);
         assert_eq!(status(&r1), 201);
         // Second write succeeds because item is writable
-        let r2 = e.process(write_msg("/X/Y", OmiValue::Number(2.0)), 0.0);
+        let r2 = e.process(write_msg("/X/Y", OmiValue::Number(2.0)), 0.0, None);
         assert_eq!(status(&r2), 200);
     }
 
@@ -700,7 +711,7 @@ mod tests {
     fn write_to_object_path_rejected() {
         let mut e = Engine::new();
         e.tree.objects.insert("Device".into(), Object::new("Device"));
-        let resp = e.process(write_msg("/Device", OmiValue::Number(1.0)), 0.0);
+        let resp = e.process(write_msg("/Device", OmiValue::Number(1.0)), 0.0, None);
         assert_eq!(status(&resp), 400);
     }
 
@@ -713,7 +724,7 @@ mod tests {
             WriteItem { path: "/Sensor1/NewItem".into(), v: OmiValue::Number(1.0), t: None },
             WriteItem { path: "/Sensor1/Temperature".into(), v: OmiValue::Number(99.0), t: None },
         ];
-        let resp = e.process(batch_msg(items), 0.0);
+        let resp = e.process(batch_msg(items), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
             ResponseResult::Batch(statuses) => {
@@ -734,7 +745,7 @@ mod tests {
         let mut dev = Object::new("Device");
         dev.add_item("Temp".into(), InfoItem::new(10));
         objects.insert("Device".into(), dev);
-        let resp = e.process(tree_msg("/", objects), 0.0);
+        let resp = e.process(tree_msg("/", objects), 0.0, None);
         assert_eq!(status(&resp), 200);
         assert!(matches!(e.tree.resolve("/Device"), Ok(PathTarget::Object(_))));
     }
@@ -744,7 +755,7 @@ mod tests {
     #[test]
     fn delete_object() {
         let mut e = setup();
-        let resp = e.process(delete_msg("/Sensor1"), 0.0);
+        let resp = e.process(delete_msg("/Sensor1"), 0.0, None);
         assert_eq!(status(&resp), 200);
         assert!(e.tree.objects.is_empty());
     }
@@ -752,7 +763,7 @@ mod tests {
     #[test]
     fn delete_item() {
         let mut e = setup();
-        let resp = e.process(delete_msg("/Sensor1/Temperature"), 0.0);
+        let resp = e.process(delete_msg("/Sensor1/Temperature"), 0.0, None);
         assert_eq!(status(&resp), 200);
         assert!(e.tree.resolve("/Sensor1/Temperature").is_err());
         // Humidity still exists
@@ -762,7 +773,7 @@ mod tests {
     #[test]
     fn delete_not_found() {
         let mut e = setup();
-        let resp = e.process(delete_msg("/Missing"), 0.0);
+        let resp = e.process(delete_msg("/Missing"), 0.0, None);
         assert_eq!(status(&resp), 404);
     }
 
@@ -770,7 +781,7 @@ mod tests {
     fn delete_root_forbidden() {
         let mut e = setup();
         // Bypass parse validation to test defense-in-depth
-        let resp = e.process(delete_msg("/"), 0.0);
+        let resp = e.process(delete_msg("/"), 0.0, None);
         assert_eq!(status(&resp), 403);
     }
 
@@ -779,34 +790,34 @@ mod tests {
     #[test]
     fn cancel_existing_subscription() {
         let mut e = setup();
-        let sub = e.process(sub_msg("/Sensor1/Temperature", 10.0, 60), 1000.0);
+        let sub = e.process(sub_msg("/Sensor1/Temperature", 10.0, 60), 1000.0, None);
         let rid = body(&sub).rid.as_ref().unwrap().clone();
         // Cancel
-        let resp = e.process(cancel_msg(&[&rid]), 1001.0);
+        let resp = e.process(cancel_msg(&[&rid]), 1001.0, None);
         assert_eq!(status(&resp), 200);
         // Verify subscription is gone
-        let poll = e.process(poll_msg(&rid), 1002.0);
+        let poll = e.process(poll_msg(&rid), 1002.0, None);
         assert_eq!(status(&poll), 404);
     }
 
     #[test]
     fn cancel_unknown_rid_idempotent() {
         let mut e = Engine::new();
-        let resp = e.process(cancel_msg(&["nonexistent"]), 0.0);
+        let resp = e.process(cancel_msg(&["nonexistent"]), 0.0, None);
         assert_eq!(status(&resp), 200);
     }
 
     #[test]
     fn cancel_multiple() {
         let mut e = setup();
-        let s1 = e.process(sub_msg("/Sensor1/Temperature", 5.0, 60), 1000.0);
-        let s2 = e.process(sub_msg("/Sensor1/Humidity", 10.0, 60), 1000.0);
+        let s1 = e.process(sub_msg("/Sensor1/Temperature", 5.0, 60), 1000.0, None);
+        let s2 = e.process(sub_msg("/Sensor1/Humidity", 10.0, 60), 1000.0, None);
         let r1 = body(&s1).rid.as_ref().unwrap().clone();
         let r2 = body(&s2).rid.as_ref().unwrap().clone();
-        let resp = e.process(cancel_msg(&[&r1, &r2]), 1001.0);
+        let resp = e.process(cancel_msg(&[&r1, &r2]), 1001.0, None);
         assert_eq!(status(&resp), 200);
-        assert_eq!(status(&e.process(poll_msg(&r1), 1002.0)), 404);
-        assert_eq!(status(&e.process(poll_msg(&r2), 1002.0)), 404);
+        assert_eq!(status(&e.process(poll_msg(&r1), 1002.0, None)), 404);
+        assert_eq!(status(&e.process(poll_msg(&r2), 1002.0, None)), 404);
     }
 
     // --- Integration ---
@@ -814,8 +825,8 @@ mod tests {
     #[test]
     fn write_then_read_round_trip() {
         let mut e = Engine::new();
-        e.process(write_msg("/Dev/Sensor", OmiValue::Number(42.0)), 0.0);
-        let resp = e.process(read_with("/Dev/Sensor", Some(1), None, None, None, None), 0.0);
+        e.process(write_msg("/Dev/Sensor", OmiValue::Number(42.0)), 0.0, None);
+        let resp = e.process(read_with("/Dev/Sensor", Some(1), None, None, None, None), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
             ResponseResult::Single(val) => {
@@ -830,20 +841,44 @@ mod tests {
     fn write_read_delete_read_lifecycle() {
         let mut e = Engine::new();
         // Write
-        assert_eq!(status(&e.process(write_msg("/A/B", OmiValue::Number(1.0)), 0.0)), 201);
+        assert_eq!(status(&e.process(write_msg("/A/B", OmiValue::Number(1.0)), 0.0, None)), 201);
         // Read — exists
-        assert_eq!(status(&e.process(read_msg("/A/B"), 0.0)), 200);
+        assert_eq!(status(&e.process(read_msg("/A/B"), 0.0, None)), 200);
         // Delete
-        assert_eq!(status(&e.process(delete_msg("/A/B"), 0.0)), 200);
+        assert_eq!(status(&e.process(delete_msg("/A/B"), 0.0, None)), 200);
         // Read — gone
-        assert_eq!(status(&e.process(read_msg("/A/B"), 0.0)), 404);
+        assert_eq!(status(&e.process(read_msg("/A/B"), 0.0, None)), 404);
     }
 
     #[test]
     fn response_message_rejected() {
         let mut e = Engine::new();
         let msg = OmiResponse::ok(serde_json::json!(null));
-        let resp = e.process(msg, 0.0);
+        let resp = e.process(msg, 0.0, None);
+        assert_eq!(status(&resp), 400);
+    }
+
+    #[test]
+    fn ws_subscription_creates_websocket_target() {
+        let mut e = setup();
+        // Subscribe without callback, but with ws_session → WebSocket target
+        let sub = e.process(poll_sub_msg("/Sensor1/Temperature", 60), 1000.0, Some(42));
+        assert_eq!(status(&sub), 200);
+        let rid = body(&sub).rid.as_ref().unwrap().clone();
+        // Polling a WebSocket sub should return NotPollable
+        let resp = e.process(poll_msg(&rid), 1001.0, None);
+        assert_eq!(status(&resp), 400);
+    }
+
+    #[test]
+    fn ws_subscription_callback_overrides_session() {
+        let mut e = setup();
+        // Subscribe with both callback and ws_session → callback wins
+        let sub = e.process(sub_msg("/Sensor1/Temperature", 10.0, 60), 1000.0, Some(42));
+        assert_eq!(status(&sub), 200);
+        let rid = body(&sub).rid.as_ref().unwrap().clone();
+        // Should be a callback sub, not a ws sub — polling returns NotPollable
+        let resp = e.process(poll_msg(&rid), 1001.0, None);
         assert_eq!(status(&resp), 400);
     }
 
@@ -851,12 +886,12 @@ mod tests {
     fn interval_poll_sub_tick_and_poll() {
         let mut e = setup();
         // Create interval poll sub (interval=5, no callback)
-        let sub = e.process(interval_poll_sub_msg("/Sensor1/Temperature", 5.0, 60), 1000.0);
+        let sub = e.process(interval_poll_sub_msg("/Sensor1/Temperature", 5.0, 60), 1000.0, None);
         assert_eq!(status(&sub), 200);
         let rid = body(&sub).rid.as_ref().unwrap().clone();
 
         // Poll before tick — empty buffer
-        let resp = e.process(poll_msg(&rid), 1001.0);
+        let resp = e.process(poll_msg(&rid), 1001.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
             ResponseResult::Single(val) => {
@@ -873,7 +908,7 @@ mod tests {
         assert!(deliveries.is_empty());
 
         // Poll — should get the buffered value
-        let resp = e.process(poll_msg(&rid), 1007.0);
+        let resp = e.process(poll_msg(&rid), 1007.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
             ResponseResult::Single(val) => {

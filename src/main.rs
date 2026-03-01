@@ -10,9 +10,9 @@ use esp_idf_svc::{
 };
 use log::{info, warn};
 use reconfigurable_device::http::{
-    render_landing_page, uri_query, omi_uri_to_odf_path, OmiReadParams,
+    build_read_op, render_landing_page, uri_path, uri_query, omi_uri_to_odf_path, OmiReadParams,
 };
-use reconfigurable_device::omi::{Engine, OmiMessage, OmiResponse, Operation, ReadOp};
+use reconfigurable_device::omi::{Engine, OmiMessage, OmiResponse};
 use reconfigurable_device::pages::{PageError, PageStore};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -94,11 +94,6 @@ fn connect_wifi(wifi: &mut BlockingWifi<EspWifi<'static>>) -> Result<()> {
     Ok(())
 }
 
-/// Strip query string from URI, returning just the path.
-fn uri_path(uri: &str) -> &str {
-    uri.split('?').next().unwrap_or(uri)
-}
-
 enum BodyError {
     Empty,
     TooLarge,
@@ -122,25 +117,6 @@ fn read_body(
     let mut buf = vec![0u8; content_len];
     req.read_exact(&mut buf)?;
     Ok(Ok(buf))
-}
-
-/// Build a ReadOp from an O-DF path and parsed query parameters.
-fn build_read_op(odf_path: &str, params: &OmiReadParams) -> OmiMessage {
-    OmiMessage {
-        version: "1.0".into(),
-        ttl: 0,
-        operation: Operation::Read(ReadOp {
-            path: Some(odf_path.into()),
-            rid: None,
-            newest: params.newest,
-            oldest: params.oldest,
-            begin: params.begin,
-            end: params.end,
-            depth: params.depth,
-            interval: None,
-            callback: None,
-        }),
-    }
 }
 
 /// Serialize an OmiMessage response and write it as JSON to the HTTP response.

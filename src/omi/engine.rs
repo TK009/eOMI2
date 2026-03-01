@@ -49,7 +49,9 @@ impl Engine {
     /// `Delivery` entries in the returned vec.
     pub fn tick(&mut self, now: f64) -> Vec<super::subscriptions::Delivery> {
         let tree = &self.tree;
-        let (deliveries, _) = self.subscriptions.tick_intervals(now, &|path| {
+        // next_trigger_time intentionally discarded: the main loop ticks on a
+        // fixed interval rather than scheduling the next wake-up dynamically.
+        let (deliveries, _next_trigger) = self.subscriptions.tick_intervals(now, &|path| {
             match tree.resolve(path) {
                 Ok(PathTarget::InfoItem(item)) => {
                     Some(item.query_values(Some(1), None, None, None))

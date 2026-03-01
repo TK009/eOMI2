@@ -2,11 +2,17 @@
 //
 // Pure functions — no ESP deps — so they're testable on the host.
 
+use crate::omi::{OmiMessage, Operation, ReadOp};
 use crate::pages::PageStore;
 
 // ---------------------------------------------------------------------------
 // URI / query-string helpers
 // ---------------------------------------------------------------------------
+
+/// Strip query string from URI, returning just the path.
+pub fn uri_path(uri: &str) -> &str {
+    uri.split('?').next().unwrap_or(uri)
+}
 
 /// Extract the query string after `?`, if present.
 pub fn uri_query(uri: &str) -> Option<&str> {
@@ -66,8 +72,10 @@ impl OmiReadParams {
 /// - `/omi/DevA/`  → `("/DevA", true)`
 /// - `/omi/DevA/T` → `("/DevA/T", false)`
 pub fn omi_uri_to_odf_path(uri_path: &str) -> (&str, bool) {
-    // Strip the "/omi" prefix
-    let rest = if uri_path.starts_with("/omi") {
+    // Strip the "/omi" prefix (exact match only, not "/omission" etc.)
+    let rest = if uri_path == "/omi" {
+        ""
+    } else if uri_path.starts_with("/omi/") {
         &uri_path[4..]
     } else {
         uri_path
@@ -83,6 +91,25 @@ pub fn omi_uri_to_odf_path(uri_path: &str) -> (&str, bool) {
         ("/", true)
     } else {
         (trimmed, trailing)
+    }
+}
+
+/// Build a ReadOp from an O-DF path and parsed query parameters.
+pub fn build_read_op(odf_path: &str, params: &OmiReadParams) -> OmiMessage {
+    OmiMessage {
+        version: "1.0".into(),
+        ttl: 0,
+        operation: Operation::Read(ReadOp {
+            path: Some(odf_path.into()),
+            rid: None,
+            newest: params.newest,
+            oldest: params.oldest,
+            begin: params.begin,
+            end: params.end,
+            depth: params.depth,
+            interval: None,
+            callback: None,
+        }),
     }
 }
 
@@ -263,5 +290,69 @@ mod tests {
             omi_uri_to_odf_path("/omi/House/Floor1/Room101/Temp"),
             ("/House/Floor1/Room101/Temp", false)
         );
+    }
+
+    #[test]
+    fn uri_to_path_no_false_prefix_match() {
+        // "/omission" should NOT be treated as an /omi path
+        assert_eq!(omi_uri_to_odf_path("/omission"), ("/omission", false));
+        assert_eq!(omi_uri_to_odf_path("/omitted/data"), ("/omitted/data", false));
+    }
+
+    // --- uri_path ---
+
+    #[test]
+    fn uri_path_strips_query() {
+        assert_eq!(uri_path("/omi/Dev?newest=1"), "/omi/Dev");
+    }
+
+    #[test]
+    fn uri_path_no_query() {
+        assert_eq!(uri_path("/omi/Dev"), "/omi/Dev");
+    }
+
+    #[test]
+    fn uri_path_empty_query() {
+        assert_eq!(uri_path("/omi?"), "/omi");
+    }
+
+    // --- build_read_op ---
+
+    #[test]
+    fn build_read_op_defaults() {
+        let msg = build_read_op("/Sensor/Temp", &OmiReadParams::default());
+        match &msg.operation {
+            Operation::Read(op) => {
+                assert_eq!(op.path.as_deref(), Some("/Sensor/Temp"));
+                assert_eq!(op.newest, None);
+                assert_eq!(op.oldest, None);
+                assert_eq!(op.begin, None);
+                assert_eq!(op.end, None);
+                assert_eq!(op.depth, None);
+            }
+            _ => panic!("expected Read"),
+        }
+    }
+
+    #[test]
+    fn build_read_op_with_params() {
+        let params = OmiReadParams {
+            newest: Some(5),
+            oldest: Some(1),
+            begin: Some(100.0),
+            end: Some(200.0),
+            depth: Some(3),
+        };
+        let msg = build_read_op("/A/B", &params);
+        match &msg.operation {
+            Operation::Read(op) => {
+                assert_eq!(op.newest, Some(5));
+                assert_eq!(op.oldest, Some(1));
+                assert_eq!(op.begin, Some(100.0));
+                assert_eq!(op.end, Some(200.0));
+                assert_eq!(op.depth, Some(3));
+            }
+            _ => panic!("expected Read"),
+        }
     }
 }

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::VecDeque;
 
 use crate::odf::Value;
 
@@ -56,17 +57,17 @@ pub struct Delivery {
 }
 
 /// Simple poll buffer — accumulates values, drained completely on each poll.
-/// Drops oldest on overflow to bound memory.
+/// Drops oldest on overflow to bound memory. Uses VecDeque for O(1) front removal.
 #[derive(Debug, Clone)]
 pub struct PollBuffer {
-    buf: Vec<Value>,
+    buf: VecDeque<Value>,
     capacity: usize,
 }
 
 impl PollBuffer {
     pub fn new(capacity: usize) -> Self {
         Self {
-            buf: Vec::new(),
+            buf: VecDeque::new(),
             capacity,
         }
     }
@@ -74,15 +75,15 @@ impl PollBuffer {
     pub fn push(&mut self, values: &[Value]) {
         for v in values {
             if self.buf.len() >= self.capacity {
-                self.buf.remove(0);
+                self.buf.pop_front();
             }
-            self.buf.push(v.clone());
+            self.buf.push_back(v.clone());
         }
     }
 
     /// Drain all buffered values, returning them and leaving the buffer empty.
     pub fn drain(&mut self) -> Vec<Value> {
-        core::mem::take(&mut self.buf)
+        self.buf.drain(..).collect()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -106,7 +107,7 @@ pub struct SubscriptionRegistry {
     /// path -> [rids] for event-based subscriptions only
     event_index: BTreeMap<String, Vec<String>>,
     /// rids sorted by trigger_time ascending (interval subs only)
-    interval_queue: Vec<String>,
+    interval_queue: VecDeque<String>,
     /// rid -> PollBuffer for poll subscriptions only
     poll_buffers: BTreeMap<String, PollBuffer>,
     /// Monotonic counter for generating rids
@@ -118,7 +119,7 @@ impl SubscriptionRegistry {
         Self {
             subscriptions: BTreeMap::new(),
             event_index: BTreeMap::new(),
-            interval_queue: Vec::new(),
+            interval_queue: VecDeque::new(),
             poll_buffers: BTreeMap::new(),
             next_id: 1,
         }
@@ -144,19 +145,13 @@ impl SubscriptionRegistry {
         ttl: f64,
         now: f64,
     ) -> Result<String, &'static str> {
-        // Validate interval
-        if interval == 0.0 {
-            return Err("interval must not be zero");
-        }
-        if interval < -1.0 {
-            return Err("interval must be -1 or positive");
-        }
-        if interval > 0.0 && interval < 0.1 {
-            return Err("interval must be >= 0.1 seconds");
-        }
-        // Between -1 and 0 (exclusive) is invalid
-        if interval > -1.0 && interval < 0.0 {
-            return Err("interval must be -1 or positive");
+        if interval != -1.0 {
+            if interval <= 0.0 {
+                return Err("interval must be -1 or positive");
+            }
+            if interval < 0.1 {
+                return Err("interval must be >= 0.1 seconds");
+            }
         }
 
         // Enforce limit
@@ -195,9 +190,8 @@ impl SubscriptionRegistry {
                 .or_default()
                 .push(rid.clone());
         } else {
-            // Interval-based subscription
-            self.interval_queue.push(rid.clone());
-            self.sort_interval_queue();
+            // Interval-based subscription — insert in sorted position
+            self.insert_interval_sorted(rid.clone());
         }
 
         // Create poll buffer if needed
@@ -286,13 +280,27 @@ impl SubscriptionRegistry {
         deliveries
     }
 
-    fn sort_interval_queue(&mut self) {
-        let subs = &self.subscriptions;
-        self.interval_queue.sort_by(|a, b| {
-            let ta = subs.get(a).map(|s| s.trigger_time).unwrap_or(f64::MAX);
-            let tb = subs.get(b).map(|s| s.trigger_time).unwrap_or(f64::MAX);
-            ta.partial_cmp(&tb).unwrap_or(core::cmp::Ordering::Equal)
-        });
+    /// Insert a rid into the interval queue in sorted order by trigger_time.
+    fn insert_interval_sorted(&mut self, rid: String) {
+        let trigger_time = self
+            .subscriptions
+            .get(&rid)
+            .map(|s| s.trigger_time)
+            .unwrap_or(f64::MAX);
+
+        let pos = self
+            .interval_queue
+            .iter()
+            .position(|r| {
+                self.subscriptions
+                    .get(r)
+                    .map(|s| s.trigger_time)
+                    .unwrap_or(f64::MAX)
+                    > trigger_time
+            })
+            .unwrap_or(self.interval_queue.len());
+
+        self.interval_queue.insert(pos, rid);
     }
 
     /// Process due interval subscriptions (adapted from thesis Algorithm 1).
@@ -311,7 +319,7 @@ impl SubscriptionRegistry {
 
         loop {
             // Peek at front of queue
-            let rid = match self.interval_queue.first() {
+            let rid = match self.interval_queue.front() {
                 Some(r) => r.clone(),
                 None => break,
             };
@@ -320,7 +328,7 @@ impl SubscriptionRegistry {
                 Some(sub) => sub.trigger_time,
                 None => {
                     // Stale entry, remove and continue
-                    self.interval_queue.remove(0);
+                    self.interval_queue.pop_front();
                     continue;
                 }
             };
@@ -331,7 +339,7 @@ impl SubscriptionRegistry {
             }
 
             // Pop from front
-            self.interval_queue.remove(0);
+            self.interval_queue.pop_front();
 
             let sub = match self.subscriptions.get(&rid) {
                 Some(s) => s.clone(),
@@ -369,8 +377,7 @@ impl SubscriptionRegistry {
                 if let Some(s) = self.subscriptions.get_mut(&rid) {
                     s.trigger_time = next_trigger;
                 }
-                self.interval_queue.push(rid);
-                self.sort_interval_queue();
+                self.insert_interval_sorted(rid);
             } else {
                 // Will expire before next trigger — remove
                 expired.push(rid);
@@ -384,7 +391,7 @@ impl SubscriptionRegistry {
 
         let next = self
             .interval_queue
-            .first()
+            .front()
             .and_then(|rid| self.subscriptions.get(rid))
             .map(|s| s.trigger_time);
 
@@ -438,7 +445,7 @@ impl SubscriptionRegistry {
     /// Returns the next interval trigger time, if any interval subs exist.
     pub fn next_trigger_time(&self) -> Option<f64> {
         self.interval_queue
-            .first()
+            .front()
             .and_then(|rid| self.subscriptions.get(rid))
             .map(|s| s.trigger_time)
     }
@@ -555,7 +562,7 @@ mod tests {
     fn create_reject_zero_interval() {
         let mut reg = SubscriptionRegistry::new();
         let err = reg.create("/A/Temp", 0.0, None, 60.0, 1000.0).unwrap_err();
-        assert_eq!(err, "interval must not be zero");
+        assert_eq!(err, "interval must be -1 or positive");
     }
 
     #[test]

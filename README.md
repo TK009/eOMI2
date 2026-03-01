@@ -24,6 +24,9 @@ Requires only stable Rust:
 
 ### Device build (requires ESP toolchain)
 
+Test devices:
+- ESP32-S2 WROVER development module
+
 Install the ESP toolchain with [espup](https://github.com/esp-rs/espup), then:
 
     rustup override set esp   # one-time, in the project directory
@@ -32,3 +35,5 @@ Install the ESP toolchain with [espup](https://github.com/esp-rs/espup), then:
 ### Wi-Fi credentials
 
 Copy `.env.example` to `.env` and fill in your network name and password before building for the device.
+
+

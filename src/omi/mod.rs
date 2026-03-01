@@ -1,9 +1,13 @@
+pub mod engine;
 pub mod error;
 pub mod read;
 pub mod write;
 pub mod delete;
 pub mod cancel;
 pub mod response;
+pub mod subscriptions;
+
+pub use self::engine::Engine;
 
 use serde::{Deserialize, Serialize, Serializer};
 use serde::ser::SerializeMap;

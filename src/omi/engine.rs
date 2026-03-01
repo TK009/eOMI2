@@ -1,0 +1,808 @@
+use std::collections::BTreeMap;
+use std::time::Instant;
+
+use crate::odf::{ObjectTree, PathTarget, PathTargetMut, TreeError, OmiValue};
+use super::cancel::CancelOp;
+use super::delete::DeleteOp;
+use super::read::{ReadKind, ReadOp};
+use super::response::{ItemStatus, OmiResponse, ResponseBody, StatusCode};
+use super::write::{WriteItem, WriteOp};
+use super::{OmiMessage, Operation};
+
+/// Stub subscription entry for Phase 4.
+struct SubscriptionEntry {
+    #[allow(dead_code)]
+    path: String,
+    #[allow(dead_code)]
+    interval: f64,
+    #[allow(dead_code)]
+    callback: Option<String>,
+}
+
+/// Request processing engine. Takes parsed OMI messages, operates on the
+/// object tree, and returns OMI response messages.
+pub struct Engine {
+    /// The O-DF object tree. Public so platform code can populate it on boot.
+    pub tree: ObjectTree,
+    subscriptions: BTreeMap<String, SubscriptionEntry>,
+    next_rid: u64,
+}
+
+impl Engine {
+    pub fn new() -> Self {
+        Self {
+            tree: ObjectTree::new(),
+            subscriptions: BTreeMap::new(),
+            next_rid: 1,
+        }
+    }
+
+    /// Process an OMI request message and return a response.
+    pub fn process(&mut self, msg: OmiMessage) -> OmiMessage {
+        let start = Instant::now();
+        let ttl = msg.ttl;
+        match msg.operation {
+            Operation::Read(op) => self.process_read(op, ttl, start),
+            Operation::Write(op) => self.process_write(op, ttl, start),
+            Operation::Delete(op) => self.process_delete(op),
+            Operation::Cancel(op) => self.process_cancel(op),
+            Operation::Response(_) => {
+                OmiResponse::bad_request("Engine processes requests, not responses")
+            }
+        }
+    }
+
+    fn is_expired(ttl: i64, start: Instant) -> bool {
+        if ttl < 0 {
+            return false;
+        }
+        start.elapsed().as_secs() as i64 >= ttl
+    }
+
+    fn generate_rid(&mut self) -> String {
+        let rid = format!("sub-{:03}", self.next_rid);
+        self.next_rid += 1;
+        rid
+    }
+
+    fn error_response(status: StatusCode, desc: String) -> OmiMessage {
+        OmiMessage {
+            version: "1.0".into(),
+            ttl: 0,
+            operation: Operation::Response(ResponseBody {
+                status: status.as_u16(),
+                rid: None,
+                desc: Some(desc),
+                result: None,
+            }),
+        }
+    }
+
+    fn tree_error_to_response(err: TreeError) -> OmiMessage {
+        match err {
+            TreeError::NotFound(msg) => Self::error_response(StatusCode::NotFound, msg),
+            TreeError::Forbidden(msg) => Self::error_response(StatusCode::Forbidden, msg),
+            TreeError::InvalidPath(msg) => Self::error_response(StatusCode::BadRequest, msg),
+            #[cfg(feature = "json")]
+            TreeError::SerializationError(msg) => {
+                Self::error_response(StatusCode::InternalError, msg)
+            }
+        }
+    }
+
+    fn tree_error_to_item_status(path: &str, err: TreeError) -> ItemStatus {
+        let (status, desc) = match err {
+            TreeError::NotFound(msg) => (StatusCode::NotFound, msg),
+            TreeError::Forbidden(msg) => (StatusCode::Forbidden, msg),
+            TreeError::InvalidPath(msg) => (StatusCode::BadRequest, msg),
+            #[cfg(feature = "json")]
+            TreeError::SerializationError(msg) => (StatusCode::InternalError, msg),
+        };
+        ItemStatus {
+            path: path.into(),
+            status: status.as_u16(),
+            desc: Some(desc),
+        }
+    }
+
+    // --- Read ---
+
+    fn process_read(&mut self, op: ReadOp, ttl: i64, _start: Instant) -> OmiMessage {
+        match op.kind() {
+            ReadKind::OneTime => self.process_read_one_time(&op),
+            ReadKind::Subscription => self.process_read_subscription(op, ttl),
+            ReadKind::Poll => self.process_read_poll(&op),
+        }
+    }
+
+    fn process_read_one_time(&self, op: &ReadOp) -> OmiMessage {
+        let path = op.path.as_deref().unwrap_or("/");
+        match self.tree.resolve(path) {
+            Ok(PathTarget::InfoItem(item)) => {
+                if !item.is_readable() {
+                    return OmiResponse::forbidden(&format!(
+                        "InfoItem at '{}' is not readable",
+                        path
+                    ));
+                }
+                let values = item.query_values(
+                    op.newest.map(|n| n as usize),
+                    op.oldest.map(|n| n as usize),
+                    op.begin,
+                    op.end,
+                );
+                match serde_json::to_value(&values) {
+                    Ok(val) => OmiResponse::ok(serde_json::json!({
+                        "path": path,
+                        "values": val,
+                    })),
+                    Err(e) => OmiResponse::error(&e.to_string()),
+                }
+            }
+            Ok(PathTarget::Object(_)) | Ok(PathTarget::Root(_)) => {
+                match self.tree.read(path, op.depth.map(|d| d as usize)) {
+                    Ok(val) => OmiResponse::ok(val),
+                    Err(e) => Self::tree_error_to_response(e),
+                }
+            }
+            Err(e) => Self::tree_error_to_response(e),
+        }
+    }
+
+    fn process_read_subscription(&mut self, op: ReadOp, ttl: i64) -> OmiMessage {
+        if ttl <= 0 {
+            return OmiResponse::bad_request("Subscription requires ttl > 0");
+        }
+        let path = op.path.as_deref().unwrap_or("/");
+        if let Err(e) = self.tree.resolve(path) {
+            return Self::tree_error_to_response(e);
+        }
+        let interval = op.interval.unwrap_or(-1.0);
+        if interval != -1.0 && interval <= 0.0 {
+            return OmiResponse::bad_request("Subscription interval must be -1 or positive");
+        }
+        let rid = self.generate_rid();
+        self.subscriptions.insert(
+            rid.clone(),
+            SubscriptionEntry {
+                path: path.to_string(),
+                interval,
+                callback: op.callback,
+            },
+        );
+        OmiResponse::ok_with_rid(rid, serde_json::json!(null))
+    }
+
+    fn process_read_poll(&self, op: &ReadOp) -> OmiMessage {
+        let rid = op.rid.as_deref().unwrap_or("");
+        if !self.subscriptions.contains_key(rid) {
+            return Self::error_response(
+                StatusCode::NotFound,
+                format!("Subscription '{}' not found", rid),
+            );
+        }
+        OmiResponse::not_implemented("Poll not yet implemented")
+    }
+
+    // --- Write ---
+
+    fn process_write(&mut self, op: WriteOp, ttl: i64, start: Instant) -> OmiMessage {
+        match op {
+            WriteOp::Single { path, v, t } => self.write_single(&path, v, t),
+            WriteOp::Batch { items } => self.process_write_batch(items, ttl, start),
+            WriteOp::Tree { path, objects } => match self.tree.write_tree(&path, objects) {
+                Ok(()) => OmiResponse::ok(serde_json::json!(null)),
+                Err(e) => Self::tree_error_to_response(e),
+            },
+        }
+    }
+
+    fn write_single(&mut self, path: &str, v: OmiValue, t: Option<f64>) -> OmiMessage {
+        match self.tree.resolve(path) {
+            Ok(PathTarget::InfoItem(item)) => {
+                if !item.is_writable() {
+                    return OmiResponse::forbidden(&format!(
+                        "InfoItem at '{}' is not writable",
+                        path
+                    ));
+                }
+            }
+            Ok(PathTarget::Object(_)) | Ok(PathTarget::Root(_)) => {
+                return OmiResponse::bad_request(&format!(
+                    "Cannot write value to object path '{}'",
+                    path
+                ));
+            }
+            Err(TreeError::NotFound(_)) => {} // will auto-create
+            Err(e) => return Self::tree_error_to_response(e),
+        }
+
+        match self.tree.write_value(path, v, t) {
+            Ok(created) => {
+                if created {
+                    self.mark_writable(path);
+                    OmiResponse::created()
+                } else {
+                    OmiResponse::ok(serde_json::json!(null))
+                }
+            }
+            Err(e) => Self::tree_error_to_response(e),
+        }
+    }
+
+    fn process_write_batch(
+        &mut self,
+        items: Vec<WriteItem>,
+        ttl: i64,
+        start: Instant,
+    ) -> OmiMessage {
+        let mut statuses = Vec::with_capacity(items.len());
+        for item in items {
+            if Self::is_expired(ttl, start) {
+                return OmiResponse::timeout();
+            }
+            statuses.push(self.write_batch_item(&item));
+        }
+        OmiResponse::partial_batch(statuses)
+    }
+
+    fn write_batch_item(&mut self, item: &WriteItem) -> ItemStatus {
+        match self.tree.resolve(&item.path) {
+            Ok(PathTarget::InfoItem(existing)) => {
+                if !existing.is_writable() {
+                    return ItemStatus {
+                        path: item.path.clone(),
+                        status: StatusCode::Forbidden.as_u16(),
+                        desc: Some(format!(
+                            "InfoItem at '{}' is not writable",
+                            item.path
+                        )),
+                    };
+                }
+            }
+            Ok(PathTarget::Object(_)) | Ok(PathTarget::Root(_)) => {
+                return ItemStatus {
+                    path: item.path.clone(),
+                    status: StatusCode::BadRequest.as_u16(),
+                    desc: Some(format!(
+                        "Cannot write value to object path '{}'",
+                        item.path
+                    )),
+                };
+            }
+            Err(TreeError::NotFound(_)) => {} // will auto-create
+            Err(e) => return Self::tree_error_to_item_status(&item.path, e),
+        }
+
+        match self.tree.write_value(&item.path, item.v.clone(), item.t) {
+            Ok(created) => {
+                if created {
+                    self.mark_writable(&item.path);
+                    ItemStatus {
+                        path: item.path.clone(),
+                        status: StatusCode::Created.as_u16(),
+                        desc: None,
+                    }
+                } else {
+                    ItemStatus {
+                        path: item.path.clone(),
+                        status: StatusCode::Ok.as_u16(),
+                        desc: None,
+                    }
+                }
+            }
+            Err(e) => Self::tree_error_to_item_status(&item.path, e),
+        }
+    }
+
+    fn mark_writable(&mut self, path: &str) {
+        if let Ok(PathTargetMut::InfoItem(item)) = self.tree.resolve_mut(path) {
+            let meta = item.meta.get_or_insert_with(BTreeMap::new);
+            meta.insert("writable".into(), OmiValue::Bool(true));
+        }
+    }
+
+    // --- Delete ---
+
+    fn process_delete(&mut self, op: DeleteOp) -> OmiMessage {
+        match self.tree.delete(&op.path) {
+            Ok(()) => OmiResponse::ok(serde_json::json!(null)),
+            Err(e) => Self::tree_error_to_response(e),
+        }
+    }
+
+    // --- Cancel ---
+
+    fn process_cancel(&mut self, op: CancelOp) -> OmiMessage {
+        for rid in &op.rid {
+            self.subscriptions.remove(rid);
+        }
+        OmiResponse::ok(serde_json::json!(null))
+    }
+}
+
+impl Default for Engine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::odf::{InfoItem, Object, OmiValue};
+    use super::super::response::ResponseResult;
+
+    // --- Helpers ---
+
+    fn read_msg(path: &str) -> OmiMessage {
+        OmiMessage {
+            version: "1.0".into(),
+            ttl: 0,
+            operation: Operation::Read(ReadOp {
+                path: Some(path.into()),
+                rid: None,
+                newest: None, oldest: None, begin: None, end: None,
+                depth: None, interval: None, callback: None,
+            }),
+        }
+    }
+
+    fn read_with(path: &str, newest: Option<u64>, oldest: Option<u64>,
+                 begin: Option<f64>, end: Option<f64>, depth: Option<u64>) -> OmiMessage {
+        OmiMessage {
+            version: "1.0".into(),
+            ttl: 0,
+            operation: Operation::Read(ReadOp {
+                path: Some(path.into()), rid: None,
+                newest, oldest, begin, end, depth,
+                interval: None, callback: None,
+            }),
+        }
+    }
+
+    fn sub_msg(path: &str, interval: f64, ttl: i64) -> OmiMessage {
+        OmiMessage {
+            version: "1.0".into(),
+            ttl,
+            operation: Operation::Read(ReadOp {
+                path: Some(path.into()), rid: None,
+                newest: None, oldest: None, begin: None, end: None,
+                depth: None,
+                interval: Some(interval),
+                callback: Some("http://example.com/cb".into()),
+            }),
+        }
+    }
+
+    fn poll_msg(rid: &str) -> OmiMessage {
+        OmiMessage {
+            version: "1.0".into(),
+            ttl: 0,
+            operation: Operation::Read(ReadOp {
+                path: None, rid: Some(rid.into()),
+                newest: None, oldest: None, begin: None, end: None,
+                depth: None, interval: None, callback: None,
+            }),
+        }
+    }
+
+    fn write_msg(path: &str, v: OmiValue) -> OmiMessage {
+        OmiMessage {
+            version: "1.0".into(),
+            ttl: 10,
+            operation: Operation::Write(WriteOp::Single {
+                path: path.into(), v, t: None,
+            }),
+        }
+    }
+
+    fn batch_msg(items: Vec<WriteItem>) -> OmiMessage {
+        OmiMessage {
+            version: "1.0".into(),
+            ttl: 10,
+            operation: Operation::Write(WriteOp::Batch { items }),
+        }
+    }
+
+    fn tree_msg(path: &str, objects: BTreeMap<String, Object>) -> OmiMessage {
+        OmiMessage {
+            version: "1.0".into(),
+            ttl: 10,
+            operation: Operation::Write(WriteOp::Tree { path: path.into(), objects }),
+        }
+    }
+
+    fn delete_msg(path: &str) -> OmiMessage {
+        OmiMessage {
+            version: "1.0".into(),
+            ttl: 0,
+            operation: Operation::Delete(DeleteOp { path: path.into() }),
+        }
+    }
+
+    fn cancel_msg(rids: &[&str]) -> OmiMessage {
+        OmiMessage {
+            version: "1.0".into(),
+            ttl: 0,
+            operation: Operation::Cancel(CancelOp {
+                rid: rids.iter().map(|s| s.to_string()).collect(),
+            }),
+        }
+    }
+
+    fn status(msg: &OmiMessage) -> u16 {
+        match &msg.operation {
+            Operation::Response(body) => body.status,
+            _ => panic!("expected Response"),
+        }
+    }
+
+    fn body(msg: &OmiMessage) -> &ResponseBody {
+        match &msg.operation {
+            Operation::Response(b) => b,
+            _ => panic!("expected Response"),
+        }
+    }
+
+    /// Engine with /Sensor1/Temperature (3 values) and /Sensor1/Humidity (1 value).
+    /// Items created via tree directly, so they are NOT writable.
+    fn setup() -> Engine {
+        let mut e = Engine::new();
+        e.tree.write_value("/Sensor1/Temperature", OmiValue::Number(20.0), Some(100.0)).unwrap();
+        e.tree.write_value("/Sensor1/Temperature", OmiValue::Number(21.0), Some(200.0)).unwrap();
+        e.tree.write_value("/Sensor1/Temperature", OmiValue::Number(22.0), Some(300.0)).unwrap();
+        e.tree.write_value("/Sensor1/Humidity", OmiValue::Number(45.0), Some(100.0)).unwrap();
+        e
+    }
+
+    // --- Read: one-time ---
+
+    #[test]
+    fn read_info_item() {
+        let mut e = setup();
+        let resp = e.process(read_msg("/Sensor1/Temperature"));
+        assert_eq!(status(&resp), 200);
+        match body(&resp).result.as_ref().unwrap() {
+            ResponseResult::Single(val) => {
+                assert_eq!(val["path"], "/Sensor1/Temperature");
+                assert_eq!(val["values"].as_array().unwrap().len(), 3);
+            }
+            _ => panic!("expected Single"),
+        }
+    }
+
+    #[test]
+    fn read_info_item_newest() {
+        let mut e = setup();
+        let resp = e.process(read_with("/Sensor1/Temperature", Some(1), None, None, None, None));
+        assert_eq!(status(&resp), 200);
+        match body(&resp).result.as_ref().unwrap() {
+            ResponseResult::Single(val) => {
+                let values = val["values"].as_array().unwrap();
+                assert_eq!(values.len(), 1);
+                assert_eq!(values[0]["v"], 22.0);
+            }
+            _ => panic!("expected Single"),
+        }
+    }
+
+    #[test]
+    fn read_info_item_oldest() {
+        let mut e = setup();
+        let resp = e.process(read_with("/Sensor1/Temperature", None, Some(1), None, None, None));
+        assert_eq!(status(&resp), 200);
+        match body(&resp).result.as_ref().unwrap() {
+            ResponseResult::Single(val) => {
+                let values = val["values"].as_array().unwrap();
+                assert_eq!(values.len(), 1);
+                assert_eq!(values[0]["v"], 20.0);
+            }
+            _ => panic!("expected Single"),
+        }
+    }
+
+    #[test]
+    fn read_info_item_time_range() {
+        let mut e = setup();
+        let resp = e.process(read_with(
+            "/Sensor1/Temperature", None, None, Some(150.0), Some(250.0), None,
+        ));
+        assert_eq!(status(&resp), 200);
+        match body(&resp).result.as_ref().unwrap() {
+            ResponseResult::Single(val) => {
+                let values = val["values"].as_array().unwrap();
+                assert_eq!(values.len(), 1);
+                assert_eq!(values[0]["v"], 21.0);
+            }
+            _ => panic!("expected Single"),
+        }
+    }
+
+    #[test]
+    fn read_object() {
+        let mut e = setup();
+        let resp = e.process(read_msg("/Sensor1"));
+        assert_eq!(status(&resp), 200);
+        match body(&resp).result.as_ref().unwrap() {
+            ResponseResult::Single(val) => {
+                assert_eq!(val["id"], "Sensor1");
+                assert!(val["items"]["Temperature"].is_object());
+            }
+            _ => panic!("expected Single"),
+        }
+    }
+
+    #[test]
+    fn read_root() {
+        let mut e = setup();
+        let resp = e.process(read_msg("/"));
+        assert_eq!(status(&resp), 200);
+        match body(&resp).result.as_ref().unwrap() {
+            ResponseResult::Single(val) => {
+                assert!(val["Sensor1"].is_object());
+            }
+            _ => panic!("expected Single"),
+        }
+    }
+
+    #[test]
+    fn read_with_depth() {
+        let mut e = setup();
+        let resp = e.process(read_with("/Sensor1", None, None, None, None, Some(0)));
+        assert_eq!(status(&resp), 200);
+        match body(&resp).result.as_ref().unwrap() {
+            ResponseResult::Single(val) => {
+                assert_eq!(val["id"], "Sensor1");
+                assert!(val.get("items").is_none());
+            }
+            _ => panic!("expected Single"),
+        }
+    }
+
+    #[test]
+    fn read_not_found() {
+        let mut e = setup();
+        let resp = e.process(read_msg("/Missing/Path"));
+        assert_eq!(status(&resp), 404);
+    }
+
+    #[test]
+    fn read_not_readable() {
+        let mut e = Engine::new();
+        e.tree.write_value("/A/B", OmiValue::Number(1.0), None).unwrap();
+        if let Ok(PathTargetMut::InfoItem(item)) = e.tree.resolve_mut("/A/B") {
+            let meta = item.meta.get_or_insert_with(BTreeMap::new);
+            meta.insert("readable".into(), OmiValue::Bool(false));
+        }
+        let resp = e.process(read_msg("/A/B"));
+        assert_eq!(status(&resp), 403);
+    }
+
+    // --- Read: subscription stub ---
+
+    #[test]
+    fn subscription_returns_rid() {
+        let mut e = setup();
+        let resp = e.process(sub_msg("/Sensor1/Temperature", 10.0, 60));
+        assert_eq!(status(&resp), 200);
+        let b = body(&resp);
+        assert!(b.rid.is_some());
+        assert!(b.rid.as_ref().unwrap().starts_with("sub-"));
+    }
+
+    #[test]
+    fn subscription_requires_positive_ttl() {
+        let mut e = setup();
+        let resp = e.process(sub_msg("/Sensor1/Temperature", 10.0, 0));
+        assert_eq!(status(&resp), 400);
+    }
+
+    #[test]
+    fn poll_returns_501() {
+        let mut e = setup();
+        // First create a subscription
+        let sub = e.process(sub_msg("/Sensor1/Temperature", 10.0, 60));
+        let rid = body(&sub).rid.as_ref().unwrap();
+        // Then poll it
+        let resp = e.process(poll_msg(rid));
+        assert_eq!(status(&resp), 501);
+    }
+
+    #[test]
+    fn poll_unknown_rid_returns_404() {
+        let mut e = setup();
+        let resp = e.process(poll_msg("nonexistent"));
+        assert_eq!(status(&resp), 404);
+    }
+
+    // --- Write: single ---
+
+    #[test]
+    fn write_single_new_path() {
+        let mut e = Engine::new();
+        let resp = e.process(write_msg("/Dev/Temp", OmiValue::Number(22.5)));
+        assert_eq!(status(&resp), 201);
+        // Verify it was created
+        assert!(matches!(e.tree.resolve("/Dev/Temp"), Ok(PathTarget::InfoItem(_))));
+    }
+
+    #[test]
+    fn write_single_existing_writable() {
+        let mut e = Engine::new();
+        // First write creates the item (marks writable)
+        e.process(write_msg("/Dev/Temp", OmiValue::Number(22.0)));
+        // Second write updates
+        let resp = e.process(write_msg("/Dev/Temp", OmiValue::Number(23.0)));
+        assert_eq!(status(&resp), 200);
+    }
+
+    #[test]
+    fn write_not_writable() {
+        let mut e = setup(); // items are not writable
+        let resp = e.process(write_msg("/Sensor1/Temperature", OmiValue::Number(99.0)));
+        assert_eq!(status(&resp), 403);
+    }
+
+    #[test]
+    fn auto_created_item_writable_on_second_write() {
+        let mut e = Engine::new();
+        // Engine creates the item → marks writable
+        let r1 = e.process(write_msg("/X/Y", OmiValue::Number(1.0)));
+        assert_eq!(status(&r1), 201);
+        // Second write succeeds because item is writable
+        let r2 = e.process(write_msg("/X/Y", OmiValue::Number(2.0)));
+        assert_eq!(status(&r2), 200);
+    }
+
+    #[test]
+    fn write_to_object_path_rejected() {
+        let mut e = Engine::new();
+        e.tree.objects.insert("Device".into(), Object::new("Device"));
+        let resp = e.process(write_msg("/Device", OmiValue::Number(1.0)));
+        assert_eq!(status(&resp), 400);
+    }
+
+    // --- Write: batch ---
+
+    #[test]
+    fn write_batch_mixed() {
+        let mut e = setup(); // Temperature exists but not writable
+        let items = vec![
+            WriteItem { path: "/Sensor1/NewItem".into(), v: OmiValue::Number(1.0), t: None },
+            WriteItem { path: "/Sensor1/Temperature".into(), v: OmiValue::Number(99.0), t: None },
+        ];
+        let resp = e.process(batch_msg(items));
+        assert_eq!(status(&resp), 200);
+        match body(&resp).result.as_ref().unwrap() {
+            ResponseResult::Batch(statuses) => {
+                assert_eq!(statuses.len(), 2);
+                assert_eq!(statuses[0].status, 201); // created
+                assert_eq!(statuses[1].status, 403); // not writable
+            }
+            _ => panic!("expected Batch"),
+        }
+    }
+
+    // --- Write: tree ---
+
+    #[test]
+    fn write_tree() {
+        let mut e = Engine::new();
+        let mut objects = BTreeMap::new();
+        let mut dev = Object::new("Device");
+        dev.add_item("Temp".into(), InfoItem::new(10));
+        objects.insert("Device".into(), dev);
+        let resp = e.process(tree_msg("/", objects));
+        assert_eq!(status(&resp), 200);
+        assert!(matches!(e.tree.resolve("/Device"), Ok(PathTarget::Object(_))));
+    }
+
+    // --- Delete ---
+
+    #[test]
+    fn delete_object() {
+        let mut e = setup();
+        let resp = e.process(delete_msg("/Sensor1"));
+        assert_eq!(status(&resp), 200);
+        assert!(e.tree.objects.is_empty());
+    }
+
+    #[test]
+    fn delete_item() {
+        let mut e = setup();
+        let resp = e.process(delete_msg("/Sensor1/Temperature"));
+        assert_eq!(status(&resp), 200);
+        assert!(e.tree.resolve("/Sensor1/Temperature").is_err());
+        // Humidity still exists
+        assert!(e.tree.resolve("/Sensor1/Humidity").is_ok());
+    }
+
+    #[test]
+    fn delete_not_found() {
+        let mut e = setup();
+        let resp = e.process(delete_msg("/Missing"));
+        assert_eq!(status(&resp), 404);
+    }
+
+    #[test]
+    fn delete_root_forbidden() {
+        let mut e = setup();
+        // Bypass parse validation to test defense-in-depth
+        let resp = e.process(delete_msg("/"));
+        assert_eq!(status(&resp), 403);
+    }
+
+    // --- Cancel ---
+
+    #[test]
+    fn cancel_existing_subscription() {
+        let mut e = setup();
+        let sub = e.process(sub_msg("/Sensor1/Temperature", 10.0, 60));
+        let rid = body(&sub).rid.as_ref().unwrap().clone();
+        // Cancel
+        let resp = e.process(cancel_msg(&[&rid]));
+        assert_eq!(status(&resp), 200);
+        // Verify subscription is gone
+        let poll = e.process(poll_msg(&rid));
+        assert_eq!(status(&poll), 404);
+    }
+
+    #[test]
+    fn cancel_unknown_rid_idempotent() {
+        let mut e = Engine::new();
+        let resp = e.process(cancel_msg(&["nonexistent"]));
+        assert_eq!(status(&resp), 200);
+    }
+
+    #[test]
+    fn cancel_multiple() {
+        let mut e = setup();
+        let s1 = e.process(sub_msg("/Sensor1/Temperature", 5.0, 60));
+        let s2 = e.process(sub_msg("/Sensor1/Humidity", 10.0, 60));
+        let r1 = body(&s1).rid.as_ref().unwrap().clone();
+        let r2 = body(&s2).rid.as_ref().unwrap().clone();
+        let resp = e.process(cancel_msg(&[&r1, &r2]));
+        assert_eq!(status(&resp), 200);
+        assert_eq!(status(&e.process(poll_msg(&r1))), 404);
+        assert_eq!(status(&e.process(poll_msg(&r2))), 404);
+    }
+
+    // --- Integration ---
+
+    #[test]
+    fn write_then_read_round_trip() {
+        let mut e = Engine::new();
+        e.process(write_msg("/Dev/Sensor", OmiValue::Number(42.0)));
+        let resp = e.process(read_with("/Dev/Sensor", Some(1), None, None, None, None));
+        assert_eq!(status(&resp), 200);
+        match body(&resp).result.as_ref().unwrap() {
+            ResponseResult::Single(val) => {
+                let values = val["values"].as_array().unwrap();
+                assert_eq!(values[0]["v"], 42.0);
+            }
+            _ => panic!("expected Single"),
+        }
+    }
+
+    #[test]
+    fn write_read_delete_read_lifecycle() {
+        let mut e = Engine::new();
+        // Write
+        assert_eq!(status(&e.process(write_msg("/A/B", OmiValue::Number(1.0)))), 201);
+        // Read — exists
+        assert_eq!(status(&e.process(read_msg("/A/B"))), 200);
+        // Delete
+        assert_eq!(status(&e.process(delete_msg("/A/B"))), 200);
+        // Read — gone
+        assert_eq!(status(&e.process(read_msg("/A/B"))), 404);
+    }
+
+    #[test]
+    fn response_message_rejected() {
+        let mut e = Engine::new();
+        let msg = OmiResponse::ok(serde_json::json!(null));
+        let resp = e.process(msg);
+        assert_eq!(status(&resp), 400);
+    }
+}

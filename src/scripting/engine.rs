@@ -87,7 +87,7 @@ impl ScriptEngine {
     }
 
     /// Create an mJS foreign function value.
-    pub fn mk_foreign_func(&mut self, f: ffi::mjs_func_ptr_t) -> ffi::mjs_val_t {
+    pub fn mk_foreign_func(&mut self, f: ffi::mjs_ffi_cb_t) -> ffi::mjs_val_t {
         unsafe { ffi::mjs_mk_foreign_func(self.mjs, f) }
     }
 

@@ -221,43 +221,41 @@ impl Engine {
     }
 
     fn write_single(&mut self, path: &str, v: OmiValue, t: Option<f64>) -> OmiMessage {
-        // write_single_inner always returns Ok for user-initiated writes
-        self.write_single_inner(path, v, t, 0).unwrap_or_else(|()| {
-            OmiResponse::error("internal write error")
-        })
+        self.write_single_inner(path, v, t, 0)
     }
 
     /// Inner write logic with depth tracking for script cascading.
     ///
     /// `depth` starts at 0 for user-initiated writes and increments for each
     /// cascading write triggered by an onwrite script.
-    pub(crate) fn write_single_inner(
+    fn write_single_inner(
         &mut self,
         path: &str,
         v: OmiValue,
         t: Option<f64>,
         #[cfg_attr(not(feature = "scripting"), allow(unused))]
         depth: u8,
-    ) -> Result<OmiMessage, ()> {
+    ) -> OmiMessage {
         match self.tree.resolve(path) {
             Ok(PathTarget::InfoItem(item)) => {
                 if !item.is_writable() {
-                    return Ok(OmiResponse::forbidden(&format!(
+                    return OmiResponse::forbidden(&format!(
                         "InfoItem at '{}' is not writable",
                         path
-                    )));
+                    ));
                 }
             }
             Ok(PathTarget::Object(_)) | Ok(PathTarget::Root(_)) => {
-                return Ok(OmiResponse::bad_request(&format!(
+                return OmiResponse::bad_request(&format!(
                     "Cannot write value to object path '{}'",
                     path
-                )));
+                ));
             }
             Err(TreeError::NotFound(_)) => {} // will auto-create
-            Err(e) => return Ok(Self::tree_error_to_response(e)),
+            Err(e) => return Self::tree_error_to_response(e),
         }
 
+        #[cfg(feature = "scripting")]
         let write_value = v.clone();
         match self.tree.write_value(path, v, t) {
             Ok(created) => {
@@ -268,13 +266,13 @@ impl Engine {
                 #[cfg(feature = "scripting")]
                 self.run_onwrite_script(path, &write_value, t, depth);
 
-                Ok(if created {
+                if created {
                     OmiResponse::created()
                 } else {
                     OmiResponse::ok(serde_json::json!(null))
-                })
+                }
             }
-            Err(e) => Ok(Self::tree_error_to_response(e)),
+            Err(e) => Self::tree_error_to_response(e),
         }
     }
 
@@ -312,6 +310,7 @@ impl Engine {
             Err(e) => return Self::tree_error_to_item_status(&path, e),
         }
 
+        #[cfg(feature = "scripting")]
         let write_value = v.clone();
         match self.tree.write_value(&path, v, t) {
             Ok(created) => {
@@ -349,6 +348,8 @@ impl Engine {
 
     /// Execute an onwrite script if the InfoItem at `path` has one in its metadata.
     ///
+    /// Script writes are collected into a local `Vec` during execution and
+    /// processed afterwards, avoiding re-entrant `&mut self` aliasing.
     /// Errors are logged but never fail the write — the value is already written.
     #[cfg(feature = "scripting")]
     fn run_onwrite_script(
@@ -358,8 +359,10 @@ impl Engine {
         timestamp: Option<f64>,
         depth: u8,
     ) {
-        use crate::scripting::bindings::{MAX_SCRIPT_DEPTH, ScriptCallbackCtx, js_odf_write_item};
+        use crate::scripting::bindings::{MAX_SCRIPT_DEPTH, PendingWrite, ScriptCallbackCtx,
+                                          js_odf_write_item};
         use crate::scripting::ffi;
+        use crate::scripting::ffi::mjs_name;
         use crate::scripting::convert::omi_to_mjs;
 
         if depth >= MAX_SCRIPT_DEPTH {
@@ -377,48 +380,55 @@ impl Engine {
             _ => return,
         };
 
-        // Get the raw mJS pointer. We do all FFI through raw pointers to avoid
-        // borrowing self.script_engine while also needing &mut self for the ctx.
-        let mjs = match self.script_engine.as_mut() {
-            Some(se) => se.raw(),
+        // Temporarily take the script engine out of self so we can use it
+        // without borrowing self, then put it back before processing writes.
+        let mut script_engine = match self.script_engine.take() {
+            Some(se) => se,
             None => return,
         };
+        let mjs = script_engine.raw();
 
-        // Safety: mjs is valid for the duration of this function. All FFI calls
-        // below are safe because we hold exclusive access via &mut self.
+        let mut pending_writes: Vec<PendingWrite> = Vec::new();
+
+        // Safety: mjs is valid for the duration of this block. The callback
+        // only writes to `pending_writes` through the ctx pointer — it never
+        // accesses the Engine, eliminating aliasing concerns.
         unsafe {
             // Set up `event` object with { value, path, timestamp }
             let event = ffi::mjs_mk_object(mjs);
             let js_val = omi_to_mjs(mjs, value);
-            ffi::mjs_set(mjs, event, "value\0".as_ptr() as *const _, 5, js_val);
+            let (n, l) = mjs_name!("value");
+            ffi::mjs_set(mjs, event, n, l, js_val);
             let js_path = ffi::mjs_mk_string(mjs, path.as_ptr() as *const _, path.len(), 1);
-            ffi::mjs_set(mjs, event, "path\0".as_ptr() as *const _, 4, js_path);
+            let (n, l) = mjs_name!("path");
+            ffi::mjs_set(mjs, event, n, l, js_path);
             let js_ts = match timestamp {
                 Some(t) => ffi::mjs_mk_number(mjs, t),
                 None => ffi::mjs_mk_null(),
             };
-            ffi::mjs_set(mjs, event, "timestamp\0".as_ptr() as *const _, 9, js_ts);
+            let (n, l) = mjs_name!("timestamp");
+            ffi::mjs_set(mjs, event, n, l, js_ts);
 
             let global = ffi::mjs_get_global(mjs);
-            ffi::mjs_set(mjs, global, "event\0".as_ptr() as *const _, 5, event);
+            let (n, l) = mjs_name!("event");
+            ffi::mjs_set(mjs, global, n, l, event);
 
             // Set up `odf.writeItem` binding
             let odf = ffi::mjs_mk_object(mjs);
-            let write_fn = ffi::mjs_mk_foreign_func(
-                mjs,
-                Some(std::mem::transmute::<unsafe extern "C" fn(*mut ffi::mjs), extern "C" fn()>(js_odf_write_item)),
-            );
-            ffi::mjs_set(mjs, odf, "writeItem\0".as_ptr() as *const _, 9, write_fn);
-            ffi::mjs_set(mjs, global, "odf\0".as_ptr() as *const _, 3, odf);
+            let write_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_write_item));
+            let (n, l) = mjs_name!("writeItem");
+            ffi::mjs_set(mjs, odf, n, l, write_fn);
+            let (n, l) = mjs_name!("odf");
+            ffi::mjs_set(mjs, global, n, l, odf);
 
             // Set up callback context on the stack
             let mut ctx = ScriptCallbackCtx {
-                engine: self as *mut Engine,
+                pending_writes: &mut pending_writes,
                 depth,
-                timestamp,
             };
             let ctx_foreign = ffi::mjs_mk_foreign(mjs, &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void);
-            ffi::mjs_set(mjs, global, "__ctx\0".as_ptr() as *const _, 5, ctx_foreign);
+            let (n, l) = mjs_name!("__ctx");
+            ffi::mjs_set(mjs, global, n, l, ctx_foreign);
 
             // Execute the script
             let c_src = match std::ffi::CString::new(script_src.as_str()) {
@@ -426,7 +436,8 @@ impl Engine {
                 Err(_) => {
                     log::warn!("onwrite script at '{}' contains NUL byte", path);
                     let null_val = ffi::mjs_mk_null();
-                    ffi::mjs_set(mjs, global, "__ctx\0".as_ptr() as *const _, 5, null_val);
+                    ffi::mjs_set(mjs, global, n, l, null_val);
+                    self.script_engine = Some(script_engine);
                     return;
                 }
             };
@@ -444,7 +455,24 @@ impl Engine {
 
             // Clear context to prevent stale use
             let null_val = ffi::mjs_mk_null();
-            ffi::mjs_set(mjs, global, "__ctx\0".as_ptr() as *const _, 5, null_val);
+            ffi::mjs_set(mjs, global, n, l, null_val);
+        }
+
+        // Put the script engine back before processing writes (nested calls
+        // will take() it again for their own scripts).
+        self.script_engine = Some(script_engine);
+
+        // Process collected writes — each may trigger further onwrite scripts
+        // at depth + 1, using normal &mut self calls with no aliasing.
+        for pw in pending_writes {
+            let _ = self.write_single_inner(&pw.path, pw.value, timestamp, depth + 1);
+        }
+
+        // Run GC at the top level after the entire cascade completes
+        if depth == 0 {
+            if let Some(se) = self.script_engine.as_mut() {
+                se.gc();
+            }
         }
     }
 
@@ -1108,18 +1136,10 @@ mod tests {
             e.process(write_msg("/Dev/Loop", OmiValue::Number(0.0)), 0.0, None);
             set_onwrite(&mut e, "/Dev/Loop",
                 "odf.writeItem(event.value + 1, '/Dev/Loop');");
-            // Write → cascades up to depth limit (4), then stops
+            // Write 1.0 at depth 0 → script writes 2.0 (depth 1) → 3.0 (depth 2)
+            // → 4.0 (depth 3) → script tries 5.0 but depth 4 >= MAX(4), blocked.
             e.process(write_msg("/Dev/Loop", OmiValue::Number(1.0)), 0.0, None);
-            // Value should be 1 + MAX_SCRIPT_DEPTH - 1 increments = at most 4
-            let val = newest_value(&mut e, "/Dev/Loop");
-            match val {
-                OmiValue::Number(n) => {
-                    // Should have incremented several times but stopped
-                    assert!(n > 1.0, "expected cascading to increment value");
-                    assert!(n <= 5.0, "expected depth limit to stop recursion, got {}", n);
-                }
-                _ => panic!("expected Number, got {:?}", val),
-            }
+            assert_eq!(newest_value(&mut e, "/Dev/Loop"), OmiValue::Number(4.0));
         }
 
         #[test]

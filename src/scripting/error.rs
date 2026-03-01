@@ -7,8 +7,6 @@ pub enum ScriptError {
     ScriptTooLarge(usize),
     /// mJS returned an error during script execution.
     Execution(String),
-    /// Cascading script depth limit exceeded.
-    DepthLimitExceeded,
 }
 
 impl std::fmt::Display for ScriptError {
@@ -19,7 +17,6 @@ impl std::fmt::Display for ScriptError {
                 write!(f, "script too large: {} bytes (max {})", len, super::engine::MAX_SCRIPT_LEN)
             }
             Self::Execution(msg) => write!(f, "script error: {}", msg),
-            Self::DepthLimitExceeded => write!(f, "script depth limit exceeded"),
         }
     }
 }

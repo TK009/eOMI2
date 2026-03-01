@@ -1,25 +1,37 @@
 //! `odf.writeItem()` C callback implementation for cascading writes.
+//!
+//! The callback collects writes into a `Vec` rather than calling back into the
+//! OMI Engine. The writes are processed after script execution completes,
+//! eliminating re-entrant `&mut Engine` aliasing.
 
 use super::ffi;
+use super::ffi::mjs_name;
 
 /// Maximum script cascading depth.
 pub const MAX_SCRIPT_DEPTH: u8 = 4;
+
+/// A write collected during script execution, to be processed afterwards.
+pub(crate) struct PendingWrite {
+    pub path: String,
+    pub value: crate::odf::OmiValue,
+}
 
 /// Context passed to the JS callback via a foreign pointer.
 ///
 /// Valid only during script execution. Set before `exec()`, cleared after.
 pub(crate) struct ScriptCallbackCtx {
-    pub engine: *mut crate::omi::Engine,
+    pub pending_writes: *mut Vec<PendingWrite>,
     pub depth: u8,
-    pub timestamp: Option<f64>,
 }
 
 /// C callback for `odf.writeItem(value, path)`.
 ///
+/// Collects the write request into `pending_writes` for deferred processing.
+///
 /// # Safety
 /// Called from mJS during script execution. The `__ctx` foreign pointer on the
 /// global object must point to a valid `ScriptCallbackCtx`.
-pub unsafe extern "C" fn js_odf_write_item(mjs: *mut ffi::mjs) {
+pub(crate) unsafe extern "C" fn js_odf_write_item(mjs: *mut ffi::mjs) {
     let nargs = ffi::mjs_nargs(mjs);
     if nargs < 2 {
         ffi::mjs_return(mjs, ffi::mjs_mk_boolean(mjs, 0));
@@ -55,7 +67,8 @@ pub unsafe extern "C" fn js_odf_write_item(mjs: *mut ffi::mjs) {
 
     // Retrieve context
     let global = ffi::mjs_get_global(mjs);
-    let ctx_val = ffi::mjs_get(mjs, global, "__ctx\0".as_ptr() as *const _, 5);
+    let (ctx_name, ctx_len) = mjs_name!("__ctx");
+    let ctx_val = ffi::mjs_get(mjs, global, ctx_name, ctx_len);
     if ffi::mjs_is_foreign(ctx_val) == 0 {
         ffi::mjs_return(mjs, ffi::mjs_mk_boolean(mjs, 0));
         return;
@@ -67,7 +80,7 @@ pub unsafe extern "C" fn js_odf_write_item(mjs: *mut ffi::mjs) {
     }
     let ctx = &*ctx_ptr;
 
-    // Check depth limit
+    // Check depth limit — block writes that would exceed max cascading depth
     let new_depth = ctx.depth + 1;
     if new_depth >= MAX_SCRIPT_DEPTH {
         log::warn!("Script depth limit reached at path '{}'", path);
@@ -75,9 +88,8 @@ pub unsafe extern "C" fn js_odf_write_item(mjs: *mut ffi::mjs) {
         return;
     }
 
-    // Perform the cascading write
-    let engine = &mut *ctx.engine;
-    let result = engine.write_single_inner(&path, omi_value, ctx.timestamp, new_depth);
-    let ok = result.is_ok();
-    ffi::mjs_return(mjs, ffi::mjs_mk_boolean(mjs, ok as i32));
+    // Collect the write for deferred processing
+    let writes = &mut *ctx.pending_writes;
+    writes.push(PendingWrite { path, value: omi_value });
+    ffi::mjs_return(mjs, ffi::mjs_mk_boolean(mjs, 1));
 }

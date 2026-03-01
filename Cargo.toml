@@ -23,7 +23,7 @@ default = ["std", "esp", "json", "scripting"]
 std = []
 esp = ["dep:esp-idf-svc", "dep:embuild", "json"]
 json = ["dep:serde", "dep:serde_json"]
-scripting = ["std"]
+scripting = ["std", "dep:cc"]
 psram = []
 
 experimental = ["esp-idf-svc/experimental"]
@@ -37,7 +37,7 @@ serde_json = { version = "1", optional = true }
 
 [build-dependencies]
 embuild = { version = "0.33", features = ["espidf"], optional = true }
-cc = "1"
+cc = { version = "1", optional = true }
 
 [dev-dependencies]
 object = { version = "0.36", default-features = false, features = ["read", "elf"] }

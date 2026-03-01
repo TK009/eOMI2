@@ -6,6 +6,16 @@
 
 use std::os::raw::{c_char, c_int, c_void};
 
+/// Compile-time name+length pair for mJS property access.
+/// Returns `(*const c_char, usize)` — pointer to a NUL-terminated static
+/// string and the byte length excluding the NUL.
+macro_rules! mjs_name {
+    ($name:literal) => {
+        (concat!($name, "\0").as_ptr() as *const std::os::raw::c_char, $name.len())
+    };
+}
+pub(crate) use mjs_name;
+
 /// mJS NaN-boxed value type.
 pub type mjs_val_t = u64;
 
@@ -15,8 +25,11 @@ pub type mjs_err_t = c_int;
 /// mJS error enum values.
 pub const MJS_OK: mjs_err_t = 0;
 
-/// Function pointer type for foreign functions callable from JS.
-pub type mjs_func_ptr_t = Option<unsafe extern "C" fn()>;
+/// Function pointer type for foreign functions callable from mJS.
+///
+/// mJS stores these as `void (*)(void)` but always calls them as
+/// `void (*)(struct mjs *)`. We declare the true calling convention.
+pub type mjs_ffi_cb_t = Option<unsafe extern "C" fn(*mut mjs)>;
 
 /// Opaque mJS engine handle.
 #[repr(C)]
@@ -49,7 +62,7 @@ extern "C" {
     pub fn mjs_mk_undefined() -> mjs_val_t;
     pub fn mjs_mk_object(mjs: *mut mjs) -> mjs_val_t;
     pub fn mjs_mk_foreign(mjs: *mut mjs, ptr: *mut c_void) -> mjs_val_t;
-    pub fn mjs_mk_foreign_func(mjs: *mut mjs, f: mjs_func_ptr_t) -> mjs_val_t;
+    pub fn mjs_mk_foreign_func(mjs: *mut mjs, f: mjs_ffi_cb_t) -> mjs_val_t;
 
     // --- Object access ---
     pub fn mjs_set(

@@ -5,7 +5,7 @@ use super::cancel::CancelOp;
 use super::delete::DeleteOp;
 use super::read::{ReadKind, ReadOp};
 use super::response::{ItemStatus, OmiResponse, ResponseBody, StatusCode};
-use super::subscriptions::SubscriptionRegistry;
+use super::subscriptions::{PollResult, SubscriptionRegistry};
 use super::write::{WriteItem, WriteOp};
 use super::{OmiMessage, Operation};
 
@@ -149,14 +149,8 @@ impl Engine {
 
     fn process_read_poll(&mut self, op: &ReadOp, now: f64) -> OmiMessage {
         let rid = op.rid.as_deref().unwrap_or("");
-        if !self.subscriptions.contains(rid) {
-            return Self::error_response(
-                StatusCode::NotFound,
-                format!("Subscription '{}' not found", rid),
-            );
-        }
         match self.subscriptions.poll(rid, now) {
-            Some((path, values)) => {
+            PollResult::Ok { path, values } => {
                 match serde_json::to_value(&values) {
                     Ok(val) => OmiResponse::ok(serde_json::json!({
                         "path": path,
@@ -165,20 +159,14 @@ impl Engine {
                     Err(e) => OmiResponse::error(&e.to_string()),
                 }
             }
-            None => {
-                // Sub existed but either just expired or is not a poll subscription
-                if self.subscriptions.contains(rid) {
-                    OmiResponse::bad_request(&format!(
-                        "Subscription '{}' is not pollable",
-                        rid
-                    ))
-                } else {
-                    Self::error_response(
-                        StatusCode::NotFound,
-                        format!("Subscription '{}' not found", rid),
-                    )
-                }
-            }
+            PollResult::NotPollable => OmiResponse::bad_request(&format!(
+                "Subscription '{}' is not pollable",
+                rid
+            )),
+            PollResult::NotFound => Self::error_response(
+                StatusCode::NotFound,
+                format!("Subscription '{}' not found", rid),
+            ),
         }
     }
 
@@ -370,6 +358,20 @@ mod tests {
                 newest: None, oldest: None, begin: None, end: None,
                 depth: None,
                 interval: Some(-1.0),
+                callback: None,
+            }),
+        }
+    }
+
+    fn interval_poll_sub_msg(path: &str, interval: f64, ttl: i64) -> OmiMessage {
+        OmiMessage {
+            version: "1.0".into(),
+            ttl,
+            operation: Operation::Read(ReadOp {
+                path: Some(path.into()), rid: None,
+                newest: None, oldest: None, begin: None, end: None,
+                depth: None,
+                interval: Some(interval),
                 callback: None,
             }),
         }
@@ -823,5 +825,44 @@ mod tests {
         let msg = OmiResponse::ok(serde_json::json!(null));
         let resp = e.process(msg, 0.0);
         assert_eq!(status(&resp), 400);
+    }
+
+    #[test]
+    fn interval_poll_sub_tick_and_poll() {
+        let mut e = setup();
+        // Create interval poll sub (interval=5, no callback)
+        let sub = e.process(interval_poll_sub_msg("/Sensor1/Temperature", 5.0, 60), 1000.0);
+        assert_eq!(status(&sub), 200);
+        let rid = body(&sub).rid.as_ref().unwrap().clone();
+
+        // Poll before tick — empty buffer
+        let resp = e.process(poll_msg(&rid), 1001.0);
+        assert_eq!(status(&resp), 200);
+        match body(&resp).result.as_ref().unwrap() {
+            ResponseResult::Single(val) => {
+                assert_eq!(val["values"].as_array().unwrap().len(), 0);
+            }
+            _ => panic!("expected Single"),
+        }
+
+        // Tick at 1006 (due at 1005) — buffers current value
+        let (deliveries, _) = e.subscriptions().tick_intervals(1006.0, &|_| {
+            Some(vec![crate::odf::Value::new(OmiValue::Number(22.0), Some(1006.0))])
+        });
+        // Poll subs don't produce deliveries
+        assert!(deliveries.is_empty());
+
+        // Poll — should get the buffered value
+        let resp = e.process(poll_msg(&rid), 1007.0);
+        assert_eq!(status(&resp), 200);
+        match body(&resp).result.as_ref().unwrap() {
+            ResponseResult::Single(val) => {
+                assert_eq!(val["path"], "/Sensor1/Temperature");
+                let values = val["values"].as_array().unwrap();
+                assert_eq!(values.len(), 1);
+                assert_eq!(values[0]["v"], 22.0);
+            }
+            _ => panic!("expected Single"),
+        }
     }
 }

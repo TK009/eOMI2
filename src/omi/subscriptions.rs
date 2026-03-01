@@ -47,6 +47,17 @@ impl Subscription {
     }
 }
 
+/// Result of polling a subscription.
+#[derive(Debug)]
+pub enum PollResult {
+    /// Subscription found, buffer drained.
+    Ok { path: String, values: Vec<Value> },
+    /// Subscription exists but is not a poll subscription (callback-based).
+    NotPollable,
+    /// Subscription not found (never existed or already expired/cancelled).
+    NotFound,
+}
+
 /// A pending delivery for the engine/transport layer to send.
 #[derive(Debug, Clone)]
 pub struct Delivery {
@@ -281,6 +292,7 @@ impl SubscriptionRegistry {
     }
 
     /// Insert a rid into the interval queue in sorted order by trigger_time.
+    /// O(n) linear scan is acceptable given MAX_SUBSCRIPTIONS=32.
     fn insert_interval_sorted(&mut self, rid: String) {
         let trigger_time = self
             .subscriptions
@@ -398,21 +410,24 @@ impl SubscriptionRegistry {
         (deliveries, next)
     }
 
-    /// Poll a subscription's buffered values. Returns `(path, values)` if the
-    /// subscription exists and has not expired. Drains the buffer.
-    pub fn poll(&mut self, rid: &str, now: f64) -> Option<(String, Vec<Value>)> {
-        let sub = self.subscriptions.get(rid)?;
+    /// Poll a subscription's buffered values. Drains the buffer on success.
+    pub fn poll(&mut self, rid: &str, now: f64) -> PollResult {
+        let sub = match self.subscriptions.get(rid) {
+            Some(s) => s,
+            None => return PollResult::NotFound,
+        };
 
         if sub.is_expired(now) {
             let rid_owned = rid.to_string();
             self.cancel(&[rid_owned]);
-            return None;
+            return PollResult::NotFound;
         }
 
         let path = sub.path.clone();
-        let buf = self.poll_buffers.get_mut(rid)?;
-        let values = buf.drain();
-        Some((path, values))
+        match self.poll_buffers.get_mut(rid) {
+            Some(buf) => PollResult::Ok { path, values: buf.drain() },
+            None => PollResult::NotPollable,
+        }
     }
 
     /// Full sweep: remove all expired subscriptions. Returns the number removed.
@@ -855,15 +870,19 @@ mod tests {
         let rid = reg.create("/A/Temp", -1.0, None, 60.0, 1000.0).unwrap();
 
         reg.notify_event("/A/Temp", &[val(22.5, 1010.0), val(23.0, 1011.0)], 1011.0);
-        let (path, values) = reg.poll(&rid, 1012.0).unwrap();
-        assert_eq!(path, "/A/Temp");
-        assert_eq!(values.len(), 2);
+        match reg.poll(&rid, 1012.0) {
+            PollResult::Ok { path, values } => {
+                assert_eq!(path, "/A/Temp");
+                assert_eq!(values.len(), 2);
+            }
+            other => panic!("expected PollResult::Ok, got {:?}", other),
+        }
     }
 
     #[test]
     fn poll_unknown_rid() {
         let mut reg = SubscriptionRegistry::new();
-        assert!(reg.poll("nonexistent", 1000.0).is_none());
+        assert!(matches!(reg.poll("nonexistent", 1000.0), PollResult::NotFound));
     }
 
     #[test]
@@ -873,7 +892,7 @@ mod tests {
         reg.notify_event("/A/Temp", &[val(1.0, 1005.0)], 1005.0);
 
         // Poll after expiry
-        assert!(reg.poll(&rid, 1020.0).is_none());
+        assert!(matches!(reg.poll(&rid, 1020.0), PollResult::NotFound));
         assert!(!reg.contains(&rid));
     }
 
@@ -883,18 +902,26 @@ mod tests {
         let rid = reg.create("/A/Temp", -1.0, None, 60.0, 1000.0).unwrap();
 
         reg.notify_event("/A/Temp", &[val(1.0, 1001.0)], 1001.0);
-        let (_, values) = reg.poll(&rid, 1002.0).unwrap();
-        assert_eq!(values.len(), 1);
+        match reg.poll(&rid, 1002.0) {
+            PollResult::Ok { values, .. } => assert_eq!(values.len(), 1),
+            other => panic!("expected Ok, got {:?}", other),
+        }
 
         // Second poll — buffer should be empty now
-        let (_, values) = reg.poll(&rid, 1003.0).unwrap();
-        assert!(values.is_empty());
+        match reg.poll(&rid, 1003.0) {
+            PollResult::Ok { values, .. } => assert!(values.is_empty()),
+            other => panic!("expected Ok, got {:?}", other),
+        }
 
         // Notify again
         reg.notify_event("/A/Temp", &[val(2.0, 1004.0)], 1004.0);
-        let (_, values) = reg.poll(&rid, 1005.0).unwrap();
-        assert_eq!(values.len(), 1);
-        assert_eq!(values[0].v, OmiValue::Number(2.0));
+        match reg.poll(&rid, 1005.0) {
+            PollResult::Ok { values, .. } => {
+                assert_eq!(values.len(), 1);
+                assert_eq!(values[0].v, OmiValue::Number(2.0));
+            }
+            other => panic!("expected Ok, got {:?}", other),
+        }
     }
 
     // --- Expire ---
@@ -944,14 +971,20 @@ mod tests {
         reg.notify_event("/Sensor/Temp", &[val(22.5, 1010.0)], 1010.0);
 
         // Poll — get the value
-        let (path, values) = reg.poll(&rid, 1011.0).unwrap();
-        assert_eq!(path, "/Sensor/Temp");
-        assert_eq!(values.len(), 1);
-        assert_eq!(values[0].v, OmiValue::Number(22.5));
+        match reg.poll(&rid, 1011.0) {
+            PollResult::Ok { path, values } => {
+                assert_eq!(path, "/Sensor/Temp");
+                assert_eq!(values.len(), 1);
+                assert_eq!(values[0].v, OmiValue::Number(22.5));
+            }
+            other => panic!("expected Ok, got {:?}", other),
+        }
 
         // Poll again — empty
-        let (_, values) = reg.poll(&rid, 1012.0).unwrap();
-        assert!(values.is_empty());
+        match reg.poll(&rid, 1012.0) {
+            PollResult::Ok { values, .. } => assert!(values.is_empty()),
+            other => panic!("expected Ok, got {:?}", other),
+        }
 
         // Cancel
         let removed = reg.cancel(&[rid.clone()]);
@@ -1014,8 +1047,10 @@ mod tests {
         reg.notify_event("/Sensor/Temp", &[val(22.5, 1002.0)], 1002.0);
 
         // Poll the event sub
-        let (_, values) = reg.poll(&event_rid, 1003.0).unwrap();
-        assert_eq!(values.len(), 1);
+        match reg.poll(&event_rid, 1003.0) {
+            PollResult::Ok { values, .. } => assert_eq!(values.len(), 1),
+            other => panic!("expected Ok, got {:?}", other),
+        }
 
         // Tick the interval sub
         let (deliveries, _) = reg.tick_intervals(1006.0, &|_| {

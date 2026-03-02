@@ -8,6 +8,8 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::psram::PsramString;
+
 const DEFAULT_MAX_TOTAL: usize = 100 * 1024; // 100 KB
 const MAX_SINGLE_PAGE: usize = 64 * 1024; // 64 KB
 
@@ -21,7 +23,7 @@ pub enum PageError {
 }
 
 pub struct PageStore {
-    pages: BTreeMap<String, String>,
+    pages: BTreeMap<String, PsramString>,
     /// Tracks total heap usage: path keys + HTML content.
     total_bytes: usize,
     max_total_bytes: usize,
@@ -86,7 +88,7 @@ impl PageStore {
         }
 
         self.total_bytes = new_total;
-        self.pages.insert(String::from(path), String::from(html));
+        self.pages.insert(String::from(path), PsramString::from_str(html));
         Ok(())
     }
 

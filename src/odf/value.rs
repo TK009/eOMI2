@@ -4,6 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde::ser::SerializeSeq;
 
 use super::OmiValue;
+use crate::psram::PsramBox;
 
 /// A timestamped value in the OMI data model.
 #[derive(Debug, Clone, PartialEq)]
@@ -34,9 +35,11 @@ impl Value {
 ///
 /// Overwrites oldest entries when full. Provides efficient O(1) insertion
 /// and query methods returning newest-first ordering as the OMI spec requires.
+///
+/// Backed by `PsramBox` so the buffer lands in PSRAM on ESP32.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RingBuffer {
-    buf: Vec<Value>,
+    buf: PsramBox<Value>,
     /// Index where the next push will write. When `len == capacity`, this
     /// also points to the oldest element (which will be overwritten).
     head: usize,
@@ -48,7 +51,7 @@ impl RingBuffer {
     pub fn new(capacity: usize) -> Self {
         assert!(capacity > 0, "RingBuffer capacity must be > 0");
         Self {
-            buf: Vec::with_capacity(capacity),
+            buf: PsramBox::new(capacity),
             head: 0,
             len: 0,
             capacity,
@@ -76,7 +79,7 @@ impl RingBuffer {
             self.head = self.len % self.capacity;
         } else {
             // Full — overwrite oldest
-            self.buf[self.head] = value;
+            self.buf.set(self.head, value);
             self.head = (self.head + 1) % self.capacity;
         }
     }
@@ -95,7 +98,7 @@ impl RingBuffer {
     /// Get element by logical index (0 = oldest, len-1 = newest).
     fn get(&self, logical: usize) -> &Value {
         let idx = (self.oldest_index() + logical) % self.capacity;
-        &self.buf[idx]
+        self.buf.get(idx)
     }
 
     /// Iterate from oldest to newest.

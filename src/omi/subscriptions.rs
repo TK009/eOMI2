@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::collections::VecDeque;
 
 use crate::odf::Value;
+use crate::psram::PsramBox;
 
 /// How a subscription delivers results.
 #[derive(Debug, Clone, PartialEq)]
@@ -70,41 +71,68 @@ pub struct Delivery {
 }
 
 /// Simple poll buffer — accumulates values, drained completely on each poll.
-/// Drops oldest on overflow to bound memory. Uses VecDeque for O(1) front removal.
+/// Drops oldest on overflow to bound memory. Backed by `PsramBox` ring buffer
+/// so the allocation lands in PSRAM on ESP32.
 #[derive(Debug, Clone)]
 pub struct PollBuffer {
-    buf: VecDeque<Value>,
+    buf: PsramBox<Value>,
+    head: usize,
+    len: usize,
     capacity: usize,
 }
 
 impl PollBuffer {
     pub fn new(capacity: usize) -> Self {
+        assert!(capacity > 0, "PollBuffer capacity must be > 0");
         Self {
-            buf: VecDeque::new(),
+            buf: PsramBox::new(capacity),
+            head: 0,
+            len: 0,
             capacity,
         }
     }
 
     pub fn push(&mut self, values: &[Value]) {
         for v in values {
-            if self.buf.len() >= self.capacity {
-                self.buf.pop_front();
+            let write_idx = (self.head + self.len) % self.capacity;
+            if self.len < self.capacity {
+                // Still growing — append to the PsramBox backing store
+                // We need to ensure the PsramBox has this slot initialized.
+                if self.buf.len() <= write_idx {
+                    // Extend buf to cover this slot
+                    self.buf.push(v.clone());
+                } else {
+                    self.buf.set(write_idx, v.clone());
+                }
+                self.len += 1;
+            } else {
+                // Full — overwrite oldest, advance head
+                self.buf.set(write_idx, v.clone());
+                self.head = (self.head + 1) % self.capacity;
             }
-            self.buf.push_back(v.clone());
         }
     }
 
     /// Drain all buffered values, returning them and leaving the buffer empty.
     pub fn drain(&mut self) -> Vec<Value> {
-        self.buf.drain(..).collect()
+        let mut result = Vec::with_capacity(self.len);
+        for i in 0..self.len {
+            let idx = (self.head + i) % self.capacity;
+            result.push(self.buf.get(idx).clone());
+        }
+        // Reset without freeing the allocation
+        self.buf.clear();
+        self.head = 0;
+        self.len = 0;
+        result
     }
 
     pub fn is_empty(&self) -> bool {
-        self.buf.is_empty()
+        self.len == 0
     }
 
     pub fn len(&self) -> usize {
-        self.buf.len()
+        self.len
     }
 }
 

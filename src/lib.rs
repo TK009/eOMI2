@@ -14,6 +14,8 @@ pub mod omi;
 #[cfg(feature = "std")]
 pub mod pages;
 #[cfg(feature = "std")]
+pub mod psram;
+#[cfg(feature = "std")]
 pub mod http;
 #[cfg(feature = "scripting")]
 pub mod scripting;

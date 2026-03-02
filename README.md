@@ -16,7 +16,9 @@ Main Target devices: Espressif ESP* family
 
 Requires only stable Rust:
 
-    cargo test-host
+```
+cargo test-host
+```
 
 > **Note:** The alias defaults to `x86_64-unknown-linux-gnu`. On other
 > architectures (e.g. Apple Silicon), edit the target triple in
@@ -27,10 +29,24 @@ Requires only stable Rust:
 Test devices:
 - ESP32-S2 WROVER development module
 
-Install the ESP toolchain with [espup](https://github.com/esp-rs/espup), then:
+#### ESP toolchain setup
 
-    rustup override set esp   # one-time, in the project directory
-    cargo build
+Linux users also need: `gcc build-essential curl pkg-config` (Debian/Ubuntu)
+or the equivalent for your distro.
+
+1. Install [espup](https://github.com/esp-rs/espup) (requires `rustup`):
+
+       cargo install espup --locked
+       espup install
+
+3. Source the environment variables (add to your shell profile for persistence):
+
+       . $HOME/export-esp.sh
+
+4. In the project directory, select the toolchain and build:
+
+       rustup override set esp   # one-time, in the project directory
+       cargo build
 
 ### Wi-Fi credentials
 

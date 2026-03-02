@@ -2,8 +2,9 @@
 # Orchestrate an end-to-end test run against a real ESP32 device.
 #
 # Steps:
+#   0. Ensure ESP toolchain is installed (setup-esp.sh)
 #   1. Claim a USB device from the pool
-#   2. Build firmware (unless --skip-build)
+#   2. Build firmware locally (unless --skip-build)
 #   3. Flash the device and capture serial output
 #   4. Wait for the Wi-Fi IP address in serial output (30 s timeout)
 #   5. Health-check the HTTP server (15 s timeout)
@@ -20,9 +21,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# In a git worktree, target/ and .env live in the main repo root.
-# git-common-dir points to the main .git; its parent is the repo root.
+# Resolve main repo root (differs from PROJECT_ROOT inside a worktree).
 REPO_ROOT="$(cd "$(git -C "$PROJECT_ROOT" rev-parse --git-common-dir)/.." && pwd)"
+
+# Ensure the ESP toolchain is installed and .env is present.
+"$SCRIPT_DIR/setup-esp.sh"
 
 SERIAL_LOG=$(mktemp /tmp/e2e-serial.XXXXXX)
 MONITOR_PID=""
@@ -62,13 +65,13 @@ echo "Claimed $DEVICE_PORT (lock: $DEVICE_LOCK)"
 # ── 2. Build firmware ───────────────────────────────────────────────────
 if [[ "$SKIP_BUILD" == false ]]; then
     echo "── Building firmware ──"
-    (cd "$REPO_ROOT" && cargo build)
+    (cd "$PROJECT_ROOT" && cargo build)
 else
     echo "── Skipping build (--skip-build) ──"
 fi
 
 # ── 3. Flash device ────────────────────────────────────────────────────
-FIRMWARE="$REPO_ROOT/target/xtensa-esp32s2-espidf/debug/reconfigurable-device"
+FIRMWARE="$PROJECT_ROOT/target/xtensa-esp32s2-espidf/debug/reconfigurable-device"
 echo "── Flashing device on $DEVICE_PORT ──"
 espflash flash --port "$DEVICE_PORT" "$FIRMWARE"
 
@@ -126,9 +129,17 @@ echo "── Running e2e tests ──"
 export DEVICE_IP
 
 # Load API_TOKEN from .env if present and not already set
-if [[ -z "${API_TOKEN:-}" ]] && [[ -f "$REPO_ROOT/.env" ]]; then
-    API_TOKEN=$(grep -E '^API_TOKEN=' "$REPO_ROOT/.env" | cut -d= -f2- | tr -d '"' || true)
-    export API_TOKEN
+if [[ -z "${API_TOKEN:-}" ]]; then
+    ENV_FILE=""
+    if [[ -f "$PROJECT_ROOT/.env" ]]; then
+        ENV_FILE="$PROJECT_ROOT/.env"
+    elif [[ -f "$REPO_ROOT/.env" ]]; then
+        ENV_FILE="$REPO_ROOT/.env"
+    fi
+    if [[ -n "$ENV_FILE" ]]; then
+        API_TOKEN=$(grep -E '^API_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' || true)
+        export API_TOKEN
+    fi
 fi
 
 cd "$PROJECT_ROOT/tests/e2e"

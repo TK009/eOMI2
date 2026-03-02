@@ -8,21 +8,15 @@
 mod common;
 
 use common::*;
-use reconfigurable_device::device;
 use reconfigurable_device::odf::OmiValue;
 use reconfigurable_device::omi::error::ParseError;
 use reconfigurable_device::omi::{Engine, OmiMessage};
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Helpers (file-specific)
 // ---------------------------------------------------------------------------
 
-/// Build an engine pre-populated with the real DHT11 sensor tree.
-fn engine_with_sensor_tree() -> Engine {
-    let mut e = Engine::new();
-    e.tree.write_tree("/", device::build_sensor_tree()).unwrap();
-    e
-}
+// (All helpers are in common/mod.rs)
 
 // ===========================================================================
 // 1.1  Read Operations
@@ -33,7 +27,7 @@ fn read_root_returns_objects() {
     let mut e = engine_with_sensor_tree();
     let resp = parse_and_process(&mut e, r#"{"omi":"1.0","ttl":0,"read":{"path":"/"}}"#);
     assert_eq!(response_status(&resp), 200);
-    let result = response_result(&resp);
+    let result = extract_single_result(&resp);
     assert!(result["Dht11"].is_object(), "root should contain Dht11");
 
     // Verify via JSON round-trip
@@ -47,7 +41,7 @@ fn read_object_returns_items() {
     let mut e = engine_with_sensor_tree();
     let resp = parse_and_process(&mut e, r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11"}}"#);
     assert_eq!(response_status(&resp), 200);
-    let result = response_result(&resp);
+    let result = extract_single_result(&resp);
     assert_eq!(result["id"], "Dht11");
     assert!(result["items"]["Temperature"].is_object());
     assert!(result["items"]["RelativeHumidity"].is_object());
@@ -61,7 +55,7 @@ fn read_infoitem_empty() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11/Temperature"}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let result = response_result(&resp);
+    let result = extract_single_result(&resp);
     assert_eq!(result["values"].as_array().unwrap().len(), 0);
 }
 
@@ -78,7 +72,7 @@ fn read_infoitem_with_values() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11/Temperature"}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = response_result(&resp)["values"].as_array().unwrap();
+    let values = extract_single_result(&resp)["values"].as_array().unwrap();
     assert_eq!(values.len(), 1);
     assert_eq!(values[0]["v"], 23.5);
 
@@ -105,14 +99,14 @@ fn read_newest_oldest_filters() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11/Temperature","newest":2}}"#,
     );
-    assert_eq!(response_result(&resp)["values"].as_array().unwrap().len(), 2);
+    assert_eq!(extract_single_result(&resp)["values"].as_array().unwrap().len(), 2);
 
     // oldest=2
     let resp = parse_and_process(
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11/Temperature","oldest":2}}"#,
     );
-    assert_eq!(response_result(&resp)["values"].as_array().unwrap().len(), 2);
+    assert_eq!(extract_single_result(&resp)["values"].as_array().unwrap().len(), 2);
 }
 
 #[test]
@@ -129,7 +123,7 @@ fn read_time_range() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11/Temperature","begin":150,"end":250}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = response_result(&resp)["values"].as_array().unwrap();
+    let values = extract_single_result(&resp)["values"].as_array().unwrap();
     assert_eq!(values.len(), 1);
     assert_eq!(values[0]["t"], 200.0);
 }
@@ -142,7 +136,7 @@ fn read_with_depth() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11","depth":0}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let result = response_result(&resp);
+    let result = extract_single_result(&resp);
     assert_eq!(result["id"], "Dht11");
     // depth=0 should omit nested items
     assert!(result.get("items").is_none());
@@ -156,7 +150,7 @@ fn read_with_depth_includes_items() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11","depth":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let result = response_result(&resp);
+    let result = extract_single_result(&resp);
     assert_eq!(result["id"], "Dht11");
     // depth=1 should include items
     assert!(result["items"]["Temperature"].is_object());
@@ -198,7 +192,7 @@ fn write_new_path_creates_item() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/MyObj/MyItem","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = response_result(&resp)["values"].as_array().unwrap();
+    let values = extract_single_result(&resp)["values"].as_array().unwrap();
     assert_eq!(values[0]["v"], 42.0);
 }
 
@@ -282,7 +276,7 @@ fn write_tree_merges_objects() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Garage"}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    assert_eq!(response_result(&resp)["id"], "Garage");
+    assert_eq!(extract_single_result(&resp)["id"], "Garage");
 
     // Original sensor tree should still exist
     let resp = parse_and_process(
@@ -328,7 +322,7 @@ fn write_then_read_roundtrip_all_types() {
         );
         let resp = parse_and_process(&mut e, &read_json);
         assert_eq!(response_status(&resp), 200);
-        let values = response_result(&resp)["values"].as_array().unwrap();
+        let values = extract_single_result(&resp)["values"].as_array().unwrap();
         assert_eq!(
             values[0]["v"], *expected,
             "round-trip mismatch for path {}",
@@ -442,7 +436,7 @@ fn subscribe_then_poll_interval() {
     let msg = OmiMessage::parse(&poll_json).expect("poll JSON should parse");
     let resp = e.process(msg, 6.0, None);
     assert_eq!(response_status(&resp), 200);
-    let result = response_result(&resp);
+    let result = extract_single_result(&resp);
     assert_eq!(result["path"], "/Dht11/Temperature");
 }
 

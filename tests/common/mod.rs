@@ -1,13 +1,26 @@
-//! Shared helpers for OMI integration tests.
+//! Shared helpers for integration tests.
 
 #![allow(dead_code)]
 
+use reconfigurable_device::device;
 use reconfigurable_device::omi::{Engine, ItemStatus, OmiMessage, Operation, ResponseResult};
+
+/// Build an engine pre-populated with the real DHT11 sensor tree.
+pub fn engine_with_sensor_tree() -> Engine {
+    let mut e = Engine::new();
+    e.tree.write_tree("/", device::build_sensor_tree()).unwrap();
+    e
+}
+
+/// Parse a JSON request, feed it to the engine at a given time/session, return response.
+pub fn process_at(engine: &mut Engine, json: &str, now: f64, ws_session: Option<u64>) -> OmiMessage {
+    let msg = OmiMessage::parse(json).expect("request JSON should parse");
+    engine.process(msg, now, ws_session)
+}
 
 /// Parse a JSON request string, feed it to the engine, and return the response.
 pub fn parse_and_process(engine: &mut Engine, json: &str) -> OmiMessage {
-    let msg = OmiMessage::parse(json).expect("request JSON should parse");
-    engine.process(msg, 0.0, None)
+    process_at(engine, json, 0.0, None)
 }
 
 /// Extract the HTTP-style status code from a response message.
@@ -19,7 +32,7 @@ pub fn response_status(resp: &OmiMessage) -> u16 {
 }
 
 /// Extract the `Single` result value from a 200 response.
-pub fn response_result(resp: &OmiMessage) -> &serde_json::Value {
+pub fn extract_single_result(resp: &OmiMessage) -> &serde_json::Value {
     match &resp.operation {
         Operation::Response(body) => match &body.result {
             Some(ResponseResult::Single(v)) => v,

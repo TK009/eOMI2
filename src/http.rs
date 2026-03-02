@@ -23,11 +23,12 @@ pub fn now_secs() -> f64 {
 // Body / response helpers (platform-independent)
 // ---------------------------------------------------------------------------
 
-/// Body reading error — empty or too large.
+/// Body reading error — empty, too large, or I/O failure.
 #[derive(Debug)]
 pub enum BodyError {
     Empty,
     TooLarge,
+    ReadFailed,
 }
 
 /// Check if an OMI response indicates a successful write (status 200 or 201).

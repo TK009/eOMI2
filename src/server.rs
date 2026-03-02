@@ -4,6 +4,7 @@
 // The main loop and all handlers follow: lock(engine) → drop → lock(senders) → drop.
 
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -42,43 +43,61 @@ type FdToSession = Arc<Mutex<BTreeMap<i32, u64>>>;
 fn read_body(
     req: &mut esp_idf_svc::http::server::Request<&mut esp_idf_svc::http::server::EspHttpConnection>,
     max: usize,
-) -> Result<std::result::Result<Vec<u8>, BodyError>, anyhow::Error> {
+) -> std::result::Result<Vec<u8>, BodyError> {
     let content_len = req
         .header("content-length")
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(0);
     if content_len == 0 {
-        return Ok(Err(BodyError::Empty));
+        return Err(BodyError::Empty);
     }
     if content_len > max {
-        return Ok(Err(BodyError::TooLarge));
+        return Err(BodyError::TooLarge);
     }
     let mut buf = vec![0u8; content_len];
-    req.read_exact(&mut buf)?;
-    Ok(Ok(buf))
+    if let Err(e) = req.read_exact(&mut buf) {
+        warn!("Body read failed: {}", e);
+        return Err(BodyError::ReadFailed);
+    }
+    Ok(buf)
+}
+
+/// Send an HTTP response, logging any I/O failures instead of propagating them.
+fn send_response(
+    req: esp_idf_svc::http::server::Request<&mut esp_idf_svc::http::server::EspHttpConnection>,
+    status: u16,
+    reason: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+) {
+    match req.into_response(status, Some(reason), headers) {
+        Ok(mut resp) => {
+            if let Err(e) = resp.write_all(body) {
+                warn!("Response write failed: {}", e);
+            }
+        }
+        Err(e) => warn!("Response start failed: {}", e),
+    }
 }
 
 /// Serialize an OmiMessage response and write it as JSON to the HTTP response.
-/// On serialization failure, returns a 500 with a structured OMI error.
+/// On serialization failure, sends a 500 with a structured OMI error.
 fn send_omi_json(
     req: esp_idf_svc::http::server::Request<&mut esp_idf_svc::http::server::EspHttpConnection>,
     msg: &OmiMessage,
-) -> Result<()> {
+) {
     let headers = [("Content-Type", "application/json")];
     match serde_json::to_string(msg) {
         Ok(json) => {
-            req.into_response(200, Some("OK"), &headers)?
-                .write_all(json.as_bytes())?;
+            send_response(req, 200, "OK", &headers, json.as_bytes());
         }
         Err(e) => {
             warn!("OMI response serialization failed: {}", e);
             let err = OmiResponse::error("Serialization error");
             let json = serde_json::to_string(&err).unwrap_or_default();
-            req.into_response(500, Some("Internal Server Error"), &headers)?
-                .write_all(json.as_bytes())?;
+            send_response(req, 500, "Internal Server Error", &headers, json.as_bytes());
         }
     }
-    Ok(())
 }
 
 /// Serialize an OmiMessage and send as a WS text frame.
@@ -137,28 +156,29 @@ pub fn start_http_server(
 
     // GET / — landing page with list of stored pages
     let s = store.clone();
-    server.fn_handler::<anyhow::Error, _>("/", Method::Get, move |req| {
+    server.fn_handler::<Infallible, _>("/", Method::Get, move |req| {
         let store = s.lock().unwrap_or_else(|e| e.into_inner());
         let html = render_landing_page(&store);
-        req.into_ok_response()?
-            .write_all(html.as_bytes())?;
+        send_response(req, 200, "OK", &[], html.as_bytes());
         Ok(())
     })?;
 
     // POST / — accept HTML+JS payload (unchanged behavior)
-    server.fn_handler::<anyhow::Error, _>("/", Method::Post, |mut req| {
+    server.fn_handler::<Infallible, _>("/", Method::Post, |mut req| {
         // Cap at 64KB to prevent OOM on constrained devices
         const MAX_PAYLOAD: usize = 64 * 1024;
-        let buf = match read_body(&mut req, MAX_PAYLOAD)? {
+        let buf = match read_body(&mut req, MAX_PAYLOAD) {
             Ok(b) => b,
             Err(BodyError::Empty) => {
-                req.into_response(400, Some("Bad Request"), &[])?
-                    .write_all(b"Empty payload")?;
+                send_response(req, 400, "Bad Request", &[], b"Empty payload");
                 return Ok(());
             }
             Err(BodyError::TooLarge) => {
-                req.into_response(413, Some("Payload Too Large"), &[])?
-                    .write_all(b"Payload exceeds 64KB limit")?;
+                send_response(req, 413, "Payload Too Large", &[], b"Payload exceeds 64KB limit");
+                return Ok(());
+            }
+            Err(BodyError::ReadFailed) => {
+                send_response(req, 500, "Internal Server Error", &[], b"Failed to read body");
                 return Ok(());
             }
         };
@@ -166,8 +186,7 @@ pub fn start_http_server(
         let body = match String::from_utf8(buf) {
             Ok(s) => s,
             Err(_) => {
-                req.into_response(400, Some("Bad Request"), &[])?
-                    .write_all(b"Invalid UTF-8")?;
+                send_response(req, 400, "Bad Request", &[], b"Invalid UTF-8");
                 return Ok(());
             }
         };
@@ -175,35 +194,35 @@ pub fn start_http_server(
         info!("Payload:\n{}", body);
 
         // TODO: parse HTML, extract <script> tags, execute JS
-        req.into_ok_response()?
-            .write_all(b"OK: payload received")?;
+        send_response(req, 200, "OK", &[], b"OK: payload received");
         Ok(())
     })?;
 
     // POST /omi — OMI message endpoint
     let eng = engine.clone();
     let dirty = nvs_dirty.clone();
-    server.fn_handler::<anyhow::Error, _>("/omi", Method::Post, move |mut req| {
+    server.fn_handler::<Infallible, _>("/omi", Method::Post, move |mut req| {
         // Content-Type check: reject non-JSON (allow missing/empty)
         if let Some(ct) = req.header("content-type") {
             if !ct.contains("application/json") {
-                req.into_response(415, Some("Unsupported Media Type"), &[])?
-                    .write_all(b"Expected application/json")?;
+                send_response(req, 415, "Unsupported Media Type", &[], b"Expected application/json");
                 return Ok(());
             }
         }
 
         const MAX_OMI: usize = 16 * 1024;
-        let buf = match read_body(&mut req, MAX_OMI)? {
+        let buf = match read_body(&mut req, MAX_OMI) {
             Ok(b) => b,
             Err(BodyError::Empty) => {
-                req.into_response(400, Some("Bad Request"), &[])?
-                    .write_all(b"Empty body")?;
+                send_response(req, 400, "Bad Request", &[], b"Empty body");
                 return Ok(());
             }
             Err(BodyError::TooLarge) => {
-                req.into_response(413, Some("Payload Too Large"), &[])?
-                    .write_all(b"Body exceeds 16KB limit")?;
+                send_response(req, 413, "Payload Too Large", &[], b"Body exceeds 16KB limit");
+                return Ok(());
+            }
+            Err(BodyError::ReadFailed) => {
+                send_response(req, 500, "Internal Server Error", &[], b"Failed to read body");
                 return Ok(());
             }
         };
@@ -211,8 +230,7 @@ pub fn start_http_server(
         let text = match std::str::from_utf8(&buf) {
             Ok(s) => s,
             Err(_) => {
-                req.into_response(400, Some("Bad Request"), &[])?
-                    .write_all(b"Invalid UTF-8")?;
+                send_response(req, 400, "Bad Request", &[], b"Invalid UTF-8");
                 return Ok(());
             }
         };
@@ -221,15 +239,14 @@ pub fn start_http_server(
             Ok(m) => m,
             Err(e) => {
                 let err_msg = format!("Parse error: {}", e);
-                req.into_response(400, Some("Bad Request"), &[])?
-                    .write_all(err_msg.as_bytes())?;
+                send_response(req, 400, "Bad Request", &[], err_msg.as_bytes());
                 return Ok(());
             }
         };
 
         if is_mutating_operation(&msg.operation) && !check_auth(&req, api_token) {
             let err = OmiResponse::unauthorized("Authentication required");
-            send_omi_json(req, &err)?;
+            send_omi_json(req, &err);
             return Ok(());
         }
 
@@ -241,13 +258,13 @@ pub fn start_http_server(
         if is_write && is_successful_write_response(&resp) {
             dirty.store(true, Ordering::Release);
         }
-        send_omi_json(req, &resp)?;
+        send_omi_json(req, &resp);
         Ok(())
     })?;
 
     // GET /omi — REST root listing (exact match)
     let eng = engine.clone();
-    server.fn_handler::<anyhow::Error, _>("/omi", Method::Get, move |req| {
+    server.fn_handler::<Infallible, _>("/omi", Method::Get, move |req| {
         let params = uri_query(req.uri())
             .map(OmiReadParams::from_query)
             .unwrap_or_default();
@@ -256,13 +273,13 @@ pub fn start_http_server(
             let mut eng = eng.lock().unwrap_or_else(|e| e.into_inner());
             eng.process(read_msg, now_secs(), None)
         };
-        send_omi_json(req, &resp)?;
+        send_omi_json(req, &resp);
         Ok(())
     })?;
 
     // GET /omi/* — REST discovery (wildcard)
     let eng = engine.clone();
-    server.fn_handler::<anyhow::Error, _>("/omi/*", Method::Get, move |req| {
+    server.fn_handler::<Infallible, _>("/omi/*", Method::Get, move |req| {
         let full_uri = req.uri();
         let path_part = uri_path(full_uri);
         let (odf_path, _trailing) = omi_uri_to_odf_path(path_part);
@@ -274,7 +291,7 @@ pub fn start_http_server(
             let mut eng = eng.lock().unwrap_or_else(|e| e.into_inner());
             eng.process(read_msg, now_secs(), None)
         };
-        send_omi_json(req, &resp)?;
+        send_omi_json(req, &resp);
         Ok(())
     })?;
 
@@ -382,25 +399,26 @@ pub fn start_http_server(
 
     // PATCH /* — store an HTML page at the given path
     let s = store.clone();
-    server.fn_handler::<anyhow::Error, _>("/*", Method::Patch, move |mut req| {
+    server.fn_handler::<Infallible, _>("/*", Method::Patch, move |mut req| {
         if !check_auth(&req, api_token) {
-            req.into_response(401, Some("Unauthorized"), &[])?
-                .write_all(b"Authentication required")?;
+            send_response(req, 401, "Unauthorized", &[], b"Authentication required");
             return Ok(());
         }
         let path = uri_path(req.uri()).to_string();
 
         const MAX_PAYLOAD: usize = 64 * 1024;
-        let body = match read_body(&mut req, MAX_PAYLOAD)? {
+        let body = match read_body(&mut req, MAX_PAYLOAD) {
             Ok(b) => b,
             Err(BodyError::Empty) => {
-                req.into_response(400, Some("Bad Request"), &[])?
-                    .write_all(b"Empty payload")?;
+                send_response(req, 400, "Bad Request", &[], b"Empty payload");
                 return Ok(());
             }
             Err(BodyError::TooLarge) => {
-                req.into_response(413, Some("Payload Too Large"), &[])?
-                    .write_all(b"Payload exceeds 64KB limit")?;
+                send_response(req, 413, "Payload Too Large", &[], b"Payload exceeds 64KB limit");
+                return Ok(());
+            }
+            Err(BodyError::ReadFailed) => {
+                send_response(req, 500, "Internal Server Error", &[], b"Failed to read body");
                 return Ok(());
             }
         };
@@ -408,8 +426,7 @@ pub fn start_http_server(
         let html = match String::from_utf8(body) {
             Ok(s) => s,
             Err(_) => {
-                req.into_response(400, Some("Bad Request"), &[])?
-                    .write_all(b"Invalid UTF-8")?;
+                send_response(req, 400, "Bad Request", &[], b"Invalid UTF-8");
                 return Ok(());
             }
         };
@@ -417,28 +434,22 @@ pub fn start_http_server(
         match store.store(&path, &html) {
             Ok(()) => {
                 info!("PATCH {} — stored {} bytes", path, html.len());
-                req.into_ok_response()?
-                    .write_all(b"OK: page stored")?;
+                send_response(req, 200, "OK", &[], b"OK: page stored");
             }
             Err(PageError::ReservedPath) => {
-                req.into_response(403, Some("Forbidden"), &[])?
-                    .write_all(b"Reserved path")?;
+                send_response(req, 403, "Forbidden", &[], b"Reserved path");
             }
             Err(PageError::InvalidPath) => {
-                req.into_response(400, Some("Bad Request"), &[])?
-                    .write_all(b"Invalid path")?;
+                send_response(req, 400, "Bad Request", &[], b"Invalid path");
             }
             Err(PageError::PageTooLarge) => {
-                req.into_response(413, Some("Payload Too Large"), &[])?
-                    .write_all(b"Page exceeds 64KB limit")?;
+                send_response(req, 413, "Payload Too Large", &[], b"Page exceeds 64KB limit");
             }
             Err(PageError::StorageFull) => {
-                req.into_response(507, Some("Insufficient Storage"), &[])?
-                    .write_all(b"Storage full")?;
+                send_response(req, 507, "Insufficient Storage", &[], b"Storage full");
             }
             Err(_) => {
-                req.into_response(500, Some("Internal Server Error"), &[])?
-                    .write_all(b"Unexpected error")?;
+                send_response(req, 500, "Internal Server Error", &[], b"Unexpected error");
             }
         }
         Ok(())
@@ -446,10 +457,9 @@ pub fn start_http_server(
 
     // DELETE /* — remove a stored page
     let s = store.clone();
-    server.fn_handler::<anyhow::Error, _>("/*", Method::Delete, move |req| {
+    server.fn_handler::<Infallible, _>("/*", Method::Delete, move |req| {
         if !check_auth(&req, api_token) {
-            req.into_response(401, Some("Unauthorized"), &[])?
-                .write_all(b"Authentication required")?;
+            send_response(req, 401, "Unauthorized", &[], b"Authentication required");
             return Ok(());
         }
         let path = uri_path(req.uri()).to_string();
@@ -457,16 +467,13 @@ pub fn start_http_server(
         match store.remove(&path) {
             Ok(()) => {
                 info!("DELETE {} — removed", path);
-                req.into_ok_response()?
-                    .write_all(b"OK: page removed")?;
+                send_response(req, 200, "OK", &[], b"OK: page removed");
             }
             Err(PageError::NotFound) => {
-                req.into_response(404, Some("Not Found"), &[])?
-                    .write_all(b"Page not found")?;
+                send_response(req, 404, "Not Found", &[], b"Page not found");
             }
             Err(_) => {
-                req.into_response(500, Some("Internal Server Error"), &[])?
-                    .write_all(b"Unexpected error")?;
+                send_response(req, 500, "Internal Server Error", &[], b"Unexpected error");
             }
         }
         Ok(())
@@ -474,18 +481,16 @@ pub fn start_http_server(
 
     // GET /* — serve a stored page
     let s = store.clone();
-    server.fn_handler::<anyhow::Error, _>("/*", Method::Get, move |req| {
+    server.fn_handler::<Infallible, _>("/*", Method::Get, move |req| {
         let path = uri_path(req.uri()).to_string();
         let store = s.lock().unwrap_or_else(|e| e.into_inner());
         match store.get(&path) {
             Some(html) => {
                 let headers = [("Content-Type", "text/html")];
-                req.into_response(200, Some("OK"), &headers)?
-                    .write_all(html.as_bytes())?;
+                send_response(req, 200, "OK", &headers, html.as_bytes());
             }
             None => {
-                req.into_response(404, Some("Not Found"), &[])?
-                    .write_all(b"Page not found")?;
+                send_response(req, 404, "Not Found", &[], b"Page not found");
             }
         }
         Ok(())

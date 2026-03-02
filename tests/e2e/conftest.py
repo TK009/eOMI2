@@ -1,11 +1,8 @@
-"""Shared fixtures and OMI helpers for e2e tests."""
+"""Shared fixtures for e2e tests."""
 
 import os
 
 import pytest
-import requests
-
-REQUEST_TIMEOUT = 10  # seconds – avoid hanging on unresponsive devices
 
 
 # ---------------------------------------------------------------------------
@@ -40,45 +37,3 @@ def token():
 def auth_headers(token):
     """Authorization header dict."""
     return {"Authorization": f"Bearer {token}"}
-
-
-# ---------------------------------------------------------------------------
-# OMI helper functions
-# ---------------------------------------------------------------------------
-
-def omi_read(base_url, path="/"):
-    """Send an OMI read request and return the parsed JSON response."""
-    payload = {"omi": "1.0", "ttl": 0, "read": {"path": path}}
-    resp = requests.post(
-        f"{base_url}/omi",
-        json=payload,
-        timeout=REQUEST_TIMEOUT,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
-def omi_write(base_url, path, value, token):
-    """Send an OMI write request and return the parsed JSON response."""
-    payload = {"omi": "1.0", "ttl": 0, "write": {"path": path, "value": value}}
-    resp = requests.post(
-        f"{base_url}/omi",
-        json=payload,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=REQUEST_TIMEOUT,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
-def omi_delete(base_url, path, token):
-    """Send an OMI delete request and return the parsed JSON response."""
-    payload = {"omi": "1.0", "ttl": 0, "delete": {"path": path}}
-    resp = requests.post(
-        f"{base_url}/omi",
-        json=payload,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=REQUEST_TIMEOUT,
-    )
-    resp.raise_for_status()
-    return resp.json()

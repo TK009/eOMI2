@@ -39,11 +39,11 @@ or the equivalent for your distro.
        cargo install espup --locked
        espup install
 
-3. Source the environment variables (add to your shell profile for persistence):
+2. Source the environment variables (add to your shell profile for persistence):
 
        . $HOME/export-esp.sh
 
-4. In the project directory, select the toolchain and build:
+3. In the project directory, select the toolchain and build:
 
        rustup override set esp   # one-time, in the project directory
        cargo build

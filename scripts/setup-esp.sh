@@ -8,6 +8,10 @@
 # Source this file (don't execute it) so that environment variables
 # (export-esp.sh) propagate to the caller:
 #   . ./scripts/setup-esp.sh
+
+# Save caller's shell options and enforce strict mode for this script.
+# Restored at the end so sourcing doesn't bleed into the caller.
+_setup_esp_oldopts=$(set +o)
 set -euo pipefail
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
@@ -39,3 +43,7 @@ if [[ "$PROJECT_ROOT" != "$REPO_ROOT" ]] && [[ -f "$REPO_ROOT/.env" ]] && [[ ! -
     echo "── Symlinking .env from repo root ──"
     ln -s "$REPO_ROOT/.env" "$PROJECT_ROOT/.env"
 fi
+
+# Restore caller's shell options
+eval "$_setup_esp_oldopts"
+unset _setup_esp_oldopts

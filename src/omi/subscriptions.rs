@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 
-use crate::odf::Value;
+use crate::odf::{OmiValue, Value};
 use crate::psram::PsramBox;
 
 /// How a subscription delivers results.
@@ -85,7 +85,9 @@ impl PollBuffer {
     pub fn new(capacity: usize) -> Self {
         assert!(capacity > 0, "PollBuffer capacity must be > 0");
         Self {
-            buf: PsramBox::new(capacity),
+            // Pre-fill all slots so we can always use set() without
+            // tracking which physical indices are initialized.
+            buf: PsramBox::new_with(capacity, || Value::new(OmiValue::Null, None)),
             head: 0,
             len: 0,
             capacity,
@@ -96,14 +98,7 @@ impl PollBuffer {
         for v in values {
             let write_idx = (self.head + self.len) % self.capacity;
             if self.len < self.capacity {
-                // Still growing — append to the PsramBox backing store
-                // We need to ensure the PsramBox has this slot initialized.
-                if self.buf.len() <= write_idx {
-                    // Extend buf to cover this slot
-                    self.buf.push(v.clone());
-                } else {
-                    self.buf.set(write_idx, v.clone());
-                }
+                self.buf.set(write_idx, v.clone());
                 self.len += 1;
             } else {
                 // Full — overwrite oldest, advance head
@@ -120,8 +115,6 @@ impl PollBuffer {
             let idx = (self.head + i) % self.capacity;
             result.push(self.buf.get(idx).clone());
         }
-        // Reset without freeing the allocation
-        self.buf.clear();
         self.head = 0;
         self.len = 0;
         result

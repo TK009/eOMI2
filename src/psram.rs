@@ -20,8 +20,13 @@ use core::ptr;
 
 #[cfg(all(feature = "esp", feature = "psram"))]
 unsafe fn psram_alloc(layout: Layout) -> *mut u8 {
-    // SPIRAM allocation — ignores layout.align() because heap_caps_malloc
-    // returns naturally-aligned pointers (8-byte on ESP32-S2).
+    // heap_caps_malloc returns 8-byte aligned pointers on ESP32-S2.
+    // Assert at compile time that the requested alignment is satisfied.
+    assert!(
+        layout.align() <= 8,
+        "psram_alloc: alignment {} exceeds 8-byte ESP32-S2 guarantee",
+        layout.align()
+    );
     let ptr = esp_idf_svc::sys::heap_caps_malloc(layout.size(), esp_idf_svc::sys::MALLOC_CAP_SPIRAM);
     ptr as *mut u8
 }
@@ -73,6 +78,16 @@ impl<T> PsramBox<T> {
         }
     }
 
+    /// Allocate a buffer pre-filled to capacity using the given initializer.
+    /// All slots are initialized, so `len() == capacity` from the start.
+    pub fn new_with(capacity: usize, mut init: impl FnMut() -> T) -> Self {
+        let mut b = Self::new(capacity);
+        for _ in 0..capacity {
+            b.push(init());
+        }
+        b
+    }
+
     #[inline]
     pub fn len(&self) -> usize {
         self.len
@@ -112,11 +127,15 @@ impl<T> PsramBox<T> {
     }
 
     /// Overwrite element at index, dropping the old value.
+    ///
+    /// Panic-safe: the new value is written before the old value is dropped,
+    /// so the slot always contains a valid `T` even if `Drop` unwinds.
     pub fn set(&mut self, i: usize, val: T) {
         assert!(i < self.len, "PsramBox set index {} out of bounds (len {})", i, self.len);
         unsafe {
-            self.ptr.add(i).drop_in_place();
+            let old = self.ptr.add(i).read();
             self.ptr.add(i).write(val);
+            drop(old);
         }
     }
 

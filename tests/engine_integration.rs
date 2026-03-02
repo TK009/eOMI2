@@ -5,21 +5,17 @@
 //! to JSON → verify**.  They also use the real sensor tree from
 //! `device::build_sensor_tree()` rather than hand-rolled fixtures.
 
-use reconfigurable_device::device;
+mod common;
+
 use reconfigurable_device::odf::OmiValue;
 use reconfigurable_device::omi::error::ParseError;
-use reconfigurable_device::omi::{Engine, ItemStatus, OmiMessage, ResponseResult};
+use reconfigurable_device::omi::{Engine, ItemStatus, OmiMessage, Operation, ResponseResult};
+
+use common::{engine_with_sensor_tree, response_result, response_status};
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Build an engine pre-populated with the real DHT11 sensor tree.
-fn engine_with_sensor_tree() -> Engine {
-    let mut e = Engine::new();
-    e.tree.write_tree("/", device::build_sensor_tree()).unwrap();
-    e
-}
 
 /// Parse a JSON request string, feed it to the engine, and return the response.
 fn parse_and_process(engine: &mut Engine, json: &str) -> OmiMessage {
@@ -27,29 +23,10 @@ fn parse_and_process(engine: &mut Engine, json: &str) -> OmiMessage {
     engine.process(msg, 0.0, None)
 }
 
-/// Extract the HTTP-style status code from a response message.
-fn response_status(resp: &OmiMessage) -> u16 {
-    match &resp.operation {
-        reconfigurable_device::omi::Operation::Response(body) => body.status,
-        _ => panic!("expected Response"),
-    }
-}
-
-/// Extract the `Single` result value from a 200 response.
-fn response_result(resp: &OmiMessage) -> &serde_json::Value {
-    match &resp.operation {
-        reconfigurable_device::omi::Operation::Response(body) => match &body.result {
-            Some(ResponseResult::Single(v)) => v,
-            other => panic!("expected Single result, got {:?}", other),
-        },
-        _ => panic!("expected Response"),
-    }
-}
-
 /// Extract the batch item-status list from a response.
 fn response_batch(resp: &OmiMessage) -> &Vec<ItemStatus> {
     match &resp.operation {
-        reconfigurable_device::omi::Operation::Response(body) => match &body.result {
+        Operation::Response(body) => match &body.result {
             Some(ResponseResult::Batch(items)) => items,
             other => panic!("expected Batch result, got {:?}", other),
         },

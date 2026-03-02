@@ -5,44 +5,17 @@
 //! Unit tests in `src/http.rs` cover each function in isolation; these
 //! integration tests wire them together with a real Engine.
 
-use reconfigurable_device::device;
+mod common;
+
 use reconfigurable_device::http::{
     build_read_op, is_mutating_operation, omi_uri_to_odf_path, render_landing_page, uri_path,
     uri_query, OmiReadParams,
 };
 use reconfigurable_device::odf::OmiValue;
-use reconfigurable_device::omi::{Engine, OmiMessage, Operation, ResponseResult};
+use reconfigurable_device::omi::{Engine, OmiMessage};
 use reconfigurable_device::pages::PageStore;
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Build an engine pre-populated with the real DHT11 sensor tree.
-fn engine_with_sensor_tree() -> Engine {
-    let mut e = Engine::new();
-    e.tree.write_tree("/", device::build_sensor_tree()).unwrap();
-    e
-}
-
-/// Extract the HTTP-style status code from a response message.
-fn response_status(resp: &OmiMessage) -> u16 {
-    match &resp.operation {
-        Operation::Response(body) => body.status,
-        _ => panic!("expected Response"),
-    }
-}
-
-/// Extract the `Single` result value from a 200 response.
-fn response_result(resp: &OmiMessage) -> &serde_json::Value {
-    match &resp.operation {
-        Operation::Response(body) => match &body.result {
-            Some(ResponseResult::Single(v)) => v,
-            other => panic!("expected Single result, got {:?}", other),
-        },
-        _ => panic!("expected Response"),
-    }
-}
+use common::{engine_with_sensor_tree, response_result, response_status};
 
 /// Chain the full REST GET flow: URI → parse → build read op → engine.process.
 fn get_omi(engine: &mut Engine, uri: &str) -> OmiMessage {

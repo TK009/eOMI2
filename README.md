@@ -34,19 +34,11 @@ Test devices:
 Linux users also need: `gcc build-essential curl pkg-config` (Debian/Ubuntu)
 or the equivalent for your distro.
 
-1. Install [espup](https://github.com/esp-rs/espup) (requires `rustup`):
-
-       cargo install espup --locked
-       espup install
-
-2. Source the environment variables (add to your shell profile for persistence):
-
-       . $HOME/export-esp.sh
-
-3. In the project directory, select the toolchain and build:
-
-       rustup override set esp   # one-time, in the project directory
-       cargo build
+Install esp toolchain and build:
+```sh
+./scripts/setup-esp.sh
+cargo build
+```
 
 ### Wi-Fi credentials
 

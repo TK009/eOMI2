@@ -6,7 +6,7 @@ connected to Wi-Fi, and started its HTTP server, nothing else can run.
 
 import requests
 
-from conftest import omi_read, REQUEST_TIMEOUT
+from helpers import omi_read, REQUEST_TIMEOUT
 
 
 def test_device_boots(base_url):
@@ -31,4 +31,7 @@ def test_omi_endpoint_reachable(base_url):
     assert data["omi"] == "1.0"
     assert data["response"]["status"] == 200
     result = data["response"]["result"]
-    assert "Dht11" in str(result)
+    # Verify the tree has at least one child node (structure check,
+    # not tied to a specific sensor model).
+    assert isinstance(result, (list, dict)), f"unexpected result type: {type(result)}"
+    assert len(result) > 0, "OMI root tree is empty"

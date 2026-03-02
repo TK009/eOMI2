@@ -18,14 +18,12 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Resolve main repo root (differs from PROJECT_ROOT inside a worktree).
-REPO_ROOT="$(cd "$(git -C "$PROJECT_ROOT" rev-parse --git-common-dir)/.." && pwd)"
-
-# Ensure the ESP toolchain is installed and .env is present.
-"$SCRIPT_DIR/setup-esp.sh"
+# Source shared variables (PROJECT_ROOT, REPO_ROOT) and ESP environment.
+# setup-esp.sh sources _common.sh and export-esp.sh, so their env vars
+# propagate here.
+. "$SCRIPT_DIR/setup-esp.sh"
 
 SERIAL_LOG=$(mktemp /tmp/e2e-serial.XXXXXX)
 MONITOR_PID=""
@@ -58,8 +56,16 @@ trap cleanup EXIT
 
 # ── 1. Claim device ─────────────────────────────────────────────────────
 echo "── Claiming USB device ──"
-eval "$("$SCRIPT_DIR/claim-device.sh")"
-DEVICE_LOCK="$DEVICE_LOCK"  # exported by claim-device.sh
+CLAIM_OUTPUT="$("$SCRIPT_DIR/claim-device.sh")"
+# Parse DEVICE_PORT and DEVICE_LOCK from the controlled output format:
+#   export DEVICE_PORT='<path>'
+#   export DEVICE_LOCK='<path>'
+DEVICE_PORT="$(echo "$CLAIM_OUTPUT" | grep "^export DEVICE_PORT=" | cut -d"'" -f2)"
+DEVICE_LOCK="$(echo "$CLAIM_OUTPUT" | grep "^export DEVICE_LOCK=" | cut -d"'" -f2)"
+if [[ -z "$DEVICE_PORT" || -z "$DEVICE_LOCK" ]]; then
+    echo "ERROR: failed to parse claim-device.sh output" >&2
+    exit 1
+fi
 echo "Claimed $DEVICE_PORT (lock: $DEVICE_LOCK)"
 
 # ── 2. Build firmware ───────────────────────────────────────────────────
@@ -70,18 +76,19 @@ else
     echo "── Skipping build (--skip-build) ──"
 fi
 
-# ── 3. Flash device ────────────────────────────────────────────────────
+# ── 3. Flash device and start serial capture ────────────────────────────
 FIRMWARE="$PROJECT_ROOT/target/xtensa-esp32s2-espidf/debug/reconfigurable-device"
 echo "── Flashing device on $DEVICE_PORT ──"
 espflash flash --port "$DEVICE_PORT" "$FIRMWARE"
 
-# ── 4. Read serial to discover Wi-Fi IP ──────────────────────────────
-# Configure the serial port and start a background reader.
-# espflash uses 115200 baud by default for the ESP32 monitor.
+# Start serial capture immediately after flash returns.  The device is now
+# rebooting; ESP32 boot (bootloader → Wi-Fi scan → DHCP) takes several
+# seconds, so there is no realistic race with the IP log line.
 stty -F "$DEVICE_PORT" 115200 raw -echo 2>/dev/null || true
 cat "$DEVICE_PORT" > "$SERIAL_LOG" 2>&1 &
 MONITOR_PID=$!
 
+# ── 4. Wait for Wi-Fi IP ────────────────────────────────────────────────
 echo "── Waiting for Wi-Fi IP (30 s timeout) ──"
 DEADLINE=$((SECONDS + 30))
 DEVICE_IP=""

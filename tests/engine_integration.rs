@@ -47,12 +47,22 @@ fn response_result(resp: &OmiMessage) -> &serde_json::Value {
 }
 
 /// Extract the batch item-status list from a response.
-fn response_batch(resp: &OmiMessage) -> &Vec<ItemStatus> {
+fn response_batch(resp: &OmiMessage) -> &[ItemStatus] {
     match &resp.operation {
         reconfigurable_device::omi::Operation::Response(body) => match &body.result {
             Some(ResponseResult::Batch(items)) => items,
             other => panic!("expected Batch result, got {:?}", other),
         },
+        _ => panic!("expected Response"),
+    }
+}
+
+/// Extract the `rid` field from a response (returned by subscription creation).
+fn response_rid(resp: &OmiMessage) -> &str {
+    match &resp.operation {
+        reconfigurable_device::omi::Operation::Response(body) => {
+            body.rid.as_deref().expect("expected rid in response")
+        }
         _ => panic!("expected Response"),
     }
 }
@@ -190,6 +200,21 @@ fn read_with_depth() {
 }
 
 #[test]
+fn read_with_depth_includes_items() {
+    let mut e = engine_with_sensor_tree();
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11","depth":1}}"#,
+    );
+    assert_eq!(response_status(&resp), 200);
+    let result = response_result(&resp);
+    assert_eq!(result["id"], "Dht11");
+    // depth=1 should include items
+    assert!(result["items"]["Temperature"].is_object());
+    assert!(result["items"]["RelativeHumidity"].is_object());
+}
+
+#[test]
 fn read_nonexistent_path() {
     let mut e = engine_with_sensor_tree();
     let resp = parse_and_process(
@@ -229,7 +254,7 @@ fn write_new_path_creates_item() {
 }
 
 #[test]
-fn write_existing_writable() {
+fn write_new_then_update() {
     let mut e = engine_with_sensor_tree();
 
     // First write — creates (201)
@@ -410,8 +435,96 @@ fn delete_nonexistent() {
 }
 
 // ===========================================================================
-// 1.4  Cancel
+// 1.4  Subscriptions & Cancel
 // ===========================================================================
+
+#[test]
+fn subscribe_poll_returns_rid() {
+    let mut e = engine_with_sensor_tree();
+    // interval triggers Subscription kind; no callback + no ws_session → Poll target
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":5.0}}"#,
+    );
+    assert_eq!(response_status(&resp), 200);
+    let rid = response_rid(&resp);
+    assert!(!rid.is_empty(), "subscription should return a non-empty rid");
+
+    // Verify rid survives JSON round-trip
+    let rt = roundtrip_response_json(&resp);
+    assert_eq!(rt["rid"], rid);
+}
+
+#[test]
+fn subscribe_requires_positive_ttl() {
+    let mut e = engine_with_sensor_tree();
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11/Temperature","interval":5.0}}"#,
+    );
+    assert_eq!(response_status(&resp), 400);
+}
+
+#[test]
+fn subscribe_then_poll_interval() {
+    let mut e = engine_with_sensor_tree();
+
+    // Write a value so the interval tick has something to return
+    e.tree
+        .write_value("/Dht11/Temperature", OmiValue::Number(22.0), Some(1000.0))
+        .unwrap();
+
+    // Create poll subscription with 5s interval
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":5.0}}"#,
+    );
+    assert_eq!(response_status(&resp), 200);
+    let rid = response_rid(&resp).to_owned();
+
+    // Tick the engine past the interval trigger time (created at now=0, triggers at 0+5=5)
+    e.tick(6.0);
+
+    // Poll for buffered results
+    let poll_json = format!(
+        r#"{{"omi":"1.0","ttl":0,"read":{{"rid":"{}"}}}}"#,
+        rid
+    );
+    let msg = OmiMessage::parse(&poll_json).expect("poll JSON should parse");
+    let resp = e.process(msg, 6.0, None);
+    assert_eq!(response_status(&resp), 200);
+    let result = response_result(&resp);
+    assert_eq!(result["path"], "/Dht11/Temperature");
+}
+
+#[test]
+fn cancel_active_subscription() {
+    let mut e = engine_with_sensor_tree();
+
+    // Create a subscription
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":5.0}}"#,
+    );
+    let rid = response_rid(&resp).to_owned();
+
+    // Cancel it
+    let cancel_json = format!(
+        r#"{{"omi":"1.0","ttl":0,"cancel":{{"rid":["{}"]}}}}"#,
+        rid
+    );
+    let resp = parse_and_process(&mut e, &cancel_json);
+    assert_eq!(response_status(&resp), 200);
+
+    // Polling the cancelled rid should return 404
+    let poll_json = format!(
+        r#"{{"omi":"1.0","ttl":0,"read":{{"rid":"{}"}}}}"#,
+        rid
+    );
+    let msg = OmiMessage::parse(&poll_json).expect("poll JSON should parse");
+    let resp = e.process(msg, 1.0, None);
+    assert_eq!(response_status(&resp), 404);
+}
 
 #[test]
 fn cancel_nonexistent_rid() {

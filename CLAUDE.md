@@ -16,3 +16,17 @@ This is embedded device project for dynamically programmable IoT devices. See RE
 * Keep platform specific code separate from independent code, in other files and folders as far as possible.
 * Test independent code heavily on computer, in unit tests, emulators and simulations.
 * Make and run e2e tests with hardware as the last task after all non-hw tasks succeeded, or if it is needed for debugging.
+
+# Setup
+
+```sh
+rustup override set esp   # one-time, in the project directory
+cargo build
+```
+
+# Test
+
+There is host-only tests and device tests.
+* Run host tests with alias `cargo test-host`
+
+

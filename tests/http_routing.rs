@@ -15,7 +15,7 @@ use reconfigurable_device::odf::OmiValue;
 use reconfigurable_device::omi::{Engine, OmiMessage};
 use reconfigurable_device::pages::PageStore;
 
-use common::{engine_with_sensor_tree, response_result, response_status};
+use common::{engine_with_sensor_tree, extract_single_result, response_status};
 
 /// Chain the full REST GET flow: URI → parse → build read op → engine.process.
 fn get_omi(engine: &mut Engine, uri: &str) -> OmiMessage {
@@ -41,7 +41,7 @@ fn get_omi_root() {
     let mut e = engine_with_sensor_tree();
     let resp = get_omi(&mut e, "/omi/");
     assert_eq!(response_status(&resp), 200);
-    let result = response_result(&resp);
+    let result = extract_single_result(&resp);
     assert!(result["Dht11"].is_object(), "root should contain Dht11");
 }
 
@@ -50,7 +50,7 @@ fn get_omi_object() {
     let mut e = engine_with_sensor_tree();
     let resp = get_omi(&mut e, "/omi/Dht11/");
     assert_eq!(response_status(&resp), 200);
-    let result = response_result(&resp);
+    let result = extract_single_result(&resp);
     assert_eq!(result["id"], "Dht11");
     assert!(result["items"]["Temperature"].is_object());
     assert!(result["items"]["RelativeHumidity"].is_object());
@@ -61,7 +61,7 @@ fn get_omi_infoitem() {
     let mut e = engine_with_sensor_tree();
     let resp = get_omi(&mut e, "/omi/Dht11/Temperature");
     assert_eq!(response_status(&resp), 200);
-    let values = response_result(&resp)["values"].as_array().unwrap();
+    let values = extract_single_result(&resp)["values"].as_array().unwrap();
     assert!(values.is_empty());
 }
 
@@ -82,7 +82,7 @@ fn get_omi_with_query_params() {
 
     let resp = get_omi(&mut e, "/omi/Dht11/Temperature?newest=3&depth=1");
     assert_eq!(response_status(&resp), 200);
-    let values = response_result(&resp)["values"].as_array().unwrap();
+    let values = extract_single_result(&resp)["values"].as_array().unwrap();
     assert_eq!(values.len(), 3);
     // Verify the 3 newest values were returned (newest-first order).
     let nums: Vec<f64> = values.iter().map(|v| v["v"].as_f64().unwrap()).collect();

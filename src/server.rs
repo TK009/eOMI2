@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -27,7 +27,7 @@ use crate::pages::{PageError, PageStore};
 /// Monotonic counter for assigning unique WebSocket session IDs.
 /// Avoids fd-reuse races where a new connection gets the same fd as a
 /// recently closed one before the close handler fires.
-static NEXT_WS_SESSION: AtomicU64 = AtomicU64::new(1);
+static NEXT_WS_SESSION: AtomicU32 = AtomicU32::new(1);
 
 pub type WsSenders = Arc<Mutex<BTreeMap<u64, EspHttpWsDetachedSender>>>;
 /// Maps raw fd → monotonic session ID so the WS handler can look up the
@@ -116,7 +116,7 @@ fn send_omi_json(
 /// Serialize an OmiMessage and send as a WS text frame.
 /// Falls back to a hand-written JSON string if serialization itself fails.
 fn send_ws_omi(
-    conn: &mut esp_idf_svc::http::server::EspHttpWsConnection,
+    conn: &mut esp_idf_svc::http::server::ws::EspHttpWsConnection,
     msg: OmiMessage,
 ) -> Result<()> {
     let json = serde_json::to_string(&msg).unwrap_or_else(|_|
@@ -165,7 +165,8 @@ pub fn start_http_server(
     let ws_senders: WsSenders = Arc::new(Mutex::new(BTreeMap::new()));
     let fd_to_session: FdToSession = Arc::new(Mutex::new(BTreeMap::new()));
 
-    // Route registration order: exact before wildcard, OMI wildcard before page wildcard.
+    // Route registration order: exact before wildcard, WS before OMI wildcard,
+    // OMI wildcard before page wildcard.
 
     // GET / — landing page with list of stored pages
     let s = store.clone();
@@ -269,35 +270,20 @@ pub fn start_http_server(
         Ok(())
     })?;
 
-    // GET /omi/* — REST discovery (wildcard)
-    let eng = engine.clone();
-    server.fn_handler::<Infallible, _>("/omi/*", Method::Get, move |req| {
-        let full_uri = req.uri();
-        let path_part = uri_path(full_uri);
-        let (odf_path, _trailing) = omi_uri_to_odf_path(path_part);
-        let params = uri_query(full_uri)
-            .map(OmiReadParams::from_query)
-            .unwrap_or_default();
-        let read_msg = build_read_op(odf_path, &params);
-        let resp = {
-            let mut eng = eng.lock().unwrap_or_else(|e| e.into_inner());
-            eng.process(read_msg, now_secs(), None)
-        };
-        send_omi_json(req, &resp);
-        Ok(())
-    })?;
-
     // WS /omi/ws — WebSocket endpoint for persistent OMI connections.
+    // Must be registered BEFORE the GET /omi/* wildcard, otherwise the
+    // wildcard's GET handler claims the /omi/ws path first and the WS
+    // registration fails with ESP_ERR_HTTPD_HANDLER_EXISTS.
     // Two locks used: Engine (for processing) and WsSenders (for send handles).
     // Lock ordering: always Engine before WsSenders; never hold both at once.
     let eng = engine.clone();
     let ws = ws_senders.clone();
     let fd_map = fd_to_session.clone();
-    server.ws_handler("/omi/ws", move |conn| {
+    server.ws_handler("/omi/ws", move |conn| -> anyhow::Result<()> {
         if conn.is_new() {
             let sender = conn.create_detached_sender()?;
             let fd = conn.session();
-            let session_id = NEXT_WS_SESSION.fetch_add(1, Ordering::Relaxed);
+            let session_id = NEXT_WS_SESSION.fetch_add(1, Ordering::Relaxed) as u64;
             info!("WS connect: fd={}, session={}", fd, session_id);
             fd_map.lock().unwrap_or_else(|e| e.into_inner()).insert(fd, session_id);
             ws.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id, sender);
@@ -386,6 +372,24 @@ pub fn start_http_server(
                 send_ws_omi(conn, OmiResponse::error("Serialization error"))?;
             }
         }
+        Ok(())
+    })?;
+
+    // GET /omi/* — REST discovery (wildcard)
+    let eng = engine.clone();
+    server.fn_handler::<Infallible, _>("/omi/*", Method::Get, move |req| {
+        let full_uri = req.uri();
+        let path_part = uri_path(full_uri);
+        let (odf_path, _trailing) = omi_uri_to_odf_path(path_part);
+        let params = uri_query(full_uri)
+            .map(OmiReadParams::from_query)
+            .unwrap_or_default();
+        let read_msg = build_read_op(odf_path, &params);
+        let resp = {
+            let mut eng = eng.lock().unwrap_or_else(|e| e.into_inner());
+            eng.process(read_msg, now_secs(), None)
+        };
+        send_omi_json(req, &resp);
         Ok(())
     })?;
 

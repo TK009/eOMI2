@@ -77,7 +77,10 @@ echo "Claimed $DEVICE_PORT (lock: $DEVICE_LOCK)"
 # ── 2. Build firmware ───────────────────────────────────────────────────
 if [[ "$SKIP_BUILD" == false ]]; then
     echo "── Building firmware ──"
-    (cd "$PROJECT_ROOT" && cargo build)
+    if ! (cd "$PROJECT_ROOT" && cargo build); then
+        echo "ERROR: firmware build failed" >&2
+        exit 1
+    fi
 else
     echo "── Skipping build (--skip-build) ──"
 fi

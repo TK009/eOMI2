@@ -17,6 +17,17 @@ fn main() {
         if target.contains("espidf") {
             build.define("ESP_PLATFORM", None);
         }
+        // The cc crate can't auto-detect the xtensa cross-compiler from the
+        // ESP-IDF target triple. Point it at the correct GCC explicitly.
+        if target.contains("xtensa") && target.contains("espidf") {
+            // e.g. "xtensa-esp32s2-espidf" → "xtensa-esp32s2-elf-gcc"
+            let gcc = target.replace("-espidf", "-elf-gcc");
+            build.compiler(&gcc);
+            // Xtensa call8 instructions have limited range; -mlongcalls
+            // generates indirect calls so large compilation units like
+            // mjs.c don't produce "call target out of range" linker errors.
+            build.flag("-mlongcalls");
+        }
         build.compile("mjs");
     }
 
@@ -35,7 +46,7 @@ fn main() {
     {
         embuild::espidf::sysenv::output();
 
-        const ALLOWED_ENV_KEYS: &[&str] = &["WIFI_SSID", "WIFI_PASS"];
+        const ALLOWED_ENV_KEYS: &[&str] = &["WIFI_SSID", "WIFI_PASS", "API_TOKEN"];
 
         // Always track .env so Cargo re-runs build.rs when it appears or changes
         println!("cargo:rerun-if-changed=.env");

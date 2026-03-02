@@ -5,7 +5,7 @@
 // sensor responds with 40 bits (16 humidity + 16 temperature + 8 checksum).
 
 use esp_idf_svc::hal::delay::Ets;
-use esp_idf_svc::hal::gpio::{InputOutput, OpenDrain, PinDriver};
+use esp_idf_svc::hal::gpio::{InputOutput, PinDriver};
 use esp_idf_svc::hal::gpio::AnyIOPin;
 
 /// A successful DHT11 reading.
@@ -42,7 +42,7 @@ const TIMEOUT_US: u32 = 1000;
 /// Wait for the pin to reach `level`, returning elapsed microseconds.
 /// Returns `Err(Timeout)` if `TIMEOUT_US` is exceeded.
 fn wait_for_level(
-    pin: &PinDriver<'_, AnyIOPin, InputOutput<OpenDrain>>,
+    pin: &PinDriver<'_, AnyIOPin, InputOutput>,
     level: bool,
 ) -> Result<u32, Dht11Error> {
     let mut elapsed: u32 = 0;
@@ -58,7 +58,7 @@ fn wait_for_level(
 
 /// Read temperature and humidity from a DHT11 sensor.
 ///
-/// The pin must be configured as `InputOutput<OpenDrain>` (open-drain mode).
+/// The pin must be configured as `InputOutput` (open-drain mode).
 ///
 /// # Preconditions
 ///
@@ -68,7 +68,7 @@ fn wait_for_level(
 /// guard — the caller is responsible for enforcing the interval (e.g. via a
 /// `sleep` or timer in the main loop).
 pub fn read_dht11(
-    pin: &mut PinDriver<'_, AnyIOPin, InputOutput<OpenDrain>>,
+    pin: &mut PinDriver<'_, AnyIOPin, InputOutput>,
 ) -> Result<Dht11Reading, Dht11Error> {
     // --- Start signal: pull low for 20 ms, then release ---
     pin.set_low().map_err(|_| Dht11Error::NoResponse)?;

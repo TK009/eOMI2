@@ -5,10 +5,13 @@
 //! to JSON → verify**.  They also use the real sensor tree from
 //! `device::build_sensor_tree()` rather than hand-rolled fixtures.
 
+mod common;
+
+use common::*;
 use reconfigurable_device::device;
 use reconfigurable_device::odf::OmiValue;
 use reconfigurable_device::omi::error::ParseError;
-use reconfigurable_device::omi::{Engine, ItemStatus, OmiMessage, ResponseResult};
+use reconfigurable_device::omi::{Engine, OmiMessage};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -19,50 +22,6 @@ fn engine_with_sensor_tree() -> Engine {
     let mut e = Engine::new();
     e.tree.write_tree("/", device::build_sensor_tree()).unwrap();
     e
-}
-
-/// Parse a JSON request string, feed it to the engine, and return the response.
-fn parse_and_process(engine: &mut Engine, json: &str) -> OmiMessage {
-    let msg = OmiMessage::parse(json).expect("request JSON should parse");
-    engine.process(msg, 0.0, None)
-}
-
-/// Extract the HTTP-style status code from a response message.
-fn response_status(resp: &OmiMessage) -> u16 {
-    match &resp.operation {
-        reconfigurable_device::omi::Operation::Response(body) => body.status,
-        _ => panic!("expected Response"),
-    }
-}
-
-/// Extract the `Single` result value from a 200 response.
-fn response_result(resp: &OmiMessage) -> &serde_json::Value {
-    match &resp.operation {
-        reconfigurable_device::omi::Operation::Response(body) => match &body.result {
-            Some(ResponseResult::Single(v)) => v,
-            other => panic!("expected Single result, got {:?}", other),
-        },
-        _ => panic!("expected Response"),
-    }
-}
-
-/// Extract the batch item-status list from a response.
-fn response_batch(resp: &OmiMessage) -> &Vec<ItemStatus> {
-    match &resp.operation {
-        reconfigurable_device::omi::Operation::Response(body) => match &body.result {
-            Some(ResponseResult::Batch(items)) => items,
-            other => panic!("expected Batch result, got {:?}", other),
-        },
-        _ => panic!("expected Response"),
-    }
-}
-
-/// Serialize a response to JSON, re-parse it, and return the `serde_json::Value`
-/// for the `response` envelope field — proving the serialization round-trip works.
-fn roundtrip_response_json(resp: &OmiMessage) -> serde_json::Value {
-    let json_str = serde_json::to_string(resp).expect("response should serialize");
-    let v: serde_json::Value = serde_json::from_str(&json_str).expect("should re-parse");
-    v["response"].clone()
 }
 
 // ===========================================================================

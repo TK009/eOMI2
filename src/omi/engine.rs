@@ -31,6 +31,12 @@ impl Engine {
         }
     }
 
+    /// Returns `true` if the embedded script engine initialised successfully.
+    #[cfg(feature = "scripting")]
+    pub fn has_script_engine(&self) -> bool {
+        self.script_engine.is_some()
+    }
+
     /// Process an OMI request message and return a response.
     ///
     /// `now` is the current time as seconds since UNIX epoch, used for

@@ -10,7 +10,7 @@ mod common;
 use reconfigurable_device::odf::{OmiValue, Value};
 use reconfigurable_device::omi::subscriptions::DeliveryTarget;
 
-use common::{engine_with_sensor_tree, extract_single_result, process_at, response_rid, response_status};
+use common::*;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -199,6 +199,29 @@ fn event_sub_no_trigger_on_unrelated_write() {
     assert!(deliveries.is_empty());
 }
 
+#[test]
+fn event_sub_ttl_expiry_no_delivery() {
+    let mut e = engine_with_sensor_tree();
+
+    // Create callback event subscription with ttl=60
+    let resp = process_at(
+        &mut e,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":-1,"callback":"http://example.com/omi"}}"#,
+        BASE_TIME,
+        None,
+    );
+    assert_eq!(response_status(&resp), 200);
+
+    // Write + notify after TTL has expired
+    e.tree
+        .write_value("/Dht11/Temperature", OmiValue::Number(99.0), Some(BASE_TIME + 61.0))
+        .unwrap();
+    let values = vec![Value::new(OmiValue::Number(99.0), Some(BASE_TIME + 61.0))];
+    let deliveries = e.subscriptions().notify_event("/Dht11/Temperature", &values, BASE_TIME + 61.0);
+
+    assert!(deliveries.is_empty(), "expired callback subscription should produce no deliveries");
+}
+
 // ===========================================================================
 // 2.3  Interval Subscription
 // ===========================================================================
@@ -222,8 +245,10 @@ fn interval_sub_fires_on_tick() {
     assert_eq!(response_status(&resp), 200);
     let rid = response_rid(&resp).to_string();
 
-    // Tick at BASE_TIME+10 (exactly when the interval fires)
-    let _deliveries = e.tick(BASE_TIME + 10.0);
+    // Tick at BASE_TIME+10 (exactly when the interval fires).
+    // Poll-target subs buffer internally, so tick returns no deliveries.
+    let deliveries = e.tick(BASE_TIME + 10.0);
+    assert!(deliveries.is_empty(), "poll-target tick should produce no deliveries");
 
     // Poll to retrieve the buffered value
     let poll_json = format!(r#"{{"omi":"1.0","ttl":0,"read":{{"rid":"{}"}}}}"#, rid);
@@ -253,7 +278,8 @@ fn interval_sub_skips_before_due() {
     let rid = response_rid(&resp).to_string();
 
     // Tick at +5s (before the 10s interval is due)
-    let _deliveries = e.tick(BASE_TIME + 5.0);
+    let deliveries = e.tick(BASE_TIME + 5.0);
+    assert!(deliveries.is_empty(), "tick before interval due should produce no deliveries");
 
     // Poll — should be empty since interval hasn't fired yet
     let poll_json = format!(r#"{{"omi":"1.0","ttl":0,"read":{{"rid":"{}"}}}}"#, rid);

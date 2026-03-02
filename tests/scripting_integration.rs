@@ -81,7 +81,7 @@ fn script_reads_written_value() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Dst","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = response_result(&resp)["values"].as_array().unwrap();
+    let values = extract_single_result(&resp)["values"].as_array().unwrap();
     assert_eq!(values[0]["v"], 42.0);
 
     // JSON round-trip
@@ -127,7 +127,7 @@ fn script_triggers_cascading_write() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/TempF","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = response_result(&resp)["values"].as_array().unwrap();
+    let values = extract_single_result(&resp)["values"].as_array().unwrap();
     assert_eq!(values[0]["v"], 212.0);
 
     // JSON round-trip
@@ -165,7 +165,7 @@ fn script_error_does_not_block_write() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = response_result(&resp)["values"].as_array().unwrap();
+    let values = extract_single_result(&resp)["values"].as_array().unwrap();
     assert_eq!(values[0]["v"], 7.0);
 
     // JSON round-trip
@@ -216,7 +216,7 @@ fn cascading_depth_limit_stops_chain() {
         );
         let resp = parse_and_process(&mut e, &json);
         assert_eq!(response_status(&resp), 200);
-        let values = response_result(&resp)["values"].as_array().unwrap();
+        let values = extract_single_result(&resp)["values"].as_array().unwrap();
         assert_eq!(
             values[0]["v"], 99.0,
             "/Chain/L{i} should have been updated (within depth limit)"
@@ -231,7 +231,7 @@ fn cascading_depth_limit_stops_chain() {
         );
         let resp = parse_and_process(&mut e, &json);
         assert_eq!(response_status(&resp), 200);
-        let values = response_result(&resp)["values"].as_array().unwrap();
+        let values = extract_single_result(&resp)["values"].as_array().unwrap();
         assert_eq!(
             values[0]["v"], -1.0,
             "/Chain/L{i} should NOT have been updated (beyond depth limit)"

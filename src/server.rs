@@ -80,6 +80,19 @@ fn send_response(
     }
 }
 
+/// Map a `BodyError` to an HTTP error response.
+fn send_body_error(
+    req: esp_idf_svc::http::server::Request<&mut esp_idf_svc::http::server::EspHttpConnection>,
+    err: BodyError,
+    max_desc: &str,
+) {
+    match err {
+        BodyError::Empty => send_response(req, 400, "Bad Request", &[], b"Empty body"),
+        BodyError::TooLarge => send_response(req, 413, "Payload Too Large", &[], max_desc.as_bytes()),
+        BodyError::ReadFailed => send_response(req, 500, "Internal Server Error", &[], b"Failed to read body"),
+    }
+}
+
 /// Serialize an OmiMessage response and write it as JSON to the HTTP response.
 /// On serialization failure, sends a 500 with a structured OMI error.
 fn send_omi_json(
@@ -159,7 +172,8 @@ pub fn start_http_server(
     server.fn_handler::<Infallible, _>("/", Method::Get, move |req| {
         let store = s.lock().unwrap_or_else(|e| e.into_inner());
         let html = render_landing_page(&store);
-        send_response(req, 200, "OK", &[], html.as_bytes());
+        let headers = [("Content-Type", "text/html")];
+        send_response(req, 200, "OK", &headers, html.as_bytes());
         Ok(())
     })?;
 
@@ -169,18 +183,7 @@ pub fn start_http_server(
         const MAX_PAYLOAD: usize = 64 * 1024;
         let buf = match read_body(&mut req, MAX_PAYLOAD) {
             Ok(b) => b,
-            Err(BodyError::Empty) => {
-                send_response(req, 400, "Bad Request", &[], b"Empty payload");
-                return Ok(());
-            }
-            Err(BodyError::TooLarge) => {
-                send_response(req, 413, "Payload Too Large", &[], b"Payload exceeds 64KB limit");
-                return Ok(());
-            }
-            Err(BodyError::ReadFailed) => {
-                send_response(req, 500, "Internal Server Error", &[], b"Failed to read body");
-                return Ok(());
-            }
+            Err(e) => { send_body_error(req, e, "Payload exceeds 64KB limit"); return Ok(()); }
         };
 
         let body = match String::from_utf8(buf) {
@@ -213,18 +216,7 @@ pub fn start_http_server(
         const MAX_OMI: usize = 16 * 1024;
         let buf = match read_body(&mut req, MAX_OMI) {
             Ok(b) => b,
-            Err(BodyError::Empty) => {
-                send_response(req, 400, "Bad Request", &[], b"Empty body");
-                return Ok(());
-            }
-            Err(BodyError::TooLarge) => {
-                send_response(req, 413, "Payload Too Large", &[], b"Body exceeds 16KB limit");
-                return Ok(());
-            }
-            Err(BodyError::ReadFailed) => {
-                send_response(req, 500, "Internal Server Error", &[], b"Failed to read body");
-                return Ok(());
-            }
+            Err(e) => { send_body_error(req, e, "Body exceeds 16KB limit"); return Ok(()); }
         };
 
         let text = match std::str::from_utf8(&buf) {
@@ -409,18 +401,7 @@ pub fn start_http_server(
         const MAX_PAYLOAD: usize = 64 * 1024;
         let body = match read_body(&mut req, MAX_PAYLOAD) {
             Ok(b) => b,
-            Err(BodyError::Empty) => {
-                send_response(req, 400, "Bad Request", &[], b"Empty payload");
-                return Ok(());
-            }
-            Err(BodyError::TooLarge) => {
-                send_response(req, 413, "Payload Too Large", &[], b"Payload exceeds 64KB limit");
-                return Ok(());
-            }
-            Err(BodyError::ReadFailed) => {
-                send_response(req, 500, "Internal Server Error", &[], b"Failed to read body");
-                return Ok(());
-            }
+            Err(e) => { send_body_error(req, e, "Payload exceeds 64KB limit"); return Ok(()); }
         };
 
         let html = match String::from_utf8(body) {

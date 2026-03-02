@@ -48,6 +48,8 @@ fn response_result(resp: &OmiMessage) -> &serde_json::Value {
 fn get_omi(engine: &mut Engine, uri: &str) -> OmiMessage {
     let path = uri_path(uri);
     let query = uri_query(uri);
+    // Trailing-slash flag is only used for Content-Type selection in the
+    // HTTP layer; the Engine treats the path identically either way.
     let (odf_path, _trailing) = omi_uri_to_odf_path(path);
     let params = match query {
         Some(q) => OmiReadParams::from_query(q),
@@ -109,6 +111,16 @@ fn get_omi_with_query_params() {
     assert_eq!(response_status(&resp), 200);
     let values = response_result(&resp)["values"].as_array().unwrap();
     assert_eq!(values.len(), 3);
+    // Verify the 3 newest values were returned (newest-first order).
+    let nums: Vec<f64> = values.iter().map(|v| v["v"].as_f64().unwrap()).collect();
+    assert_eq!(nums, vec![25.0, 24.0, 23.0]);
+}
+
+#[test]
+fn get_omi_nonexistent_path() {
+    let mut e = engine_with_sensor_tree();
+    let resp = get_omi(&mut e, "/omi/NoSuchSensor/Item");
+    assert_eq!(response_status(&resp), 404);
 }
 
 // ===========================================================================
@@ -125,6 +137,16 @@ fn landing_page_lists_pages() {
     assert!(html.contains("<a href=\"/dashboard\">/dashboard</a>"));
     assert!(html.contains("<a href=\"/settings\">/settings</a>"));
     assert!(!html.contains("No pages stored yet."));
+}
+
+#[test]
+fn landing_page_escapes_html_in_paths() {
+    let mut store = PageStore::new();
+    store.store("/x<script>alert(1)</script>", "<h1>XSS</h1>").unwrap();
+
+    let html = render_landing_page(&store);
+    assert!(!html.contains("<script>"), "path must be HTML-escaped");
+    assert!(html.contains("&lt;script&gt;"));
 }
 
 // ===========================================================================
@@ -153,31 +175,36 @@ fn read_not_mutating() {
 
 #[test]
 fn write_is_mutating() {
-    // Write
-    let write = OmiMessage::parse(
+    let msg = OmiMessage::parse(
         r#"{"omi":"1.0","ttl":10,"write":{"path":"/A/B","v":42}}"#,
     )
     .unwrap();
-    assert!(is_mutating_operation(&write.operation));
+    assert!(is_mutating_operation(&msg.operation));
+}
 
-    // Delete
-    let delete = OmiMessage::parse(
+#[test]
+fn delete_is_mutating() {
+    let msg = OmiMessage::parse(
         r#"{"omi":"1.0","ttl":0,"delete":{"path":"/A"}}"#,
     )
     .unwrap();
-    assert!(is_mutating_operation(&delete.operation));
+    assert!(is_mutating_operation(&msg.operation));
+}
 
-    // Cancel
-    let cancel = OmiMessage::parse(
+#[test]
+fn cancel_is_mutating() {
+    let msg = OmiMessage::parse(
         r#"{"omi":"1.0","ttl":0,"cancel":{"rid":["req-1"]}}"#,
     )
     .unwrap();
-    assert!(is_mutating_operation(&cancel.operation));
+    assert!(is_mutating_operation(&msg.operation));
+}
 
-    // Subscription (read with interval)
-    let sub = OmiMessage::parse(
+#[test]
+fn subscription_is_mutating() {
+    let msg = OmiMessage::parse(
         r#"{"omi":"1.0","ttl":60,"read":{"path":"/A/B","interval":10.0}}"#,
     )
     .unwrap();
-    assert!(is_mutating_operation(&sub.operation));
+    assert!(is_mutating_operation(&msg.operation));
 }

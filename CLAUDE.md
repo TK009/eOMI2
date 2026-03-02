@@ -20,7 +20,7 @@ This is embedded device project for dynamically programmable IoT devices. See RE
 # Setup
 
 ```sh
-rustup override set esp   # one-time, in the project directory
+./scripts/setup-esp.sh
 cargo build
 ```
 

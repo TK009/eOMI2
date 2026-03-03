@@ -46,6 +46,14 @@ impl Engine {
     /// arrives over a WebSocket connection. Subscriptions created without a
     /// callback will use WebSocket delivery instead of poll when this is `Some`.
     pub fn process(&mut self, msg: OmiMessage, now: f64, ws_session: Option<SessionId>) -> OmiMessage {
+        let op_name = match &msg.operation {
+            Operation::Read(_) => "read",
+            Operation::Write(_) => "write",
+            Operation::Delete(_) => "delete",
+            Operation::Cancel(_) => "cancel",
+            Operation::Response(_) => "response",
+        };
+        log::debug!("process op={}", op_name);
         let ttl = msg.ttl;
         match msg.operation {
             Operation::Read(op) => self.process_read(op, ttl, now, ws_session),

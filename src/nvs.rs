@@ -4,7 +4,7 @@
 // Non-Volatile Storage (NVS) under namespace "omi_tree", key "writable".
 
 use esp_idf_svc::nvs::{EspNvs, EspNvsPartition, NvsDefault};
-use log::{info, warn};
+use log::{debug, info, warn};
 
 use crate::device::{deserialize_saved_items, serialize_saved_items, SavedItem};
 
@@ -25,7 +25,7 @@ pub fn load_writable_items(nvs: &EspNvs<NvsDefault>) -> Vec<SavedItem> {
     let len = match nvs.blob_len(NVS_KEY) {
         Ok(Some(len)) => len,
         Ok(None) => {
-            info!("NVS: no saved writable items found");
+            debug!("NVS: no saved writable items found");
             return Vec::new();
         }
         Err(e) => {
@@ -49,7 +49,7 @@ pub fn load_writable_items(nvs: &EspNvs<NvsDefault>) -> Vec<SavedItem> {
             }
         }
         Ok(None) => {
-            info!("NVS: no saved writable items found");
+            debug!("NVS: no saved writable items found");
             Vec::new()
         }
         Err(e) => {

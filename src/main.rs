@@ -6,7 +6,7 @@ use esp_idf_svc::{
     wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi},
     ws::FrameType,
 };
-use log::{info, warn};
+use log::{debug, info, warn};
 use reconfigurable_device::device::{
     build_sensor_tree, collect_writable_items, PATH_FREE_HEAP,
 };
@@ -30,6 +30,18 @@ fn main() -> Result<()> {
     // Link ESP-IDF patches and initialize logging
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
+
+    // Set log level: Debug for dev builds, Info for release
+    if cfg!(debug_assertions) {
+        log::set_max_level(log::LevelFilter::Debug);
+    } else {
+        log::set_max_level(log::LevelFilter::Info);
+    }
+
+    // Quiet noisy ESP-IDF C components
+    let _ = esp_idf_svc::log::set_target_level("wifi", log::LevelFilter::Warn);
+    let _ = esp_idf_svc::log::set_target_level("httpd", log::LevelFilter::Warn);
+    let _ = esp_idf_svc::log::set_target_level("httpd_ws", log::LevelFilter::Warn);
 
     info!("\n\n========================================");
     info!("  Reconfigurable Device v0.1.0");
@@ -87,11 +99,18 @@ fn main() -> Result<()> {
     }
 
     // Main loop — read sensor, tick subscriptions, persist, keep Wi-Fi alive
+    let mut wifi_retry_count: u32 = 0;
     loop {
         std::thread::sleep(std::time::Duration::from_secs(5));
         if !wifi.is_connected()? {
-            warn!("Wi-Fi disconnected, reconnecting...");
+            // Log on first attempt and every 12th (~once/min at 5s interval)
+            if wifi_retry_count % 12 == 0 {
+                warn!("Wi-Fi disconnected, reconnecting... attempt={}", wifi_retry_count + 1);
+            }
+            wifi_retry_count = wifi_retry_count.saturating_add(1);
             connect_wifi(&mut wifi)?;
+            info!("Wi-Fi reconnected after {} attempts", wifi_retry_count);
+            wifi_retry_count = 0;
         }
 
         // Record free heap memory
@@ -110,6 +129,9 @@ fn main() -> Result<()> {
             let mut eng = lock_or_recover(&engine, "engine");
             eng.tick(now_secs())
         };
+        if !deliveries.is_empty() {
+            debug!("Tick: {} deliveries", deliveries.len());
+        }
         let mut failed_sessions: Vec<SessionId> = Vec::new();
         {
             let mut senders = lock_or_recover(&ws_senders, "ws_senders");
@@ -121,14 +143,14 @@ fn main() -> Result<()> {
                             match serde_json::to_string(&resp) {
                                 Ok(json) => {
                                     if sender.send(FrameType::Text(false), json.as_bytes()).is_err() {
-                                        info!("WS send failed for session {}, removing", session);
+                                        warn!("WS send failed session={}, removing", session);
                                         if !failed_sessions.contains(session) {
                                             failed_sessions.push(*session);
                                         }
                                     }
                                 }
                                 Err(e) => {
-                                    warn!("WS delivery serialization failed: {}", e);
+                                    warn!("WS delivery serialization failed session={}: {}", session, e);
                                 }
                             }
                         }

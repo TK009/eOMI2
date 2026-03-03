@@ -151,6 +151,11 @@ fn check_auth(
         .unwrap_or(false)
 }
 
+/// Stack size for HTTP server threads.  Must accommodate serde's recursive
+/// deserialization of nested Object trees (bounded by `MAX_OBJECT_DEPTH`
+/// in `omi::write`).
+const HTTP_THREAD_STACK: usize = 8192;
+
 pub fn start_http_server(
     nvs_dirty: Arc<AtomicBool>,
     api_token: &'static str,
@@ -158,6 +163,7 @@ pub fn start_http_server(
     let config = HttpConfig {
         http_port: 80,
         uri_match_wildcard: true,
+        stack_size: HTTP_THREAD_STACK,
         ..Default::default()
     };
     let mut server = EspHttpServer::new(&config)?;

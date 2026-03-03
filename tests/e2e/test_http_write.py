@@ -94,7 +94,6 @@ def test_write_batch(base_url, token):
         assert values[0]["v"] == item["v"]
 
 
-@pytest.mark.xfail(reason="tree write crashes device — firmware bug to investigate")
 def test_write_tree_merge(base_url, token):
     """Tree write merges an object subtree; verify with a single write + read."""
     # Step 1: tree write creates the object hierarchy (no items/values — just structure)
@@ -106,7 +105,6 @@ def test_write_tree_merge(base_url, token):
             },
         },
     }
-    # Extended timeout — tree writes are slow and this test is xfail due to firmware crash
     data = omi_write_tree(base_url, "/", objects, token=token, timeout=30)
     assert data["response"]["status"] in (200, 201)
 
@@ -119,3 +117,35 @@ def test_write_tree_merge(base_url, token):
     assert read["response"]["status"] == 200
     values = read["response"]["result"]["values"]
     assert values[0]["v"] == 99
+
+
+def test_write_tree_deep(base_url, token):
+    """Tree write with 4 levels of nesting succeeds."""
+    objects = {
+        "TestTree": {
+            "id": "TestTree",
+            "objects": {
+                "L2": {
+                    "id": "L2",
+                    "objects": {
+                        "L3": {
+                            "id": "L3",
+                            "objects": {
+                                "L4": {"id": "L4"},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+    data = omi_write_tree(base_url, "/", objects, token=token, timeout=30)
+    assert data["response"]["status"] in (200, 201)
+
+    # Write a value at the deepest level and read it back
+    data = omi_write(base_url, "/TestTree/L2/L3/L4/Deep", 42, token=token)
+    assert data["response"]["status"] in (200, 201)
+
+    read = omi_read(base_url, "/TestTree/L2/L3/L4/Deep", token=token, newest=1)
+    assert read["response"]["status"] == 200
+    assert read["response"]["result"]["values"][0]["v"] == 42

@@ -6,6 +6,10 @@ use serde::ser::SerializeMap;
 use crate::odf::{OmiValue, Object};
 use super::error::ParseError;
 
+/// Maximum nesting depth for Object trees in write operations.
+/// Limits recursive serde deserialization to stay within the HTTP thread stack.
+const MAX_OBJECT_DEPTH: usize = 8;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum WriteOp {
     Single {
@@ -39,8 +43,56 @@ struct RawWriteOp {
     objects: Option<BTreeMap<String, Object>>,
 }
 
+/// Count the maximum Object nesting depth in a JSON `"objects"` map, iteratively.
+///
+/// Expects `value` to be the top-level `"objects"` map (`{ "Id": { "id": ..., "objects": ... }, ... }`).
+/// Returns 0 if `value` is not an object.
+fn object_nesting_depth(value: &serde_json::Value) -> usize {
+    let top_map = match value.as_object() {
+        Some(m) => m,
+        None => return 0,
+    };
+
+    let mut max_depth: usize = 0;
+    // Explicit stack: (json_value_of_an_Object, depth)
+    let mut stack: Vec<(&serde_json::Value, usize)> = Vec::new();
+    for obj in top_map.values() {
+        stack.push((obj, 1));
+    }
+
+    while let Some((v, depth)) = stack.pop() {
+        if depth > max_depth {
+            max_depth = depth;
+        }
+        if let Some(map) = v.as_object() {
+            if let Some(serde_json::Value::Object(children)) = map.get("objects") {
+                for child in children.values() {
+                    stack.push((child, depth + 1));
+                }
+            }
+        }
+    }
+
+    max_depth
+}
+
 impl WriteOp {
     pub fn from_value(value: serde_json::Value) -> Result<Self, ParseError> {
+        // Guard against deeply nested object trees that would overflow the stack
+        // during recursive serde deserialization.
+        if let Some(objects) = value.get("objects") {
+            let depth = object_nesting_depth(objects);
+            if depth > MAX_OBJECT_DEPTH {
+                return Err(ParseError::InvalidField {
+                    field: "objects",
+                    reason: format!(
+                        "nesting depth {} exceeds maximum of {}",
+                        depth, MAX_OBJECT_DEPTH
+                    ),
+                });
+            }
+        }
+
         let raw: RawWriteOp = serde_json::from_value(value)
             .map_err(|e| ParseError::InvalidJson(e.to_string()))?;
 
@@ -356,6 +408,77 @@ mod tests {
             let json = serde_json::to_value(&op).unwrap();
             let op2 = WriteOp::from_value(json).unwrap();
             assert_eq!(op, op2);
+        }
+
+        /// Build a tree write JSON value with `depth` levels of Object nesting.
+        fn make_nested_tree(depth: usize) -> serde_json::Value {
+            assert!(depth >= 1);
+            let mut current = serde_json::json!({"id": format!("L{}", depth)});
+            for i in (1..depth).rev() {
+                let id = format!("L{}", i);
+                let child_id = format!("L{}", i + 1);
+                current = serde_json::json!({
+                    "id": id,
+                    "objects": { child_id: current }
+                });
+            }
+            serde_json::json!({
+                "path": "/",
+                "objects": { "L1": current }
+            })
+        }
+
+        #[test]
+        fn object_nesting_depth_flat() {
+            let objects = serde_json::json!({"A": {"id": "A"}, "B": {"id": "B"}});
+            assert_eq!(object_nesting_depth(&objects), 1);
+        }
+
+        #[test]
+        fn object_nesting_depth_nested() {
+            let objects = serde_json::json!({
+                "A": {
+                    "id": "A",
+                    "objects": {
+                        "B": {
+                            "id": "B",
+                            "objects": {
+                                "C": { "id": "C" }
+                            }
+                        }
+                    }
+                }
+            });
+            assert_eq!(object_nesting_depth(&objects), 3);
+        }
+
+        #[test]
+        fn object_nesting_depth_non_object() {
+            assert_eq!(object_nesting_depth(&serde_json::json!(42)), 0);
+            assert_eq!(object_nesting_depth(&serde_json::json!(null)), 0);
+        }
+
+        #[test]
+        fn from_value_tree_depth_at_limit() {
+            let v = make_nested_tree(MAX_OBJECT_DEPTH);
+            let op = WriteOp::from_value(v).unwrap();
+            match op {
+                WriteOp::Tree { path, .. } => assert_eq!(path, "/"),
+                _ => panic!("expected Tree"),
+            }
+        }
+
+        #[test]
+        fn from_value_tree_depth_exceeded() {
+            let v = make_nested_tree(MAX_OBJECT_DEPTH + 1);
+            let err = WriteOp::from_value(v).unwrap_err();
+            match err {
+                ParseError::InvalidField { field, reason } => {
+                    assert_eq!(field, "objects");
+                    assert!(reason.contains("nesting depth"), "{}", reason);
+                }
+                _ => panic!("expected InvalidField, got {:?}", err),
+            }
         }
     }
 }

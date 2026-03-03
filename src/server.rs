@@ -154,7 +154,7 @@ fn check_auth(
 /// Stack size for HTTP server threads.  Must accommodate serde's recursive
 /// deserialization of nested Object trees (bounded by `MAX_OBJECT_DEPTH`
 /// in `omi::write`).
-const HTTP_THREAD_STACK: usize = 8192;
+const HTTP_THREAD_STACK: usize = 12288;
 
 pub fn start_http_server(
     nvs_dirty: Arc<AtomicBool>,

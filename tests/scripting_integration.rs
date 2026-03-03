@@ -238,3 +238,52 @@ fn cascading_depth_limit_stops_chain() {
         );
     }
 }
+
+// ===========================================================================
+// 5.  Tree write with items carrying onwrite metadata (e2e payload shape)
+// ===========================================================================
+
+#[test]
+fn tree_write_with_onwrite_meta() {
+    let mut e = engine();
+
+    // Exact JSON shape the e2e test sends
+    let tree_json = r#"{
+        "omi":"1.0","ttl":0,
+        "write":{
+            "path":"/",
+            "objects":{
+                "Script":{
+                    "id":"Script",
+                    "items":{
+                        "Src":{
+                            "values":[],
+                            "meta":{
+                                "writable":true,
+                                "onwrite":"odf.writeItem(event.value, '/Script/Dst');"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }"#;
+    let resp = parse_and_process(&mut e, tree_json);
+    assert_eq!(response_status(&resp), 200);
+
+    // Write to Src → should trigger onwrite → cascade to /Script/Dst
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Script/Src","v":42}}"#,
+    );
+    assert_eq!(response_status(&resp), 200);
+
+    // Read /Script/Dst — should have the cascaded value
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Script/Dst","newest":1}}"#,
+    );
+    assert_eq!(response_status(&resp), 200);
+    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    assert_eq!(values[0]["v"], 42.0);
+}

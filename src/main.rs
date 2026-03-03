@@ -5,7 +5,7 @@ use esp_idf_svc::{
     nvs::EspDefaultNvsPartition,
     wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi},
 };
-use log::{debug, info, warn};
+use log::{info, warn};
 use reconfigurable_device::device::{
     build_sensor_tree, collect_writable_items, PATH_FREE_HEAP,
 };

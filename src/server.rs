@@ -158,6 +158,7 @@ pub fn start_http_server(
     let config = HttpConfig {
         http_port: 80,
         uri_match_wildcard: true,
+        stack_size: 8192,
         ..Default::default()
     };
     let mut server = EspHttpServer::new(&config)?;

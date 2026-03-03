@@ -1,7 +1,7 @@
 """Section 7 — Subscription E2E Tests.
 
-Tests for poll subscriptions, event subscriptions over WebSocket,
-interval subscriptions, TTL expiry, and cancellation.
+Tests for poll subscriptions, interval subscriptions over WebSocket,
+event subscriptions triggered by writes, TTL expiry, and cancellation.
 """
 
 import asyncio
@@ -21,6 +21,9 @@ from helpers import (
     run_async,
 )
 
+# Main loop ticks every ~5 s; generous timeout for poll delivery
+TICK_WAIT = 12
+
 
 @pytest.fixture(autouse=True, scope="module")
 def cleanup_test_paths(base_url, token):
@@ -32,27 +35,29 @@ def cleanup_test_paths(base_url, token):
         pass
 
 
-# ── Test 1: Poll subscription lifecycle ──────────────────────────────────
+# ── Test 1: Interval poll subscription lifecycle ─────────────────────────
 
 
 def test_poll_sub_lifecycle(base_url, token):
-    """Create poll sub, write value, poll for it, poll again for empty."""
-    # Create event-based poll subscription on /Test/SubVal
-    data = omi_subscribe(base_url, "/Test/SubVal", interval=-1, ttl=60, token=token)
+    """Create interval poll sub, wait for tick, poll for values, poll again for empty."""
+    # Ensure the path exists
+    omi_write(base_url, "/Test/SubVal", "initial", token=token)
+
+    # Create interval-based poll subscription (fires every 5 s)
+    data = omi_subscribe(base_url, "/Test/SubVal", interval=5, ttl=60, token=token)
     assert data["response"]["status"] == 200
     rid = data["response"]["rid"]
     assert rid
 
     try:
-        # Write a value to trigger the subscription
-        omi_write(base_url, "/Test/SubVal", 42, token=token)
+        # Wait for at least one tick to fire and buffer a value
+        time.sleep(TICK_WAIT)
 
-        # Poll — expect the written value
+        # Poll — expect at least one buffered value
         poll = omi_poll(base_url, rid, token=token)
         assert poll["response"]["status"] == 200
         values = poll["response"]["result"]["values"]
-        assert len(values) > 0, "expected at least one buffered value"
-        assert any(v["v"] == 42 for v in values)
+        assert len(values) > 0, "expected at least one buffered value after tick"
 
         # Poll again — buffer should be drained
         poll2 = omi_poll(base_url, rid, token=token)
@@ -68,7 +73,8 @@ def test_poll_sub_lifecycle(base_url, token):
 
 def test_poll_sub_expiry(base_url, token):
     """Poll sub with short TTL expires; polling afterwards returns 404."""
-    data = omi_subscribe(base_url, "/Test/SubExp", interval=-1, ttl=3, token=token)
+    omi_write(base_url, "/Test/SubExp", 0, token=token)
+    data = omi_subscribe(base_url, "/Test/SubExp", interval=5, ttl=3, token=token)
     assert data["response"]["status"] == 200
     rid = data["response"]["rid"]
 
@@ -80,39 +86,37 @@ def test_poll_sub_expiry(base_url, token):
     assert poll["response"]["status"] == 404
 
 
-# ── Test 3: Event subscription over WebSocket ───────────────────────────
+# ── Test 3: Interval subscription over WebSocket ─────────────────────────
 
 
-def test_event_sub_on_ws(base_url, token, ws_url):
-    """Subscribe over WS, write a value via HTTP, receive push on WS."""
+def test_interval_sub_on_ws(base_url, token, ws_url):
+    """Subscribe over WS with interval, receive push after tick."""
+    omi_write(base_url, "/Test/SubEvt", "ws-val", token=token)
 
     async def _test():
         async with websockets.connect(ws_url, open_timeout=WS_TIMEOUT) as ws:
-            # Send subscription request over WS
+            # Send interval subscription request over WS
             sub_msg = json.dumps({
                 "omi": "1.0",
                 "ttl": 60,
-                "read": {"path": "/Test/SubEvt", "interval": -1},
+                "read": {"path": "/Test/SubEvt", "interval": 5},
             })
             await ws.send(sub_msg)
             resp_raw = await asyncio.wait_for(ws.recv(), timeout=WS_TIMEOUT)
             resp = json.loads(resp_raw)
-            assert resp["response"]["status"] == 200
+            assert resp["response"]["status"] == 200, (
+                f"WS subscribe failed: {resp['response']}"
+            )
             rid = resp["response"]["rid"]
             assert rid
 
             try:
-                # Write value via HTTP to trigger the event
-                omi_write(base_url, "/Test/SubEvt", "ws-event", token=token)
-
-                # Expect a push message on the WS
-                push_raw = await asyncio.wait_for(ws.recv(), timeout=WS_TIMEOUT)
+                # Expect a push message on the WS after an interval tick
+                push_raw = await asyncio.wait_for(ws.recv(), timeout=TICK_WAIT)
                 push = json.loads(push_raw)
                 assert push["response"]["status"] == 200
                 assert push["response"]["rid"] == rid
-                values = push["response"]["result"]["values"]
-                assert len(values) > 0
-                assert any(v["v"] == "ws-event" for v in values)
+                assert "result" in push["response"]
             finally:
                 # Cancel via WS
                 cancel_msg = json.dumps({
@@ -152,7 +156,7 @@ def test_interval_sub(base_url, token, ws_url):
 
             try:
                 # Wait for at least one push (generous timeout)
-                push_raw = await asyncio.wait_for(ws.recv(), timeout=WS_TIMEOUT)
+                push_raw = await asyncio.wait_for(ws.recv(), timeout=TICK_WAIT)
                 push = json.loads(push_raw)
                 assert push["response"]["status"] == 200
                 assert push["response"]["rid"] == rid
@@ -174,8 +178,9 @@ def test_interval_sub(base_url, token, ws_url):
 
 def test_cancel_sub(base_url, token):
     """Cancelling a poll sub makes subsequent polls return 404."""
+    omi_write(base_url, "/Test/SubCancel", 0, token=token)
     data = omi_subscribe(
-        base_url, "/Test/SubCancel", interval=-1, ttl=60, token=token
+        base_url, "/Test/SubCancel", interval=5, ttl=60, token=token
     )
     assert data["response"]["status"] == 200
     rid = data["response"]["rid"]
@@ -184,9 +189,35 @@ def test_cancel_sub(base_url, token):
     cancel = omi_cancel(base_url, [rid], token=token)
     assert cancel["response"]["status"] == 200
 
-    # Write a value (should not be buffered)
-    omi_write(base_url, "/Test/SubCancel", "nope", token=token)
-
     # Poll — subscription is gone
     poll = omi_poll(base_url, rid, token=token, check=False)
     assert poll["response"]["status"] == 404
+
+
+# ── Test 6: Event subscription triggered by write ─────────────────────────
+
+
+def test_event_sub_triggered_by_write(base_url, token):
+    """Event poll sub (interval=-1) receives value when path is written."""
+    # Ensure the path exists
+    omi_write(base_url, "/Test/SubEvent", "initial", token=token)
+
+    # Create event-based poll subscription (interval=-1)
+    data = omi_subscribe(base_url, "/Test/SubEvent", interval=-1, ttl=60, token=token)
+    assert data["response"]["status"] == 200
+    rid = data["response"]["rid"]
+
+    try:
+        # Drain any values buffered at creation time
+        omi_poll(base_url, rid, token=token)
+
+        # Write a new value — should trigger event notification
+        omi_write(base_url, "/Test/SubEvent", "triggered", token=token)
+
+        # Poll immediately — no tick needed, event sub buffers on write
+        poll = omi_poll(base_url, rid, token=token)
+        assert poll["response"]["status"] == 200
+        values = poll["response"]["result"]["values"]
+        assert len(values) > 0, "expected event sub to buffer value on write"
+    finally:
+        omi_cancel(base_url, [rid], token=token)

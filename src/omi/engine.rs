@@ -7,7 +7,7 @@ use super::cancel::CancelOp;
 use super::delete::DeleteOp;
 use super::read::{ReadKind, ReadOp};
 use super::response::{ItemStatus, OmiResponse, ResponseBody, StatusCode};
-use super::subscriptions::{DeliveryTarget, PollResult, SessionId, SubscriptionRegistry};
+use super::subscriptions::{Delivery, DeliveryTarget, PollResult, SessionId, SubscriptionRegistry};
 use super::write::{WriteItem, WriteOp};
 use super::{OmiMessage, Operation};
 
@@ -17,6 +17,9 @@ pub struct Engine {
     /// The O-DF object tree. Public so platform code can populate it on boot.
     pub tree: ObjectTree,
     subscriptions: SubscriptionRegistry,
+    /// Deliveries accumulated during write processing (event notifications).
+    /// Drained by the caller after `process()` via `take_deliveries()`.
+    pending_deliveries: Vec<Delivery>,
     #[cfg(feature = "scripting")]
     script_engine: Option<crate::scripting::ScriptEngine>,
 }
@@ -26,11 +29,17 @@ impl Engine {
         Self {
             tree: ObjectTree::new(),
             subscriptions: SubscriptionRegistry::new(),
+            pending_deliveries: Vec::new(),
             #[cfg(feature = "scripting")]
             script_engine: crate::scripting::ScriptEngine::new()
                 .map_err(|e| warn!("Script engine init failed: {}", e))
                 .ok(),
         }
+    }
+
+    /// Drain and return all deliveries accumulated during write processing.
+    pub fn take_deliveries(&mut self) -> Vec<Delivery> {
+        std::mem::take(&mut self.pending_deliveries)
     }
 
     /// Returns `true` if the embedded script engine initialised successfully.
@@ -61,7 +70,7 @@ impl Engine {
         let ttl = msg.ttl;
         match msg.operation {
             Operation::Read(op) => self.process_read(op, ttl, now, ws_session),
-            Operation::Write(op) => self.process_write(op),
+            Operation::Write(op) => self.process_write(op, now),
             Operation::Delete(op) => self.process_delete(op),
             Operation::Cancel(op) => self.process_cancel(op),
             Operation::Response(_) => {
@@ -227,10 +236,11 @@ impl Engine {
 
     // --- Write ---
 
-    fn process_write(&mut self, op: WriteOp) -> OmiMessage {
+    fn process_write(&mut self, op: WriteOp, now: f64) -> OmiMessage {
         match op {
-            WriteOp::Single { path, v, t } => self.write_single(&path, v, t),
-            WriteOp::Batch { items } => self.process_write_batch(items),
+            WriteOp::Single { path, v, t } => self.write_single(&path, v, t, now),
+            WriteOp::Batch { items } => self.process_write_batch(items, now),
+            // TODO: tree writes do not trigger event notifications
             WriteOp::Tree { path, objects } => match self.tree.write_tree(&path, objects) {
                 Ok(()) => OmiResponse::ok(serde_json::json!(null)),
                 Err(e) => Self::tree_error_to_response(e),
@@ -238,8 +248,8 @@ impl Engine {
         }
     }
 
-    fn write_single(&mut self, path: &str, v: OmiValue, t: Option<f64>) -> OmiMessage {
-        self.write_single_inner(path, v, t, 0)
+    fn write_single(&mut self, path: &str, v: OmiValue, t: Option<f64>, now: f64) -> OmiMessage {
+        self.write_single_inner(path, v, t, 0, now)
     }
 
     /// Inner write logic with depth tracking for script cascading.
@@ -253,6 +263,7 @@ impl Engine {
         t: Option<f64>,
         #[cfg_attr(not(feature = "scripting"), allow(unused))]
         depth: u8,
+        now: f64,
     ) -> OmiMessage {
         match self.tree.resolve(path) {
             Ok(PathTarget::InfoItem(item)) => {
@@ -273,8 +284,7 @@ impl Engine {
             Err(e) => return Self::tree_error_to_response(e),
         }
 
-        #[cfg(feature = "scripting")]
-        let write_value = v.clone();
+        let saved_value = v.clone();
         match self.tree.write_value(path, v, t) {
             Ok(created) => {
                 if created {
@@ -282,7 +292,14 @@ impl Engine {
                 }
 
                 #[cfg(feature = "scripting")]
-                self.run_onwrite_script(path, &write_value, t, depth);
+                self.run_onwrite_script(path, &saved_value, t, depth, now);
+
+                let deliveries = self.subscriptions.notify_event(
+                    path,
+                    &[crate::odf::Value::new(saved_value, t)],
+                    now,
+                );
+                self.pending_deliveries.extend(deliveries);
 
                 if created {
                     OmiResponse::created()
@@ -294,15 +311,15 @@ impl Engine {
         }
     }
 
-    fn process_write_batch(&mut self, items: Vec<WriteItem>) -> OmiMessage {
+    fn process_write_batch(&mut self, items: Vec<WriteItem>, now: f64) -> OmiMessage {
         let mut statuses = Vec::with_capacity(items.len());
         for item in items {
-            statuses.push(self.write_batch_item(item));
+            statuses.push(self.write_batch_item(item, now));
         }
         OmiResponse::partial_batch(statuses)
     }
 
-    fn write_batch_item(&mut self, item: WriteItem) -> ItemStatus {
+    fn write_batch_item(&mut self, item: WriteItem, now: f64) -> ItemStatus {
         let WriteItem { path, v, t } = item;
 
         match self.tree.resolve(&path) {
@@ -328,8 +345,7 @@ impl Engine {
             Err(e) => return Self::tree_error_to_item_status(&path, e),
         }
 
-        #[cfg(feature = "scripting")]
-        let write_value = v.clone();
+        let saved_value = v.clone();
         match self.tree.write_value(&path, v, t) {
             Ok(created) => {
                 if created {
@@ -337,7 +353,14 @@ impl Engine {
                 }
 
                 #[cfg(feature = "scripting")]
-                self.run_onwrite_script(&path, &write_value, t, 0);
+                self.run_onwrite_script(&path, &saved_value, t, 0, now);
+
+                let deliveries = self.subscriptions.notify_event(
+                    &path,
+                    &[crate::odf::Value::new(saved_value, t)],
+                    now,
+                );
+                self.pending_deliveries.extend(deliveries);
 
                 if created {
                     ItemStatus {
@@ -376,6 +399,7 @@ impl Engine {
         value: &OmiValue,
         timestamp: Option<f64>,
         depth: u8,
+        now: f64,
     ) {
         use crate::scripting::bindings::{MAX_SCRIPT_DEPTH, PendingWrite, ScriptCallbackCtx,
                                           js_odf_write_item};
@@ -484,7 +508,7 @@ impl Engine {
         // Process collected writes — each may trigger further onwrite scripts
         // at depth + 1, using normal &mut self calls with no aliasing.
         for pw in pending_writes {
-            let _ = self.write_single_inner(&pw.path, pw.value, timestamp, depth + 1);
+            let _ = self.write_single_inner(&pw.path, pw.value, timestamp, depth + 1, now);
         }
 
         // Run GC at the top level after the entire cascade completes
@@ -1105,6 +1129,99 @@ mod tests {
             }
             _ => panic!("expected Single"),
         }
+    }
+
+    // --- Event notifications on write ---
+
+    #[test]
+    fn write_triggers_poll_event_sub() {
+        let mut e = Engine::new();
+        // Create the path first
+        e.process(write_msg("/Dev/Temp", OmiValue::Number(0.0)), 1000.0, None);
+        // Create event poll subscription (interval=-1, no callback)
+        let sub = e.process(poll_sub_msg("/Dev/Temp", 60), 1001.0, None);
+        assert_eq!(status(&sub), 200);
+        let rid = body(&sub).rid.as_ref().unwrap().clone();
+        // Drain any deliveries from setup
+        e.take_deliveries();
+
+        // Write a value — should trigger event notification into poll buffer
+        let resp = e.process(write_msg("/Dev/Temp", OmiValue::Number(42.0)), 1002.0, None);
+        assert_eq!(status(&resp), 200);
+
+        // Poll — should get the written value
+        let poll = e.process(poll_msg(&rid), 1003.0, None);
+        assert_eq!(status(&poll), 200);
+        match body(&poll).result.as_ref().unwrap() {
+            ResponseResult::Single(val) => {
+                let values = val["values"].as_array().unwrap();
+                assert_eq!(values.len(), 1);
+                assert_eq!(values[0]["v"], 42.0);
+            }
+            _ => panic!("expected Single"),
+        }
+    }
+
+    #[test]
+    fn write_triggers_callback_delivery() {
+        let mut e = Engine::new();
+        e.process(write_msg("/Dev/Temp", OmiValue::Number(0.0)), 1000.0, None);
+        // Create event callback subscription
+        let sub = e.process(sub_msg("/Dev/Temp", -1.0, 60), 1001.0, None);
+        assert_eq!(status(&sub), 200);
+        e.take_deliveries();
+
+        // Write triggers callback delivery
+        let resp = e.process(write_msg("/Dev/Temp", OmiValue::Number(99.0)), 1002.0, None);
+        assert_eq!(status(&resp), 200);
+        let deliveries = e.take_deliveries();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].path, "/Dev/Temp");
+        assert!(matches!(&deliveries[0].target, DeliveryTarget::Callback(_)));
+    }
+
+    #[test]
+    fn batch_write_accumulates_deliveries() {
+        let mut e = Engine::new();
+        e.process(write_msg("/Dev/A", OmiValue::Number(0.0)), 1000.0, None);
+        e.process(write_msg("/Dev/B", OmiValue::Number(0.0)), 1000.0, None);
+        // Subscribe to both paths with callbacks
+        e.process(sub_msg("/Dev/A", -1.0, 60), 1001.0, None);
+        e.process(sub_msg("/Dev/B", -1.0, 60), 1001.0, None);
+        e.take_deliveries();
+
+        // Batch write to both
+        let items = vec![
+            WriteItem { path: "/Dev/A".into(), v: OmiValue::Number(1.0), t: None },
+            WriteItem { path: "/Dev/B".into(), v: OmiValue::Number(2.0), t: None },
+        ];
+        e.process(batch_msg(items), 1002.0, None);
+        let deliveries = e.take_deliveries();
+        assert_eq!(deliveries.len(), 2);
+    }
+
+    #[test]
+    fn take_deliveries_drains() {
+        let mut e = Engine::new();
+        e.process(write_msg("/Dev/X", OmiValue::Number(0.0)), 1000.0, None);
+        e.process(sub_msg("/Dev/X", -1.0, 60), 1001.0, None);
+        e.take_deliveries();
+
+        e.process(write_msg("/Dev/X", OmiValue::Number(5.0)), 1002.0, None);
+        let d1 = e.take_deliveries();
+        assert_eq!(d1.len(), 1);
+
+        // Second take should be empty
+        let d2 = e.take_deliveries();
+        assert!(d2.is_empty());
+    }
+
+    #[test]
+    fn write_to_unsubscribed_path_no_deliveries() {
+        let mut e = Engine::new();
+        e.process(write_msg("/Dev/NoSub", OmiValue::Number(42.0)), 1000.0, None);
+        let deliveries = e.take_deliveries();
+        assert!(deliveries.is_empty());
     }
 
     // --- Scripting integration ---

@@ -7691,13 +7691,18 @@ clean:
 }
 
 const char *mjs_strerror(struct mjs *mjs, enum mjs_err err) {
-  const char *err_names[] = {
+  static const char *err_names[] = {
       "NO_ERROR",        "SYNTAX_ERROR",    "REFERENCE_ERROR",
       "TYPE_ERROR",      "OUT_OF_MEMORY",   "INTERNAL_ERROR",
       "NOT_IMPLEMENTED", "FILE_OPEN_ERROR", "BAD_ARGUMENTS",
       "OP_LIMIT_EXCEEDED"};
-  return mjs->error_msg == NULL || mjs->error_msg[0] == '\0' ? err_names[err]
-                                                             : mjs->error_msg;
+  if (mjs->error_msg != NULL && mjs->error_msg[0] != '\0') {
+    return mjs->error_msg;
+  }
+  if ((int) err >= 0 && err < MJS_ERRS_CNT) {
+    return err_names[err];
+  }
+  return "UNKNOWN_ERROR";
 }
 
 void mjs_set_max_ops(struct mjs *mjs, unsigned long max_ops) {
@@ -8572,7 +8577,10 @@ MJS_PRIVATE mjs_err_t mjs_execute(struct mjs *mjs, size_t off, mjs_val_t *res) {
 #endif
     prev_opcode = opcode;
     opcode = code[i];
-    switch (opcode) {
+    if (mjs->max_ops > 0 && ++mjs->ops_count > mjs->max_ops) {
+      mjs_set_errorf(mjs, MJS_OP_LIMIT_ERROR,
+                     "operation limit exceeded (%lu ops)", mjs->max_ops);
+    } else switch (opcode) {
       case OP_BCODE_HEADER: {
         mjs_header_item_t bcode_offset;
         memcpy(&bcode_offset,
@@ -8950,10 +8958,6 @@ MJS_PRIVATE mjs_err_t mjs_execute(struct mjs *mjs, size_t off, mjs_val_t *res) {
                        (int) opcode, (int) bp.start_idx, (int) i);
         i = bp.data.len;
         break;
-    }
-    if (mjs->max_ops > 0 && ++mjs->ops_count > mjs->max_ops) {
-      mjs_set_errorf(mjs, MJS_OP_LIMIT_ERROR,
-                     "operation limit exceeded (%lu ops)", mjs->max_ops);
     }
     if (mjs->error != MJS_OK) {
       mjs_gen_stack_trace(mjs, bp.start_idx + i - 1 /* undo the i++ */);

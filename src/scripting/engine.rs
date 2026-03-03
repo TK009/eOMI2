@@ -11,6 +11,9 @@ pub const MAX_SCRIPT_LEN: usize = 4096;
 /// Maximum bytecode operations per script execution.
 pub const MAX_SCRIPT_OPS: u64 = 50_000;
 
+// Ensure MAX_SCRIPT_OPS fits in c_ulong (32-bit on Xtensa/ESP32).
+const _: () = assert!(MAX_SCRIPT_OPS <= u32::MAX as u64);
+
 /// Safe wrapper around an mJS engine instance.
 ///
 /// The mJS engine is single-threaded. This struct takes `&mut self` for all

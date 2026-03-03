@@ -136,7 +136,8 @@ fn check_auth(
 /// deeply nested tree-write payloads.  For `MAX_OBJECT_DEPTH = 8` the
 /// JSON nesting reaches ~18 levels; at ~500-600 bytes per Xtensa frame
 /// that needs ~11 KB for recursion plus ~3 KB for HTTP/handler overhead.
-/// 16 KB provides comfortable headroom.
+/// InfoItem metadata fields (e.g. `onwrite` scripts) add extra recursion
+/// depth on top of pure object nesting.  16 KB provides comfortable headroom.
 const HTTP_THREAD_STACK: usize = 16384;
 
 pub fn start_http_server(

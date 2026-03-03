@@ -6,7 +6,10 @@ protection, batch writes, and tree-merge writes.
 
 import pytest
 
-from helpers import omi_delete, omi_read, omi_write, omi_write_batch, omi_write_tree
+from helpers import (
+    TREE_WRITE_TIMEOUT,
+    omi_delete, omi_read, omi_write, omi_write_batch, omi_write_tree,
+)
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -105,7 +108,7 @@ def test_write_tree_merge(base_url, token):
             },
         },
     }
-    data = omi_write_tree(base_url, "/", objects, token=token, timeout=30)
+    data = omi_write_tree(base_url, "/", objects, token=token, timeout=TREE_WRITE_TIMEOUT)
     assert data["response"]["status"] in (200, 201)
 
     # Step 2: single write into the new subtree to prove it exists
@@ -139,7 +142,7 @@ def test_write_tree_deep(base_url, token):
             },
         },
     }
-    data = omi_write_tree(base_url, "/", objects, token=token, timeout=30)
+    data = omi_write_tree(base_url, "/", objects, token=token, timeout=TREE_WRITE_TIMEOUT)
     assert data["response"]["status"] in (200, 201)
 
     # Write a value at the deepest level and read it back

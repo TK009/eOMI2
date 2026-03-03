@@ -7,6 +7,8 @@ pub enum ScriptError {
     ScriptTooLarge(usize),
     /// mJS returned an error during script execution.
     Execution(String),
+    /// Script exceeded the operation limit.
+    OpLimitExceeded,
 }
 
 impl std::fmt::Display for ScriptError {
@@ -17,6 +19,7 @@ impl std::fmt::Display for ScriptError {
                 write!(f, "script too large: {} bytes (max {})", len, super::engine::MAX_SCRIPT_LEN)
             }
             Self::Execution(msg) => write!(f, "script error: {}", msg),
+            Self::OpLimitExceeded => write!(f, "script exceeded operation limit"),
         }
     }
 }

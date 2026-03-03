@@ -8,6 +8,9 @@ use super::error::ScriptError;
 /// Maximum script source length in bytes.
 pub const MAX_SCRIPT_LEN: usize = 4096;
 
+/// Maximum bytecode operations per script execution.
+pub const MAX_SCRIPT_OPS: u64 = 50_000;
+
 /// Safe wrapper around an mJS engine instance.
 ///
 /// The mJS engine is single-threaded. This struct takes `&mut self` for all
@@ -28,6 +31,7 @@ impl ScriptEngine {
         if mjs.is_null() {
             return Err(ScriptError::InitFailed);
         }
+        unsafe { ffi::mjs_set_max_ops(mjs, MAX_SCRIPT_OPS as std::os::raw::c_ulong) };
         Ok(Self { mjs })
     }
 
@@ -39,9 +43,13 @@ impl ScriptEngine {
         let c_src = std::ffi::CString::new(src)
             .map_err(|_| ScriptError::Execution("script contains NUL byte".into()))?;
         let mut res: ffi::mjs_val_t = 0;
+        unsafe { ffi::mjs_reset_ops_count(self.mjs) };
         let err = unsafe {
             ffi::mjs_exec(self.mjs, c_src.as_ptr(), &mut res)
         };
+        if err == ffi::MJS_OP_LIMIT_ERROR {
+            return Err(ScriptError::OpLimitExceeded);
+        }
         if err != ffi::MJS_OK {
             let msg = unsafe {
                 let ptr = ffi::mjs_strerror(self.mjs, err);
@@ -240,5 +248,30 @@ mod tests {
             Err(ScriptError::ScriptTooLarge(len)) => assert_eq!(len, MAX_SCRIPT_LEN + 1),
             other => panic!("expected ScriptTooLarge, got: {:?}", other),
         }
+    }
+
+    #[test]
+    fn infinite_loop_hits_op_limit() {
+        let mut engine = ScriptEngine::new().unwrap();
+        match engine.exec("while(true){}") {
+            Err(ScriptError::OpLimitExceeded) => {}
+            other => panic!("expected OpLimitExceeded, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn finite_loop_completes_within_limit() {
+        let mut engine = ScriptEngine::new().unwrap();
+        let result = engine.exec("let s = 0; for (let i = 0; i < 100; i++) { s = s + i; } s");
+        assert!(result.is_ok(), "small loop should succeed: {:?}", result);
+    }
+
+    #[test]
+    fn op_limit_resets_between_calls() {
+        let mut engine = ScriptEngine::new().unwrap();
+        // First call: use some budget
+        engine.exec("let x = 0; for (let i = 0; i < 100; i++) { x = x + 1; }").unwrap();
+        // Second call: should get a fresh budget, not continue from the previous
+        engine.exec("let y = 0; for (let i = 0; i < 100; i++) { y = y + 1; }").unwrap();
     }
 }

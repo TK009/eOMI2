@@ -24,6 +24,7 @@ pub type mjs_err_t = c_int;
 
 /// mJS error enum values.
 pub const MJS_OK: mjs_err_t = 0;
+pub const MJS_OP_LIMIT_ERROR: mjs_err_t = 9;
 
 /// Function pointer type for foreign functions callable from mJS.
 ///
@@ -109,4 +110,8 @@ extern "C" {
 
     // --- Errors ---
     pub fn mjs_strerror(mjs: *mut mjs, err: mjs_err_t) -> *const c_char;
+
+    // --- Operation limit ---
+    pub fn mjs_set_max_ops(mjs: *mut mjs, max_ops: std::os::raw::c_ulong);
+    pub fn mjs_reset_ops_count(mjs: *mut mjs);
 }

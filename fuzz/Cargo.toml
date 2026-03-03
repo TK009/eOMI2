@@ -1,0 +1,35 @@
+[package]
+name = "reconfigurable-device-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.reconfigurable-device]
+path = ".."
+default-features = false
+features = ["std", "json", "scripting"]
+
+# Prevent cargo from looking for a parent workspace
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_omi_parse"
+path = "fuzz_targets/fuzz_omi_parse.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_odf_path"
+path = "fuzz_targets/fuzz_odf_path.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_script_exec"
+path = "fuzz_targets/fuzz_script_exec.rs"
+doc = false

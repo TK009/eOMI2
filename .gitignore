@@ -9,3 +9,5 @@ __pycache__/
 *.pyc
 tests/e2e/.venv/
 .claude/worktrees
+/fuzz/artifacts/
+/fuzz/corpus/

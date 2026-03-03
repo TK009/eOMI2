@@ -1,0 +1,6 @@
+# Override the parent's ESP target — fuzz targets run on the host.
+[build]
+target = "x86_64-unknown-linux-gnu"
+
+# Clear parent's build-std (nightly cargo-fuzz handles this itself).
+[unstable]

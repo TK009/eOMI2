@@ -95,10 +95,10 @@ def omi_read(base_url, path="/", token=None, **read_params):
     return _omi_post(base_url, payload, token=token)
 
 
-def omi_write(base_url, path, value, token=None):
+def omi_write(base_url, path, value, token=None, timeout=None):
     """Send an OMI write request and return the parsed JSON response."""
     payload = {"omi": "1.0", "ttl": 0, "write": {"path": path, "v": value}}
-    return _omi_post(base_url, payload, token=token)
+    return _omi_post(base_url, payload, token=token, timeout=timeout)
 
 
 def omi_write_batch(base_url, items, token=None):

@@ -7,4 +7,7 @@ dependencies = ["pytest>=8.0", "requests>=2.31", "websockets>=13.0"]
 [tool.pytest.ini_options]
 testpaths = ["."]
 addopts = "-x -v"
-markers = ["reboot: tests that perform a hardware reboot via espflash"]
+markers = [
+    "reboot: tests that perform a hardware reboot via espflash",
+    "stress: long-running stress and stability tests",
+]

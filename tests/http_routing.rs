@@ -42,24 +42,23 @@ fn get_omi_root() {
     let resp = get_omi(&mut e, "/omi/");
     assert_eq!(response_status(&resp), 200);
     let result = extract_single_result(&resp);
-    assert!(result["Dht11"].is_object(), "root should contain Dht11");
+    assert!(result["System"].is_object(), "root should contain System");
 }
 
 #[test]
 fn get_omi_object() {
     let mut e = engine_with_sensor_tree();
-    let resp = get_omi(&mut e, "/omi/Dht11/");
+    let resp = get_omi(&mut e, "/omi/System/");
     assert_eq!(response_status(&resp), 200);
     let result = extract_single_result(&resp);
-    assert_eq!(result["id"], "Dht11");
-    assert!(result["items"]["Temperature"].is_object());
-    assert!(result["items"]["RelativeHumidity"].is_object());
+    assert_eq!(result["id"], "System");
+    assert!(result["items"]["FreeHeap"].is_object());
 }
 
 #[test]
 fn get_omi_infoitem() {
     let mut e = engine_with_sensor_tree();
-    let resp = get_omi(&mut e, "/omi/Dht11/Temperature");
+    let resp = get_omi(&mut e, "/omi/System/FreeHeap");
     assert_eq!(response_status(&resp), 200);
     let values = extract_single_result(&resp)["values"].as_array().unwrap();
     assert!(values.is_empty());
@@ -73,14 +72,14 @@ fn get_omi_with_query_params() {
     for i in 1..=5 {
         e.tree
             .write_value(
-                "/Dht11/Temperature",
+                "/System/FreeHeap",
                 OmiValue::Number(20.0 + i as f64),
                 Some(i as f64 * 100.0),
             )
             .unwrap();
     }
 
-    let resp = get_omi(&mut e, "/omi/Dht11/Temperature?newest=3&depth=1");
+    let resp = get_omi(&mut e, "/omi/System/FreeHeap?newest=3&depth=1");
     assert_eq!(response_status(&resp), 200);
     let values = extract_single_result(&resp)["values"].as_array().unwrap();
     assert_eq!(values.len(), 3);

@@ -5,9 +5,11 @@ import requests
 REQUEST_TIMEOUT = 10  # seconds – avoid hanging on unresponsive devices
 
 
-def omi_read(base_url, path="/", token=None):
+def omi_read(base_url, path="/", token=None, **read_params):
     """Send an OMI read request and return the parsed JSON response."""
-    payload = {"omi": "1.0", "ttl": 0, "read": {"path": path}}
+    read_body = {"path": path}
+    read_body.update(read_params)
+    payload = {"omi": "1.0", "ttl": 0, "read": read_body}
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     resp = requests.post(
         f"{base_url}/omi",

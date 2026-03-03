@@ -31,7 +31,7 @@ fn poll_sub_create_write_poll() {
     // Create poll subscription (interval=-1, no callback, no ws_session → Poll target)
     let resp = process_at(
         &mut e,
-        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":-1}}"#,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/System/FreeHeap","interval":-1}}"#,
         BASE_TIME,
         None,
     );
@@ -40,12 +40,12 @@ fn poll_sub_create_write_poll() {
 
     // Write a value directly (sensor items are read-only via JSON)
     e.tree
-        .write_value("/Dht11/Temperature", OmiValue::Number(23.5), Some(BASE_TIME + 1.0))
+        .write_value("/System/FreeHeap", OmiValue::Number(23.5), Some(BASE_TIME + 1.0))
         .unwrap();
 
     // Simulate event notification (production code does this in main.rs)
     let values = vec![Value::new(OmiValue::Number(23.5), Some(BASE_TIME + 1.0))];
-    e.subscriptions().notify_event("/Dht11/Temperature", &values, BASE_TIME + 1.0);
+    e.subscriptions().notify_event("/System/FreeHeap", &values, BASE_TIME + 1.0);
 
     // Poll by rid
     let poll_json = format!(r#"{{"omi":"1.0","ttl":0,"read":{{"rid":"{}"}}}}"#, rid);
@@ -65,7 +65,7 @@ fn poll_sub_drain_clears_buffer() {
     // Create poll subscription
     let resp = process_at(
         &mut e,
-        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":-1}}"#,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/System/FreeHeap","interval":-1}}"#,
         BASE_TIME,
         None,
     );
@@ -73,10 +73,10 @@ fn poll_sub_drain_clears_buffer() {
 
     // Write + notify
     e.tree
-        .write_value("/Dht11/Temperature", OmiValue::Number(20.0), Some(BASE_TIME + 1.0))
+        .write_value("/System/FreeHeap", OmiValue::Number(20.0), Some(BASE_TIME + 1.0))
         .unwrap();
     let values = vec![Value::new(OmiValue::Number(20.0), Some(BASE_TIME + 1.0))];
-    e.subscriptions().notify_event("/Dht11/Temperature", &values, BASE_TIME + 1.0);
+    e.subscriptions().notify_event("/System/FreeHeap", &values, BASE_TIME + 1.0);
 
     let poll_json = format!(r#"{{"omi":"1.0","ttl":0,"read":{{"rid":"{}"}}}}"#, rid);
 
@@ -99,7 +99,7 @@ fn poll_sub_multiple_values() {
 
     let resp = process_at(
         &mut e,
-        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":-1}}"#,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/System/FreeHeap","interval":-1}}"#,
         BASE_TIME,
         None,
     );
@@ -110,10 +110,10 @@ fn poll_sub_multiple_values() {
         let temp = 20.0 + i as f64;
         let t = BASE_TIME + i as f64;
         e.tree
-            .write_value("/Dht11/Temperature", OmiValue::Number(temp), Some(t))
+            .write_value("/System/FreeHeap", OmiValue::Number(temp), Some(t))
             .unwrap();
         let values = vec![Value::new(OmiValue::Number(temp), Some(t))];
-        e.subscriptions().notify_event("/Dht11/Temperature", &values, t);
+        e.subscriptions().notify_event("/System/FreeHeap", &values, t);
     }
 
     // Single poll returns all 3
@@ -131,7 +131,7 @@ fn poll_sub_ttl_expiry() {
     // Create subscription with ttl=60
     let resp = process_at(
         &mut e,
-        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":-1}}"#,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/System/FreeHeap","interval":-1}}"#,
         BASE_TIME,
         None,
     );
@@ -154,7 +154,7 @@ fn event_sub_triggers_on_write() {
     // Create callback event subscription
     let resp = process_at(
         &mut e,
-        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":-1,"callback":"http://example.com/omi"}}"#,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/System/FreeHeap","interval":-1,"callback":"http://example.com/omi"}}"#,
         BASE_TIME,
         None,
     );
@@ -163,15 +163,15 @@ fn event_sub_triggers_on_write() {
 
     // Write + notify
     e.tree
-        .write_value("/Dht11/Temperature", OmiValue::Number(25.0), Some(BASE_TIME + 1.0))
+        .write_value("/System/FreeHeap", OmiValue::Number(25.0), Some(BASE_TIME + 1.0))
         .unwrap();
     let values = vec![Value::new(OmiValue::Number(25.0), Some(BASE_TIME + 1.0))];
-    let deliveries = e.subscriptions().notify_event("/Dht11/Temperature", &values, BASE_TIME + 1.0);
+    let deliveries = e.subscriptions().notify_event("/System/FreeHeap", &values, BASE_TIME + 1.0);
 
     // Assert exactly 1 delivery with correct fields
     assert_eq!(deliveries.len(), 1);
     assert_eq!(deliveries[0].rid, rid);
-    assert_eq!(deliveries[0].path, "/Dht11/Temperature");
+    assert_eq!(deliveries[0].path, "/System/FreeHeap");
     assert_eq!(deliveries[0].values.len(), 1);
     assert_eq!(deliveries[0].values[0].v, OmiValue::Number(25.0));
 }
@@ -180,21 +180,21 @@ fn event_sub_triggers_on_write() {
 fn event_sub_no_trigger_on_unrelated_write() {
     let mut e = engine_with_sensor_tree();
 
-    // Subscribe to Temperature
+    // Subscribe to FreeHeap
     let resp = process_at(
         &mut e,
-        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":-1,"callback":"http://example.com/omi"}}"#,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/System/FreeHeap","interval":-1,"callback":"http://example.com/omi"}}"#,
         BASE_TIME,
         None,
     );
     assert_eq!(response_status(&resp), 200);
 
-    // Notify on a different path (RelativeHumidity)
+    // Notify on a different path (unrelated user item)
     e.tree
-        .write_value("/Dht11/RelativeHumidity", OmiValue::Number(55.0), Some(BASE_TIME + 1.0))
+        .write_value("/Other/Sensor", OmiValue::Number(55.0), Some(BASE_TIME + 1.0))
         .unwrap();
     let values = vec![Value::new(OmiValue::Number(55.0), Some(BASE_TIME + 1.0))];
-    let deliveries = e.subscriptions().notify_event("/Dht11/RelativeHumidity", &values, BASE_TIME + 1.0);
+    let deliveries = e.subscriptions().notify_event("/Other/Sensor", &values, BASE_TIME + 1.0);
 
     assert!(deliveries.is_empty());
 }
@@ -206,7 +206,7 @@ fn event_sub_ttl_expiry_no_delivery() {
     // Create callback event subscription with ttl=60
     let resp = process_at(
         &mut e,
-        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":-1,"callback":"http://example.com/omi"}}"#,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/System/FreeHeap","interval":-1,"callback":"http://example.com/omi"}}"#,
         BASE_TIME,
         None,
     );
@@ -214,10 +214,10 @@ fn event_sub_ttl_expiry_no_delivery() {
 
     // Write + notify after TTL has expired
     e.tree
-        .write_value("/Dht11/Temperature", OmiValue::Number(99.0), Some(BASE_TIME + 61.0))
+        .write_value("/System/FreeHeap", OmiValue::Number(99.0), Some(BASE_TIME + 61.0))
         .unwrap();
     let values = vec![Value::new(OmiValue::Number(99.0), Some(BASE_TIME + 61.0))];
-    let deliveries = e.subscriptions().notify_event("/Dht11/Temperature", &values, BASE_TIME + 61.0);
+    let deliveries = e.subscriptions().notify_event("/System/FreeHeap", &values, BASE_TIME + 61.0);
 
     assert!(deliveries.is_empty(), "expired callback subscription should produce no deliveries");
 }
@@ -232,13 +232,13 @@ fn interval_sub_fires_on_tick() {
 
     // Write a value to tree first (tick reads current values)
     e.tree
-        .write_value("/Dht11/Temperature", OmiValue::Number(22.0), Some(BASE_TIME))
+        .write_value("/System/FreeHeap", OmiValue::Number(22.0), Some(BASE_TIME))
         .unwrap();
 
     // Create interval poll subscription (interval=10, no callback → Poll target)
     let resp = process_at(
         &mut e,
-        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":10}}"#,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/System/FreeHeap","interval":10}}"#,
         BASE_TIME,
         None,
     );
@@ -264,13 +264,13 @@ fn interval_sub_skips_before_due() {
     let mut e = engine_with_sensor_tree();
 
     e.tree
-        .write_value("/Dht11/Temperature", OmiValue::Number(22.0), Some(BASE_TIME))
+        .write_value("/System/FreeHeap", OmiValue::Number(22.0), Some(BASE_TIME))
         .unwrap();
 
     // Create interval=10 subscription
     let resp = process_at(
         &mut e,
-        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":10}}"#,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/System/FreeHeap","interval":10}}"#,
         BASE_TIME,
         None,
     );
@@ -295,13 +295,13 @@ fn interval_sub_callback_delivery() {
 
     // Write a value to tree first (tick reads current values)
     e.tree
-        .write_value("/Dht11/Temperature", OmiValue::Number(22.0), Some(BASE_TIME))
+        .write_value("/System/FreeHeap", OmiValue::Number(22.0), Some(BASE_TIME))
         .unwrap();
 
     // Create interval subscription with callback (→ Callback delivery, not Poll)
     let resp = process_at(
         &mut e,
-        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":10,"callback":"http://example.com/omi"}}"#,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/System/FreeHeap","interval":10,"callback":"http://example.com/omi"}}"#,
         BASE_TIME,
         None,
     );
@@ -314,7 +314,7 @@ fn interval_sub_callback_delivery() {
     // Callback subscription should produce a Delivery (not buffer internally)
     assert_eq!(deliveries.len(), 1);
     assert_eq!(deliveries[0].rid, rid);
-    assert_eq!(deliveries[0].path, "/Dht11/Temperature");
+    assert_eq!(deliveries[0].path, "/System/FreeHeap");
     assert!(!deliveries[0].values.is_empty());
     assert_eq!(deliveries[0].values[0].v, OmiValue::Number(22.0));
     assert!(
@@ -334,7 +334,7 @@ fn ws_sub_delivers_before_disconnect() {
     // Create event subscription with ws_session=42 (→ WebSocket delivery)
     let resp = process_at(
         &mut e,
-        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":-1}}"#,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/System/FreeHeap","interval":-1}}"#,
         BASE_TIME,
         Some(42),
     );
@@ -342,10 +342,10 @@ fn ws_sub_delivers_before_disconnect() {
 
     // Write + notify while WS is still connected
     e.tree
-        .write_value("/Dht11/Temperature", OmiValue::Number(25.0), Some(BASE_TIME + 1.0))
+        .write_value("/System/FreeHeap", OmiValue::Number(25.0), Some(BASE_TIME + 1.0))
         .unwrap();
     let values = vec![Value::new(OmiValue::Number(25.0), Some(BASE_TIME + 1.0))];
-    let deliveries = e.subscriptions().notify_event("/Dht11/Temperature", &values, BASE_TIME + 1.0);
+    let deliveries = e.subscriptions().notify_event("/System/FreeHeap", &values, BASE_TIME + 1.0);
 
     assert_eq!(deliveries.len(), 1);
     assert_eq!(deliveries[0].values[0].v, OmiValue::Number(25.0));
@@ -362,7 +362,7 @@ fn ws_sub_cancelled_on_disconnect() {
     // Create subscription with ws_session=42 (no callback → WebSocket delivery)
     let resp = process_at(
         &mut e,
-        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":-1}}"#,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/System/FreeHeap","interval":-1}}"#,
         BASE_TIME,
         Some(42),
     );
@@ -389,7 +389,7 @@ fn cancel_stops_delivery() {
     // Create callback event subscription
     let resp = process_at(
         &mut e,
-        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":-1,"callback":"http://example.com/omi"}}"#,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/System/FreeHeap","interval":-1,"callback":"http://example.com/omi"}}"#,
         BASE_TIME,
         None,
     );
@@ -406,10 +406,10 @@ fn cancel_stops_delivery() {
 
     // Write + notify after cancel
     e.tree
-        .write_value("/Dht11/Temperature", OmiValue::Number(30.0), Some(BASE_TIME + 2.0))
+        .write_value("/System/FreeHeap", OmiValue::Number(30.0), Some(BASE_TIME + 2.0))
         .unwrap();
     let values = vec![Value::new(OmiValue::Number(30.0), Some(BASE_TIME + 2.0))];
-    let deliveries = e.subscriptions().notify_event("/Dht11/Temperature", &values, BASE_TIME + 2.0);
+    let deliveries = e.subscriptions().notify_event("/System/FreeHeap", &values, BASE_TIME + 2.0);
 
     assert!(deliveries.is_empty(), "cancelled subscription should produce no deliveries");
 }
@@ -421,7 +421,7 @@ fn cancel_double_cancel_idempotent() {
     // Create a poll subscription
     let resp = process_at(
         &mut e,
-        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":-1}}"#,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/System/FreeHeap","interval":-1}}"#,
         BASE_TIME,
         None,
     );
@@ -451,7 +451,7 @@ fn cancel_batch() {
     for _ in 0..3 {
         let resp = process_at(
             &mut e,
-            r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":-1}}"#,
+            r#"{"omi":"1.0","ttl":60,"read":{"path":"/System/FreeHeap","interval":-1}}"#,
             BASE_TIME,
             None,
         );

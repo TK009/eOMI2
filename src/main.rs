@@ -1,7 +1,6 @@
 use anyhow::Result;
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
-    hal::gpio::{AnyIOPin, PinDriver},
     hal::prelude::Peripherals,
     nvs::EspDefaultNvsPartition,
     wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi},
@@ -9,9 +8,8 @@ use esp_idf_svc::{
 };
 use log::{info, warn};
 use reconfigurable_device::device::{
-    build_sensor_tree, collect_writable_items, PATH_HUMIDITY, PATH_TEMPERATURE,
+    build_sensor_tree, collect_writable_items, PATH_FREE_HEAP,
 };
-use reconfigurable_device::dht11::read_dht11;
 use reconfigurable_device::nvs::{load_writable_items, open_nvs, save_writable_items};
 use reconfigurable_device::odf::OmiValue;
 use reconfigurable_device::omi::OmiResponse;
@@ -46,10 +44,6 @@ fn main() -> Result<()> {
     // Clone NVS partition for OMI tree persistence (Wi-Fi consumes the other)
     let nvs_omi = nvs.clone();
 
-    // Take GPIO4 for DHT11 sensor (open-drain mode)
-    let any_pin: AnyIOPin = peripherals.pins.gpio4.into();
-    let mut dht_pin = PinDriver::input_output_od(any_pin)?;
-
     // Connect to Wi-Fi
     let mut wifi = BlockingWifi::wrap(
         EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs))?,
@@ -71,7 +65,7 @@ fn main() -> Result<()> {
     {
         let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());
         eng.tree.write_tree("/", build_sensor_tree()).unwrap();
-        info!("Sensor tree populated: Dht11/Temperature, Dht11/RelativeHumidity");
+        info!("Sensor tree populated: System/FreeHeap");
     }
 
     // Load and replay NVS-persisted writable items
@@ -99,20 +93,13 @@ fn main() -> Result<()> {
             connect_wifi(&mut wifi)?;
         }
 
-        // Read DHT11 sensor
-        match read_dht11(&mut dht_pin) {
-            Ok(reading) => {
-                let now = now_secs();
-                let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());
-                if let Err(e) = eng.tree.write_value(PATH_TEMPERATURE, OmiValue::Number(reading.temperature as f64), Some(now)) {
-                    warn!("Failed to write {}: {}", PATH_TEMPERATURE, e);
-                }
-                if let Err(e) = eng.tree.write_value(PATH_HUMIDITY, OmiValue::Number(reading.humidity as f64), Some(now)) {
-                    warn!("Failed to write {}: {}", PATH_HUMIDITY, e);
-                }
-            }
-            Err(e) => {
-                warn!("DHT11 read failed: {}, will retry next tick", e);
+        // Record free heap memory
+        {
+            let heap_free = unsafe { esp_idf_svc::sys::esp_get_free_heap_size() };
+            let now = now_secs();
+            let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());
+            if let Err(e) = eng.tree.write_value(PATH_FREE_HEAP, OmiValue::Number(heap_free as f64), Some(now)) {
+                warn!("Failed to write {}: {}", PATH_FREE_HEAP, e);
             }
         }
 

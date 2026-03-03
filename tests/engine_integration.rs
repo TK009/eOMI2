@@ -28,23 +28,22 @@ fn read_root_returns_objects() {
     let resp = parse_and_process(&mut e, r#"{"omi":"1.0","ttl":0,"read":{"path":"/"}}"#);
     assert_eq!(response_status(&resp), 200);
     let result = extract_single_result(&resp);
-    assert!(result["Dht11"].is_object(), "root should contain Dht11");
+    assert!(result["System"].is_object(), "root should contain System");
 
     // Verify via JSON round-trip
     let rt = roundtrip_response_json(&resp);
     assert_eq!(rt["status"], 200);
-    assert!(rt["result"]["Dht11"].is_object());
+    assert!(rt["result"]["System"].is_object());
 }
 
 #[test]
 fn read_object_returns_items() {
     let mut e = engine_with_sensor_tree();
-    let resp = parse_and_process(&mut e, r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11"}}"#);
+    let resp = parse_and_process(&mut e, r#"{"omi":"1.0","ttl":0,"read":{"path":"/System"}}"#);
     assert_eq!(response_status(&resp), 200);
     let result = extract_single_result(&resp);
-    assert_eq!(result["id"], "Dht11");
-    assert!(result["items"]["Temperature"].is_object());
-    assert!(result["items"]["RelativeHumidity"].is_object());
+    assert_eq!(result["id"], "System");
+    assert!(result["items"]["FreeHeap"].is_object());
 }
 
 #[test]
@@ -52,7 +51,7 @@ fn read_infoitem_empty() {
     let mut e = engine_with_sensor_tree();
     let resp = parse_and_process(
         &mut e,
-        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11/Temperature"}}"#,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/System/FreeHeap"}}"#,
     );
     assert_eq!(response_status(&resp), 200);
     let result = extract_single_result(&resp);
@@ -64,12 +63,12 @@ fn read_infoitem_with_values() {
     let mut e = engine_with_sensor_tree();
     // Directly write a value into the sensor item (bypasses writability check).
     e.tree
-        .write_value("/Dht11/Temperature", OmiValue::Number(23.5), Some(1000.0))
+        .write_value("/System/FreeHeap", OmiValue::Number(23.5), Some(1000.0))
         .unwrap();
 
     let resp = parse_and_process(
         &mut e,
-        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11/Temperature"}}"#,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/System/FreeHeap"}}"#,
     );
     assert_eq!(response_status(&resp), 200);
     let values = extract_single_result(&resp)["values"].as_array().unwrap();
@@ -87,7 +86,7 @@ fn read_newest_oldest_filters() {
     for i in 1..=5 {
         e.tree
             .write_value(
-                "/Dht11/Temperature",
+                "/System/FreeHeap",
                 OmiValue::Number(20.0 + i as f64),
                 Some(i as f64 * 100.0),
             )
@@ -97,14 +96,14 @@ fn read_newest_oldest_filters() {
     // newest=2
     let resp = parse_and_process(
         &mut e,
-        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11/Temperature","newest":2}}"#,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/System/FreeHeap","newest":2}}"#,
     );
     assert_eq!(extract_single_result(&resp)["values"].as_array().unwrap().len(), 2);
 
     // oldest=2
     let resp = parse_and_process(
         &mut e,
-        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11/Temperature","oldest":2}}"#,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/System/FreeHeap","oldest":2}}"#,
     );
     assert_eq!(extract_single_result(&resp)["values"].as_array().unwrap().len(), 2);
 }
@@ -114,13 +113,13 @@ fn read_time_range() {
     let mut e = engine_with_sensor_tree();
     for t in [100.0, 200.0, 300.0] {
         e.tree
-            .write_value("/Dht11/Temperature", OmiValue::Number(t / 10.0), Some(t))
+            .write_value("/System/FreeHeap", OmiValue::Number(t / 10.0), Some(t))
             .unwrap();
     }
 
     let resp = parse_and_process(
         &mut e,
-        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11/Temperature","begin":150,"end":250}}"#,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/System/FreeHeap","begin":150,"end":250}}"#,
     );
     assert_eq!(response_status(&resp), 200);
     let values = extract_single_result(&resp)["values"].as_array().unwrap();
@@ -133,11 +132,11 @@ fn read_with_depth() {
     let mut e = engine_with_sensor_tree();
     let resp = parse_and_process(
         &mut e,
-        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11","depth":0}}"#,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/System","depth":0}}"#,
     );
     assert_eq!(response_status(&resp), 200);
     let result = extract_single_result(&resp);
-    assert_eq!(result["id"], "Dht11");
+    assert_eq!(result["id"], "System");
     // depth=0 should omit nested items
     assert!(result.get("items").is_none());
 }
@@ -147,14 +146,13 @@ fn read_with_depth_includes_items() {
     let mut e = engine_with_sensor_tree();
     let resp = parse_and_process(
         &mut e,
-        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11","depth":1}}"#,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/System","depth":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
     let result = extract_single_result(&resp);
-    assert_eq!(result["id"], "Dht11");
+    assert_eq!(result["id"], "System");
     // depth=1 should include items
-    assert!(result["items"]["Temperature"].is_object());
-    assert!(result["items"]["RelativeHumidity"].is_object());
+    assert!(result["items"]["FreeHeap"].is_object());
 }
 
 #[test]
@@ -220,7 +218,7 @@ fn write_read_only_rejected() {
     let mut e = engine_with_sensor_tree();
     let resp = parse_and_process(
         &mut e,
-        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dht11/Temperature","v":99}}"#,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/System/FreeHeap","v":99}}"#,
     );
     assert_eq!(response_status(&resp), 403);
 }
@@ -235,7 +233,7 @@ fn write_batch_mixed_results() {
             "write":{
                 "items":[
                     {"path":"/NewObj/Item1","v":1},
-                    {"path":"/Dht11/Temperature","v":99}
+                    {"path":"/System/FreeHeap","v":99}
                 ]
             }
         }"#,
@@ -281,7 +279,7 @@ fn write_tree_merges_objects() {
     // Original sensor tree should still exist
     let resp = parse_and_process(
         &mut e,
-        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11"}}"#,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/System"}}"#,
     );
     assert_eq!(response_status(&resp), 200);
 }
@@ -344,14 +342,14 @@ fn delete_existing_object() {
     let mut e = engine_with_sensor_tree();
     let resp = parse_and_process(
         &mut e,
-        r#"{"omi":"1.0","ttl":0,"delete":{"path":"/Dht11"}}"#,
+        r#"{"omi":"1.0","ttl":0,"delete":{"path":"/System"}}"#,
     );
     assert_eq!(response_status(&resp), 200);
 
     // Verify it's gone
     let resp = parse_and_process(
         &mut e,
-        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11"}}"#,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/System"}}"#,
     );
     assert_eq!(response_status(&resp), 404);
 }
@@ -387,7 +385,7 @@ fn subscribe_poll_returns_rid() {
     // interval triggers Subscription kind; no callback + no ws_session → Poll target
     let resp = parse_and_process(
         &mut e,
-        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":5.0}}"#,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/System/FreeHeap","interval":5.0}}"#,
     );
     assert_eq!(response_status(&resp), 200);
     let rid = response_rid(&resp);
@@ -403,7 +401,7 @@ fn subscribe_requires_positive_ttl() {
     let mut e = engine_with_sensor_tree();
     let resp = parse_and_process(
         &mut e,
-        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dht11/Temperature","interval":5.0}}"#,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/System/FreeHeap","interval":5.0}}"#,
     );
     assert_eq!(response_status(&resp), 400);
 }
@@ -414,13 +412,13 @@ fn subscribe_then_poll_interval() {
 
     // Write a value so the interval tick has something to return
     e.tree
-        .write_value("/Dht11/Temperature", OmiValue::Number(22.0), Some(1000.0))
+        .write_value("/System/FreeHeap", OmiValue::Number(22.0), Some(1000.0))
         .unwrap();
 
     // Create poll subscription with 5s interval
     let resp = parse_and_process(
         &mut e,
-        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":5.0}}"#,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/System/FreeHeap","interval":5.0}}"#,
     );
     assert_eq!(response_status(&resp), 200);
     let rid = response_rid(&resp).to_owned();
@@ -437,7 +435,7 @@ fn subscribe_then_poll_interval() {
     let resp = e.process(msg, 6.0, None);
     assert_eq!(response_status(&resp), 200);
     let result = extract_single_result(&resp);
-    assert_eq!(result["path"], "/Dht11/Temperature");
+    assert_eq!(result["path"], "/System/FreeHeap");
 }
 
 #[test]
@@ -447,7 +445,7 @@ fn cancel_active_subscription() {
     // Create a subscription
     let resp = parse_and_process(
         &mut e,
-        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Dht11/Temperature","interval":5.0}}"#,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/System/FreeHeap","interval":5.0}}"#,
     );
     let rid = response_rid(&resp).to_owned();
 

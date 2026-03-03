@@ -9,41 +9,32 @@ use std::collections::BTreeMap;
 #[cfg(feature = "std")]
 use crate::odf::{InfoItem, Object, ObjectTree, OmiValue};
 
-/// O-DF path for the DHT11 temperature reading.
-pub const PATH_TEMPERATURE: &str = "/Dht11/Temperature";
-
-/// O-DF path for the DHT11 relative humidity reading.
-pub const PATH_HUMIDITY: &str = "/Dht11/RelativeHumidity";
+/// O-DF path for the free-heap reading.
+pub const PATH_FREE_HEAP: &str = "/System/FreeHeap";
 
 /// Capacity for sensor InfoItem ring buffers.
 const SENSOR_CAPACITY: usize = 20;
 
-/// Build the sensor object tree for a DHT11 sensor.
+/// Build the sensor object tree for internal system metrics.
 ///
-/// Returns a map with a single `Dht11` object containing two read-only
-/// InfoItems: `Temperature` (Celsius) and `RelativeHumidity` (%RH).
+/// Returns a map with a single `System` object containing a read-only
+/// `FreeHeap` InfoItem (bytes of free heap memory).  Uses internal
+/// counters so no external sensor hardware is required.
 #[cfg(feature = "std")]
 pub fn build_sensor_tree() -> BTreeMap<String, Object> {
-    let mut dht = Object::new("Dht11");
-    dht.type_uri = Some("omi:sensor:dht11".into());
+    let mut sys = Object::new("System");
+    sys.type_uri = Some("omi:device:system".into());
 
-    let mut temp = InfoItem::new(SENSOR_CAPACITY);
-    temp.type_uri = Some("omi:temperature:celsius".into());
-    let mut temp_meta = BTreeMap::new();
-    temp_meta.insert("unit".into(), OmiValue::Str("Cel".into()));
-    temp.meta = Some(temp_meta);
+    let mut heap = InfoItem::new(SENSOR_CAPACITY);
+    heap.type_uri = Some("omi:memory:freeheap".into());
+    let mut heap_meta = BTreeMap::new();
+    heap_meta.insert("unit".into(), OmiValue::Str("B".into()));
+    heap.meta = Some(heap_meta);
 
-    let mut hum = InfoItem::new(SENSOR_CAPACITY);
-    hum.type_uri = Some("omi:humidity:relative".into());
-    let mut hum_meta = BTreeMap::new();
-    hum_meta.insert("unit".into(), OmiValue::Str("%RH".into()));
-    hum.meta = Some(hum_meta);
-
-    dht.add_item("Temperature".into(), temp);
-    dht.add_item("RelativeHumidity".into(), hum);
+    sys.add_item("FreeHeap".into(), heap);
 
     let mut map = BTreeMap::new();
-    map.insert("Dht11".into(), dht);
+    map.insert("System".into(), sys);
     map
 }
 
@@ -101,50 +92,37 @@ mod tests {
     use crate::odf::PathTarget;
 
     #[test]
-    fn sensor_tree_has_dht11_object() {
+    fn sensor_tree_has_system_object() {
         let tree = build_sensor_tree();
-        assert!(tree.contains_key("Dht11"));
-        let dht = &tree["Dht11"];
-        assert_eq!(dht.id, "Dht11");
+        assert!(tree.contains_key("System"));
+        let sys = &tree["System"];
+        assert_eq!(sys.id, "System");
     }
 
     #[test]
-    fn sensor_tree_has_temperature_item() {
+    fn sensor_tree_has_free_heap_item() {
         let tree = build_sensor_tree();
-        let dht = &tree["Dht11"];
-        let temp = dht.get_item("Temperature").expect("Temperature item missing");
-        assert_eq!(temp.type_uri.as_deref(), Some("omi:temperature:celsius"));
-        assert_eq!(temp.values.len(), 0);
-    }
-
-    #[test]
-    fn sensor_tree_has_humidity_item() {
-        let tree = build_sensor_tree();
-        let dht = &tree["Dht11"];
-        let hum = dht.get_item("RelativeHumidity").expect("RelativeHumidity item missing");
-        assert_eq!(hum.type_uri.as_deref(), Some("omi:humidity:relative"));
+        let sys = &tree["System"];
+        let heap = sys.get_item("FreeHeap").expect("FreeHeap item missing");
+        assert_eq!(heap.type_uri.as_deref(), Some("omi:memory:freeheap"));
+        assert_eq!(heap.values.len(), 0);
     }
 
     #[test]
     fn sensor_items_not_writable() {
         let tree = build_sensor_tree();
-        let dht = &tree["Dht11"];
-        let temp = dht.get_item("Temperature").unwrap();
-        let hum = dht.get_item("RelativeHumidity").unwrap();
-        assert!(!temp.is_writable());
-        assert!(!hum.is_writable());
+        let sys = &tree["System"];
+        let heap = sys.get_item("FreeHeap").unwrap();
+        assert!(!heap.is_writable());
     }
 
     #[test]
     fn sensor_items_have_unit_meta() {
         let tree = build_sensor_tree();
-        let dht = &tree["Dht11"];
+        let sys = &tree["System"];
 
-        let temp_meta = dht.get_item("Temperature").unwrap().meta.as_ref().unwrap();
-        assert_eq!(temp_meta.get("unit"), Some(&OmiValue::Str("Cel".into())));
-
-        let hum_meta = dht.get_item("RelativeHumidity").unwrap().meta.as_ref().unwrap();
-        assert_eq!(hum_meta.get("unit"), Some(&OmiValue::Str("%RH".into())));
+        let heap_meta = sys.get_item("FreeHeap").unwrap().meta.as_ref().unwrap();
+        assert_eq!(heap_meta.get("unit"), Some(&OmiValue::Str("B".into())));
     }
 
     #[test]
@@ -204,7 +182,6 @@ mod tests {
         let mut ot = ObjectTree::new();
         ot.write_tree("/", tree).unwrap();
 
-        assert!(matches!(ot.resolve(PATH_TEMPERATURE), Ok(PathTarget::InfoItem(_))));
-        assert!(matches!(ot.resolve(PATH_HUMIDITY), Ok(PathTarget::InfoItem(_))));
+        assert!(matches!(ot.resolve(PATH_FREE_HEAP), Ok(PathTarget::InfoItem(_))));
     }
 }

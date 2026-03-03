@@ -5,7 +5,7 @@
 use reconfigurable_device::device;
 use reconfigurable_device::omi::{Engine, ItemStatus, OmiMessage, Operation, ResponseResult, SessionId};
 
-/// Build an engine pre-populated with the real DHT11 sensor tree.
+/// Build an engine pre-populated with the real System/FreeHeap sensor tree.
 pub fn engine_with_sensor_tree() -> Engine {
     let mut e = Engine::new();
     e.tree.write_tree("/", device::build_sensor_tree()).unwrap();

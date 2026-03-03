@@ -24,12 +24,11 @@ def _omi_post(base_url, payload, token=None, timeout=None, check=True):
     return resp.json()
 
 
-def omi_read(base_url, path="/", token=None, newest=None):
+def omi_read(base_url, path="/", token=None, **read_params):
     """Send an OMI read request and return the parsed JSON response."""
-    read_obj = {"path": path}
-    if newest is not None:
-        read_obj["newest"] = newest
-    payload = {"omi": "1.0", "ttl": 0, "read": read_obj}
+    read_body = {"path": path}
+    read_body.update(read_params)
+    payload = {"omi": "1.0", "ttl": 0, "read": read_body}
     return _omi_post(base_url, payload, token=token)
 
 

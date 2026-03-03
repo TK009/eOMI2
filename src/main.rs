@@ -4,7 +4,6 @@ use esp_idf_svc::{
     hal::prelude::Peripherals,
     nvs::EspDefaultNvsPartition,
     wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi},
-    ws::FrameType,
 };
 use log::{info, warn};
 use reconfigurable_device::device::{
@@ -12,11 +11,8 @@ use reconfigurable_device::device::{
 };
 use reconfigurable_device::nvs::{load_writable_items, open_nvs, save_writable_items};
 use reconfigurable_device::odf::OmiValue;
-use reconfigurable_device::omi::OmiResponse;
-use reconfigurable_device::omi::subscriptions::DeliveryTarget;
-use reconfigurable_device::omi::SessionId;
 use reconfigurable_device::http::now_secs;
-use reconfigurable_device::server::start_http_server;
+use reconfigurable_device::server::{dispatch_deliveries, start_http_server};
 use reconfigurable_device::sync_util::lock_or_recover;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -110,50 +106,7 @@ fn main() -> Result<()> {
             let mut eng = lock_or_recover(&engine, "engine");
             eng.tick(now_secs())
         };
-        let mut failed_sessions: Vec<SessionId> = Vec::new();
-        {
-            let mut senders = lock_or_recover(&ws_senders, "ws_senders");
-            for d in &deliveries {
-                match &d.target {
-                    DeliveryTarget::WebSocket(session) => {
-                        if let Some(sender) = senders.get_mut(session) {
-                            let resp = OmiResponse::subscription_event(&d.rid, &d.path, &d.values);
-                            match serde_json::to_string(&resp) {
-                                Ok(json) => {
-                                    if sender.send(FrameType::Text(false), json.as_bytes()).is_err() {
-                                        info!("WS send failed for session {}, removing", session);
-                                        if !failed_sessions.contains(session) {
-                                            failed_sessions.push(*session);
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!("WS delivery serialization failed: {}", e);
-                                }
-                            }
-                        }
-                    }
-                    DeliveryTarget::Callback(_url) => {
-                        info!(
-                            "Sub delivery: rid={}, path={}, {} values (callback not yet implemented)",
-                            d.rid, d.path, d.values.len()
-                        );
-                    }
-                    DeliveryTarget::Poll => {} // handled via poll()
-                }
-            }
-            // Remove failed senders
-            for sid in &failed_sessions {
-                senders.remove(sid);
-            }
-        }
-        // Cancel subscriptions for failed sessions outside the senders lock
-        if !failed_sessions.is_empty() {
-            let mut eng = lock_or_recover(&engine, "engine");
-            for sid in &failed_sessions {
-                eng.subscriptions().cancel_by_ws_session(*sid);
-            }
-        }
+        dispatch_deliveries(&deliveries, &ws_senders, &engine);
 
         // Persist writable items to NVS if dirty
         if nvs_dirty.swap(false, Ordering::Acquire) {

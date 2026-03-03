@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use crate::omi::SessionId;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -24,7 +23,8 @@ use crate::http::{
     now_secs, omi_uri_to_odf_path, render_landing_page, uri_path, uri_query,
     validate_content_length, BodyError, OmiReadParams,
 };
-use crate::omi::{Engine, OmiMessage, OmiResponse, Operation};
+use crate::omi::{Engine, OmiMessage, OmiResponse, Operation, SessionId};
+use crate::omi::subscriptions::{Delivery, DeliveryTarget};
 use crate::pages::{PageError, PageStore};
 use crate::sync_util::lock_or_recover;
 
@@ -130,6 +130,62 @@ fn check_auth(
     check_bearer_auth(req.header("authorization"), token)
 }
 
+/// Dispatch subscription deliveries: send WebSocket frames, log callbacks, skip poll.
+///
+/// Acquires `ws_senders` lock, then (if needed) `engine` lock to cancel
+/// failed-session subscriptions. Caller must NOT hold either lock.
+pub fn dispatch_deliveries(
+    deliveries: &[Delivery],
+    ws_senders: &WsSenders,
+    engine: &Arc<Mutex<Engine>>,
+) {
+    if deliveries.is_empty() {
+        return;
+    }
+    let mut failed_sessions: Vec<SessionId> = Vec::new();
+    {
+        let mut senders = lock_or_recover(ws_senders, "ws_senders");
+        for d in deliveries {
+            match &d.target {
+                DeliveryTarget::WebSocket(session) => {
+                    if let Some(sender) = senders.get_mut(session) {
+                        let resp = OmiResponse::subscription_event(&d.rid, &d.path, &d.values);
+                        match serde_json::to_string(&resp) {
+                            Ok(json) => {
+                                if sender.send(FrameType::Text(false), json.as_bytes()).is_err() {
+                                    info!("WS send failed for session {}, removing", session);
+                                    if !failed_sessions.contains(session) {
+                                        failed_sessions.push(*session);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!("WS delivery serialization failed: {}", e);
+                            }
+                        }
+                    }
+                }
+                DeliveryTarget::Callback(_url) => {
+                    info!(
+                        "Sub delivery: rid={}, path={}, {} values (callback not yet implemented)",
+                        d.rid, d.path, d.values.len()
+                    );
+                }
+                DeliveryTarget::Poll => {} // handled via poll()
+            }
+        }
+        for sid in &failed_sessions {
+            senders.remove(sid);
+        }
+    }
+    if !failed_sessions.is_empty() {
+        let mut eng = lock_or_recover(engine, "engine");
+        for sid in &failed_sessions {
+            eng.subscriptions().cancel_by_ws_session(*sid);
+        }
+    }
+}
+
 /// Stack size for the HTTP server task.
 ///
 /// Must accommodate serde_json's recursive-descent parser when handling
@@ -196,6 +252,7 @@ pub fn start_http_server(
     // POST /omi — OMI message endpoint
     let eng = engine.clone();
     let dirty = nvs_dirty.clone();
+    let ws = ws_senders.clone();
     server.fn_handler::<Infallible, _>("/omi", Method::Post, move |mut req| {
         // Content-Type check: reject non-JSON (allow missing/empty)
         if let Some(ct) = req.header("content-type") {
@@ -235,14 +292,17 @@ pub fn start_http_server(
         }
 
         let is_write = matches!(&msg.operation, Operation::Write(_));
-        let resp = {
+        let (resp, deliveries) = {
             let mut eng = lock_or_recover(&eng, "engine");
-            eng.process(msg, now_secs(), None)
+            let resp = eng.process(msg, now_secs(), None);
+            let deliveries = if is_write { eng.take_deliveries() } else { Vec::new() };
+            (resp, deliveries)
         };
         if is_write && is_successful_write_response(&resp) {
             dirty.store(true, Ordering::Release);
         }
         send_omi_json(req, &resp);
+        dispatch_deliveries(&deliveries, &ws, &eng);
         Ok(())
     })?;
 

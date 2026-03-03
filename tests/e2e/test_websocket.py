@@ -4,10 +4,9 @@ Verifies that /omi/ws is reachable even though the GET /omi/* wildcard is
 also registered.  This catches handler-registration-order regressions
 (ESP_ERR_HTTPD_HANDLER_EXISTS).
 
-Subscription tests use interval-based subscriptions (interval>0) rather than
-event-based (interval=-1) because the firmware does not call notify_event()
-after HTTP writes.  Interval subs fire via tick() in the main loop which
-sleeps ~5s between cycles.
+Subscription tests use interval-based subscriptions (interval>0) which fire
+via tick() in the main loop (~5s between cycles).  Event-based subscriptions
+(interval=-1) are also supported and fire immediately on writes.
 """
 
 import asyncio

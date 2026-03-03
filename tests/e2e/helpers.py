@@ -58,3 +58,21 @@ def omi_delete(base_url, path, token=None):
     """Send an OMI delete request and return the parsed JSON response."""
     payload = {"omi": "1.0", "ttl": 0, "delete": {"path": path}}
     return _omi_post(base_url, payload, token=token)
+
+
+def omi_subscribe(base_url, path, interval=-1, ttl=60, token=None):
+    """Create a poll subscription (no callback → poll target). Returns parsed JSON."""
+    payload = {"omi": "1.0", "ttl": ttl, "read": {"path": path, "interval": interval}}
+    return _omi_post(base_url, payload, token=token)
+
+
+def omi_poll(base_url, rid, token=None, check=True):
+    """Poll a subscription by rid. Returns parsed JSON."""
+    payload = {"omi": "1.0", "ttl": 10, "read": {"rid": rid}}
+    return _omi_post(base_url, payload, token=token, check=check)
+
+
+def omi_cancel(base_url, rids, token=None):
+    """Cancel subscriptions by rid list. Returns parsed JSON."""
+    payload = {"omi": "1.0", "ttl": 10, "cancel": {"rid": rids}}
+    return _omi_post(base_url, payload, token=token)

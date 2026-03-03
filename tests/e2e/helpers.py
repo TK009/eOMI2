@@ -1,7 +1,9 @@
 """OMI helper functions for e2e tests."""
 
 import asyncio
+import time
 
+import pytest
 import requests
 
 REQUEST_TIMEOUT = 10  # seconds – avoid hanging on unresponsive devices
@@ -83,3 +85,35 @@ def omi_cancel(base_url, rids, token=None):
     """Cancel subscriptions by rid list. Returns parsed JSON."""
     payload = {"omi": "1.0", "ttl": 10, "cancel": {"rid": rids}}
     return _omi_post(base_url, payload, token=token)
+
+
+# -- Response helpers --------------------------------------------------------
+
+def omi_status(data):
+    """Extract the OMI-level status code from a response envelope."""
+    return data["response"]["status"]
+
+
+def omi_result(data):
+    """Extract the result payload from a response envelope."""
+    return data["response"]["result"]
+
+
+# -- Polling helpers ---------------------------------------------------------
+
+POLL_BACKOFF = [1, 2, 3, 5, 5, 5]
+
+
+def wait_for_values(base_url, path="/System/FreeHeap", min_count=1,
+                    delays=POLL_BACKOFF):
+    """Poll *path* with increasing back-off until at least *min_count* values exist."""
+    for delay in delays:
+        time.sleep(delay)
+        try:
+            data = omi_read(base_url, path=path)
+        except requests.RequestException:
+            continue
+        if omi_status(data) == 200 and len(omi_result(data)["values"]) >= min_count:
+            return omi_result(data)["values"]
+    total = sum(delays)
+    pytest.fail(f"No values at {path} after {total}s")

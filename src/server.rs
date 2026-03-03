@@ -338,7 +338,11 @@ pub fn start_http_server(
             &mut heap_buf
         };
         conn.recv(buf)?;
-        let text = match std::str::from_utf8(buf) {
+        // ESP-IDF httpd may include trailing null(s) in the reported length;
+        // strip them so serde_json doesn't reject the payload.
+        let end = buf.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+        let payload = &buf[..end];
+        let text = match std::str::from_utf8(payload) {
             Ok(s) => s,
             Err(_) => {
                 send_ws_omi(conn, OmiResponse::bad_request("Invalid UTF-8"))?;

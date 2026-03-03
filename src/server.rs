@@ -6,6 +6,8 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+use crate::omi::SessionId;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -29,7 +31,7 @@ use crate::pages::{PageError, PageStore};
 /// recently closed one before the close handler fires.
 static NEXT_WS_SESSION: AtomicU32 = AtomicU32::new(1);
 
-pub type WsSenders = Arc<Mutex<BTreeMap<u64, EspHttpWsDetachedSender>>>;
+pub type WsSenders = Arc<Mutex<BTreeMap<SessionId, EspHttpWsDetachedSender>>>;
 /// Maps raw fd → monotonic session ID so the WS handler can look up the
 /// session ID for an existing connection without allocating new IDs.
 ///
@@ -37,7 +39,7 @@ pub type WsSenders = Arc<Mutex<BTreeMap<u64, EspHttpWsDetachedSender>>>;
 /// `EspHttpWsConnection` does not expose HTTP headers.  Write and delete
 /// operations are rejected at the message level; other state-modifying HTTP
 /// endpoints (PATCH, DELETE) require Bearer auth.
-type FdToSession = Arc<Mutex<BTreeMap<i32, u64>>>;
+type FdToSession = Arc<Mutex<BTreeMap<i32, SessionId>>>;
 
 /// Read request body up to `max` bytes.
 fn read_body(
@@ -283,7 +285,7 @@ pub fn start_http_server(
         if conn.is_new() {
             let sender = conn.create_detached_sender()?;
             let fd = conn.session();
-            let session_id = NEXT_WS_SESSION.fetch_add(1, Ordering::Relaxed) as u64;
+            let session_id = NEXT_WS_SESSION.fetch_add(1, Ordering::Relaxed);
             info!("WS connect: fd={}, session={}", fd, session_id);
             fd_map.lock().unwrap_or_else(|e| e.into_inner()).insert(fd, session_id);
             ws.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id, sender);

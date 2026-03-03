@@ -16,6 +16,7 @@ use reconfigurable_device::nvs::{load_writable_items, open_nvs, save_writable_it
 use reconfigurable_device::odf::OmiValue;
 use reconfigurable_device::omi::OmiResponse;
 use reconfigurable_device::omi::subscriptions::DeliveryTarget;
+use reconfigurable_device::omi::SessionId;
 use reconfigurable_device::http::now_secs;
 use reconfigurable_device::server::start_http_server;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -120,7 +121,7 @@ fn main() -> Result<()> {
             let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());
             eng.tick(now_secs())
         };
-        let mut failed_sessions: Vec<u64> = Vec::new();
+        let mut failed_sessions: Vec<SessionId> = Vec::new();
         {
             let mut senders = ws_senders.lock().unwrap_or_else(|e| e.into_inner());
             for d in &deliveries {

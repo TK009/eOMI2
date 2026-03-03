@@ -338,9 +338,10 @@ pub fn start_http_server(
             &mut heap_buf
         };
         conn.recv(buf)?;
-        // ESP-IDF httpd may include a trailing null in the reported length;
-        // strip it so serde_json doesn't reject the payload.
-        let payload = if buf.last() == Some(&0) { &buf[..buf.len() - 1] } else { buf };
+        // ESP-IDF httpd may include trailing null(s) in the reported length;
+        // strip them so serde_json doesn't reject the payload.
+        let end = buf.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+        let payload = &buf[..end];
         let text = match std::str::from_utf8(payload) {
             Ok(s) => s,
             Err(_) => {

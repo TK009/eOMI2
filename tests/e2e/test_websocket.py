@@ -19,7 +19,7 @@ import websockets
 
 WS_TIMEOUT = 10  # seconds
 SUB_PUSH_TIMEOUT = 20  # seconds — wait for interval sub delivery (~2-4 ticks)
-SUB_PATH = "/Dht11/Temperature"
+SUB_PATH = "/Dht11/Temperature"  # coupled to device tree — update if sensors change
 SUB_INTERVAL = 5  # seconds — matches main loop tick period
 SUB_TTL = 60
 
@@ -31,7 +31,7 @@ def ws_url(device_ip):
 
 def _run(coro):
     """Run an async coroutine synchronously."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 # ---------------------------------------------------------------------------
@@ -50,17 +50,21 @@ async def _ws_read(ws_url, path="/"):
 async def _ws_subscribe(ws_url, path=SUB_PATH, interval=SUB_INTERVAL, ttl=SUB_TTL):
     """Connect, create an interval subscription, return (ws, rid)."""
     ws = await websockets.connect(ws_url, open_timeout=WS_TIMEOUT)
-    msg = json.dumps({
-        "omi": "1.0",
-        "ttl": ttl,
-        "read": {"path": path, "interval": interval},
-    })
-    await ws.send(msg)
-    resp = json.loads(await asyncio.wait_for(ws.recv(), timeout=WS_TIMEOUT))
-    assert resp["response"]["status"] == 200, f"subscribe failed: {resp}"
-    rid = resp["response"]["rid"]
-    assert rid, "subscription response missing rid"
-    return ws, rid
+    try:
+        msg = json.dumps({
+            "omi": "1.0",
+            "ttl": ttl,
+            "read": {"path": path, "interval": interval},
+        })
+        await ws.send(msg)
+        resp = json.loads(await asyncio.wait_for(ws.recv(), timeout=WS_TIMEOUT))
+        assert resp["response"]["status"] == 200, f"subscribe failed: {resp}"
+        rid = resp["response"]["rid"]
+        assert rid, "subscription response missing rid"
+        return ws, rid
+    except BaseException:
+        await ws.close()
+        raise
 
 
 async def _ws_cancel(ws, rids):
@@ -150,7 +154,7 @@ def test_ws_close_cancels_subs(ws_url):
 
             # Verify no stale sub deliveries arrive within another tick
             with pytest.raises(asyncio.TimeoutError):
-                await asyncio.wait_for(ws2.recv(), timeout=8)
+                await asyncio.wait_for(ws2.recv(), timeout=SUB_INTERVAL * 2 + 2)
         finally:
             await ws2.close()
 

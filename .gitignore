@@ -8,3 +8,4 @@ sdkconfig
 __pycache__/
 *.pyc
 tests/e2e/.venv/
+.claude/worktrees

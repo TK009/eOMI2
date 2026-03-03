@@ -3,7 +3,7 @@
 #
 # Steps:
 #   0. Ensure ESP toolchain is installed (setup-esp.sh)
-#   1. Claim a USB device from the pool
+#   1. Claim a USB device from the pool (wait up to 120 s)
 #   2. Build firmware locally (unless --skip-build)
 #   3. Flash the device and capture serial output
 #   4. Wait for the Wi-Fi IP address in serial output (30 s timeout)
@@ -15,6 +15,9 @@
 #   ./scripts/run-e2e.sh                   # full run
 #   ./scripts/run-e2e.sh --skip-build      # reuse existing firmware
 #   ./scripts/run-e2e.sh -- -k test_boot   # pass extra args to pytest
+#
+# Environment:
+#   CLAIM_DEVICES  — pin to specific device(s), e.g. "/dev/ttyUSB0"
 
 set -euo pipefail
 
@@ -27,7 +30,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SERIAL_LOG=$(mktemp /tmp/e2e-serial.XXXXXX)
 MONITOR_PID=""
-DEVICE_LOCK=""
+DEVICE_PORT=""
+DEVICE_FD=""
 SKIP_BUILD=false
 PYTEST_ARGS=()
 
@@ -53,26 +57,39 @@ stop_monitor() {
 cleanup() {
     echo "── Cleaning up ──"
     stop_monitor
-    if [[ -n "$DEVICE_LOCK" ]]; then
-        "$SCRIPT_DIR/release-device.sh" "$DEVICE_LOCK"
+    if [[ -n "${DEVICE_FD:-}" ]]; then
+        . "$SCRIPT_DIR/release-device.sh"
     fi
     rm -f "$SERIAL_LOG"
 }
 trap cleanup EXIT
 
-# ── 1. Claim device ─────────────────────────────────────────────────────
+# ── 1. Claim device (wait up to 120 s) ──────────────────────────────────
 echo "── Claiming USB device ──"
-CLAIM_OUTPUT="$("$SCRIPT_DIR/claim-device.sh" --owner-pid $$)"
-# Parse DEVICE_PORT and DEVICE_LOCK from the controlled output format:
-#   export DEVICE_PORT='<path>'
-#   export DEVICE_LOCK='<path>'
-DEVICE_PORT="$(echo "$CLAIM_OUTPUT" | grep "^export DEVICE_PORT=" | cut -d"'" -f2)"
-DEVICE_LOCK="$(echo "$CLAIM_OUTPUT" | grep "^export DEVICE_LOCK=" | cut -d"'" -f2)"
-if [[ -z "$DEVICE_PORT" || -z "$DEVICE_LOCK" ]]; then
-    echo "ERROR: failed to parse claim-device.sh output" >&2
-    exit 1
-fi
-echo "Claimed $DEVICE_PORT (lock: $DEVICE_LOCK)"
+CLAIM_TIMEOUT=120
+CLAIM_INTERVAL=5
+WAITED=0
+
+while true; do
+    if . "$SCRIPT_DIR/claim-device.sh" 2>/dev/null; then
+        break
+    fi
+
+    if [[ $WAITED -ge $CLAIM_TIMEOUT ]]; then
+        echo "ERROR: timed out waiting for a device after ${CLAIM_TIMEOUT}s" >&2
+        exit 1
+    fi
+
+    echo "All devices busy (waited ${WAITED}s/${CLAIM_TIMEOUT}s). Current holders:" >&2
+    local_lock_dir="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)/.device-locks"
+    for lf in "$local_lock_dir"/*.lock; do
+        [[ -f "$lf" ]] || continue
+        echo "  $(basename "$lf"): $(tr '\n' ' ' < "$lf" 2>/dev/null)" >&2
+    done
+    sleep "$CLAIM_INTERVAL"
+    WAITED=$((WAITED + CLAIM_INTERVAL))
+done
+echo "Claimed $DEVICE_PORT (fd: $DEVICE_FD)"
 
 # ── 2. Build firmware ───────────────────────────────────────────────────
 if [[ "$SKIP_BUILD" == false ]]; then

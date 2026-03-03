@@ -40,6 +40,26 @@ Install esp toolchain and build:
 cargo build
 ```
 
+### Device locking
+
+When multiple processes or containers share the same USB devices, flock-based
+locking prevents double-claims. The lock is held at the kernel level, so it
+works correctly across container PID namespaces.
+
+```sh
+# Run any command with an auto-claimed device:
+./scripts/run-with-device.sh espflash flash --port '$DEVICE_PORT' firmware.bin
+./scripts/run-with-device.sh bash   # interactive shell with device claimed
+
+# Pin a specific device:
+CLAIM_DEVICES="/dev/ttyUSB0" ./scripts/run-with-device.sh minicom -D '$DEVICE_PORT'
+
+# See who holds each device:
+cat .device-locks/*.lock
+```
+
+The e2e test script (`run-e2e.sh`) automatically waits for a free device.
+
 ### Wi-Fi credentials
 
 Copy `.env.example` to `.env` and fill in your network name and password before building for the device.

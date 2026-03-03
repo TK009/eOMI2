@@ -28,5 +28,17 @@ cargo build
 
 There is host-only tests and device tests.
 * Run host tests with alias `cargo test-host`
+* To run e2e tests, check that some devices are available `ls /dev/ttyUSB*`
+* E2e tests: `./scripts/run-e2e.sh`
 
+# Device locking
+
+Device locking uses kernel-level `flock`, safe across containers.
+
+* `claim-device.sh` and `release-device.sh` must be **sourced** (`. ./scripts/claim-device.sh`), not executed
+* `claim-device.sh` sets `DEVICE_PORT` and `DEVICE_FD` in the caller's shell
+* `release-device.sh` closes the fd and unsets the variables
+* `run-with-device.sh` is a convenience wrapper: claims, runs a command, releases on exit
+* Set `CLAIM_DEVICES` env var to pin specific device(s), e.g. `CLAIM_DEVICES="/dev/ttyUSB0"`
+* Lockfiles live in `.device-locks/` — `cat .device-locks/*.lock` shows current holders
 

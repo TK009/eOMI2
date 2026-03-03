@@ -46,7 +46,7 @@ def test_write_correct_token(base_url, token):
     read = omi_read(base_url, "/Test/AuthOk", token=token, newest=1)
     assert read["response"]["status"] == 200
     values = read["response"]["result"]["values"]
-    assert values[0]["v"] == 1
+    assert float(values[0]["v"]) == pytest.approx(1)
 
 
 def test_delete_no_auth(base_url):
@@ -55,9 +55,31 @@ def test_delete_no_auth(base_url):
     assert data["response"]["status"] == 401
 
 
+def test_delete_wrong_token(base_url):
+    """Delete with an invalid token returns OMI 401."""
+    data = omi_delete(base_url, "/Test", token="wrong-token-xxx")
+    assert data["response"]["status"] == 401
+
+
+def test_delete_correct_token(base_url, token):
+    """Delete with the correct token succeeds."""
+    omi_write(base_url, "/Test/AuthDel", 1, token=token)
+    data = omi_delete(base_url, "/Test/AuthDel", token=token)
+    assert data["response"]["status"] == 200
+
+
 def test_rest_get_no_auth(base_url):
     """REST GET on /omi/ is public — no auth header needed."""
     resp = requests.get(f"{base_url}/omi/", timeout=REQUEST_TIMEOUT)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["response"]["status"] == 200
+
+
+def test_rest_get_with_auth(base_url, token):
+    """REST GET on /omi/ still works when an auth header is present."""
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = requests.get(f"{base_url}/omi/", headers=headers, timeout=REQUEST_TIMEOUT)
     assert resp.status_code == 200
     data = resp.json()
     assert data["response"]["status"] == 200

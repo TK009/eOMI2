@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use log::{debug, warn};
+
 use crate::odf::{ObjectTree, PathTarget, PathTargetMut, TreeError, OmiValue};
 use super::cancel::CancelOp;
 use super::delete::DeleteOp;
@@ -26,7 +28,7 @@ impl Engine {
             subscriptions: SubscriptionRegistry::new(),
             #[cfg(feature = "scripting")]
             script_engine: crate::scripting::ScriptEngine::new()
-                .map_err(|e| log::warn!("Script engine init failed: {}", e))
+                .map_err(|e| warn!("Script engine init failed: {}", e))
                 .ok(),
         }
     }
@@ -46,6 +48,16 @@ impl Engine {
     /// arrives over a WebSocket connection. Subscriptions created without a
     /// callback will use WebSocket delivery instead of poll when this is `Some`.
     pub fn process(&mut self, msg: OmiMessage, now: f64, ws_session: Option<SessionId>) -> OmiMessage {
+        if log::log_enabled!(log::Level::Debug) {
+            let op_name = match &msg.operation {
+                Operation::Read(_) => "read",
+                Operation::Write(_) => "write",
+                Operation::Delete(_) => "delete",
+                Operation::Cancel(_) => "cancel",
+                Operation::Response(_) => "response",
+            };
+            debug!("process op={}", op_name);
+        }
         let ttl = msg.ttl;
         match msg.operation {
             Operation::Read(op) => self.process_read(op, ttl, now, ws_session),
@@ -440,7 +452,7 @@ impl Engine {
             let c_src = match std::ffi::CString::new(script_src.as_str()) {
                 Ok(c) => c,
                 Err(_) => {
-                    log::warn!("onwrite script at '{}' contains NUL byte", path);
+                    warn!("onwrite script at '{}' contains NUL byte", path);
                     let null_val = ffi::mjs_mk_null();
                     ffi::mjs_set(mjs, global, n, l, null_val);
                     self.script_engine = Some(script_engine);
@@ -457,7 +469,7 @@ impl Engine {
                 } else {
                     std::ffi::CStr::from_ptr(err_ptr).to_str().unwrap_or("unknown error")
                 };
-                log::warn!("onwrite script error at '{}': {}", path, msg);
+                warn!("onwrite script error at '{}': {}", path, msg);
             }
 
             // Clear context to prevent stale use

@@ -1,6 +1,8 @@
 """OMI helper functions for e2e tests."""
 
 import asyncio
+import subprocess
+import time
 
 import requests
 
@@ -11,6 +13,30 @@ WS_TIMEOUT = 10  # seconds – WebSocket operation timeout
 def run_async(coro):
     """Run an async coroutine synchronously."""
     return asyncio.run(coro)
+
+
+def reboot_device(device_port):
+    """Reset the device via espflash and wait for it to drop off the bus."""
+    subprocess.run(
+        ["espflash", "reset", "--port", device_port],
+        check=True,
+        capture_output=True,
+        timeout=10,
+    )
+
+
+def wait_for_device(base_url, timeout=30):
+    """Poll GET / until the device responds with HTTP 200."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            resp = requests.get(base_url, timeout=5)
+            if resp.status_code == 200:
+                return
+        except requests.RequestException:
+            pass
+        time.sleep(1)
+    raise TimeoutError(f"Device did not become reachable within {timeout}s")
 
 
 def _omi_post(base_url, payload, token=None, timeout=None, check=True):

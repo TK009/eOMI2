@@ -140,6 +140,7 @@ echo "Device is healthy."
 # ── 6. Run pytest ────────────────────────────────────────────────────────
 echo "── Running e2e tests ──"
 export DEVICE_IP
+export DEVICE_PORT
 
 # Load API_TOKEN from .env if present and not already set.
 # Only accept lines matching KEY=VALUE with no shell metacharacters.

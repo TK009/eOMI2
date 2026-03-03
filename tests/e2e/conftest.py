@@ -10,6 +10,15 @@ import pytest
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
+def device_port():
+    """Device serial port from DEVICE_PORT env var."""
+    port = os.environ.get("DEVICE_PORT")
+    if not port:
+        pytest.skip("DEVICE_PORT not set – reboot tests need serial access")
+    return port
+
+
+@pytest.fixture(scope="session")
 def device_ip():
     """Device IP address from the DEVICE_IP env var."""
     ip = os.environ.get("DEVICE_IP")

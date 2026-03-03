@@ -16,7 +16,7 @@ def run_async(coro):
 
 
 def reboot_device(device_port):
-    """Reset the device via espflash and wait for it to drop off the bus."""
+    """Trigger a hardware reset via espflash."""
     subprocess.run(
         ["espflash", "reset", "--port", device_port],
         check=True,
@@ -25,15 +25,43 @@ def reboot_device(device_port):
     )
 
 
-def wait_for_device(base_url, timeout=30):
-    """Poll GET / until the device responds with HTTP 200."""
+def wait_for_device_down(base_url, timeout=10):
+    """Poll GET / until the device stops responding (connection refused/timeout)."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            resp = requests.get(base_url, timeout=5)
-            if resp.status_code == 200:
-                return
+            requests.get(base_url, timeout=2)
         except requests.RequestException:
+            return  # device is down
+        time.sleep(0.5)
+    raise TimeoutError(f"Device did not go offline within {timeout}s")
+
+
+def wait_for_device(base_url, timeout=30, readiness_path="/System"):
+    """Poll the device until it is fully ready.
+
+    Checks that the OMI subsystem is up by reading *readiness_path*
+    (default ``/System``) and verifying a 200 OMI-level status.  Falls
+    back to a simple HTTP 200 check on ``/`` when *readiness_path* is
+    ``None``.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if readiness_path is not None:
+                data = _omi_post(
+                    base_url,
+                    {"omi": "1.0", "ttl": 0, "read": {"path": readiness_path}},
+                    check=False,
+                    timeout=5,
+                )
+                if data.get("response", {}).get("status") == 200:
+                    return
+            else:
+                resp = requests.get(base_url, timeout=5)
+                if resp.status_code == 200:
+                    return
+        except (requests.RequestException, ValueError):
             pass
         time.sleep(1)
     raise TimeoutError(f"Device did not become reachable within {timeout}s")

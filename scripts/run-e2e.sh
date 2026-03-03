@@ -3,7 +3,7 @@
 #
 # Steps:
 #   0. Ensure ESP toolchain is installed (setup-esp.sh)
-#   1. Claim a USB device from the pool (wait up to 120 s)
+#   1. Claim a USB device from the pool (wait up to 240 s)
 #   2. Build firmware locally (unless --skip-build)
 #   3. Flash the device and capture serial output
 #   4. Wait for the Wi-Fi IP address in serial output (30 s timeout)
@@ -64,31 +64,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# ── 1. Claim device (wait up to 120 s) ──────────────────────────────────
+# ── 1. Claim device (wait up to 240 s) ──────────────────────────────────
 echo "── Claiming USB device ──"
-CLAIM_TIMEOUT=120
-CLAIM_INTERVAL=5
-WAITED=0
-
-while true; do
-    if . "$SCRIPT_DIR/claim-device.sh" 2>/dev/null; then
-        break
-    fi
-
-    if [[ $WAITED -ge $CLAIM_TIMEOUT ]]; then
-        echo "ERROR: timed out waiting for a device after ${CLAIM_TIMEOUT}s" >&2
-        exit 1
-    fi
-
-    echo "All devices busy (waited ${WAITED}s/${CLAIM_TIMEOUT}s). Current holders:" >&2
-    local_lock_dir="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)/.device-locks"
-    for lf in "$local_lock_dir"/*.lock; do
-        [[ -f "$lf" ]] || continue
-        echo "  $(basename "$lf"): $(tr '\n' ' ' < "$lf" 2>/dev/null)" >&2
-    done
-    sleep "$CLAIM_INTERVAL"
-    WAITED=$((WAITED + CLAIM_INTERVAL))
-done
+# shellcheck disable=SC2034  # consumed by sourced _claim-wait.sh
+CLAIM_TIMEOUT=240
+. "$SCRIPT_DIR/_claim-wait.sh"
 echo "Claimed $DEVICE_PORT (fd: $DEVICE_FD)"
 
 # ── 2. Build firmware ───────────────────────────────────────────────────

@@ -9,10 +9,15 @@
 #   CLAIM_DEVICES="/dev/ttyUSB0" . ./scripts/claim-device.sh     # pin device
 #
 # On success sets: DEVICE_PORT, DEVICE_FD
-# On failure returns 1 (all devices locked).
+# On failure returns 1 (all devices locked) or 2 (no devices found).
 #
 # Release with:  . ./scripts/release-device.sh
 # Or just exit — the kernel releases flocks when the process dies.
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    echo "ERROR: this script must be sourced, not executed" >&2
+    exit 1
+fi
 
 _claim_device() {
     # Always resolve to the main repo root, even from a git worktree.
@@ -24,7 +29,7 @@ _claim_device() {
     # Build device list
     local devices=()
     if [[ -n "${CLAIM_DEVICES:-}" ]]; then
-        # User-specified device(s), space-separated
+        # shellcheck disable=SC2086  # intentional word splitting on space-separated paths
         local d
         for d in $CLAIM_DEVICES; do
             if [[ -e "$d" ]]; then
@@ -42,7 +47,7 @@ _claim_device() {
 
     if [[ ${#devices[@]} -eq 0 ]]; then
         echo "ERROR: no USB serial devices found" >&2
-        return 1
+        return 2
     fi
 
     # Fisher-Yates shuffle (no shuf dependency)
@@ -60,8 +65,12 @@ _claim_device() {
         base="${dev##*/}"
         lockfile="$lock_dir/${base}.lock"
 
-        # Allocate a dynamic fd
-        exec {fd}>"$lockfile"
+        # Open read-write without truncating — prevents destroying debug info
+        # written by the current lock holder when a competitor opens the file.
+        exec {fd}<>"$lockfile" || {
+            echo "ERROR: cannot open $lockfile" >&2
+            return 1
+        }
 
         if flock -n "$fd"; then
             # Got the lock — write debug info (best-effort)
@@ -92,5 +101,6 @@ EOF
     return 1
 }
 
-_claim_device
+_claim_device; __claim_rc=$?
 unset -f _claim_device
+return $__claim_rc

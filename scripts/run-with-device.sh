@@ -27,26 +27,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Claim with wait loop (120 s)
+# Claim device (wait up to 120 s)
+# shellcheck disable=SC2034  # consumed by sourced _claim-wait.sh
 CLAIM_TIMEOUT=120
-CLAIM_INTERVAL=5
-WAITED=0
-
-while true; do
-    if . "$SCRIPT_DIR/claim-device.sh" 2>/dev/null; then
-        break
-    fi
-
-    if [[ $WAITED -ge $CLAIM_TIMEOUT ]]; then
-        echo "ERROR: timed out waiting for a device after ${CLAIM_TIMEOUT}s" >&2
-        exit 1
-    fi
-
-    echo "All devices busy (waited ${WAITED}s/${CLAIM_TIMEOUT}s), retrying..." >&2
-    sleep "$CLAIM_INTERVAL"
-    WAITED=$((WAITED + CLAIM_INTERVAL))
-done
-
+. "$SCRIPT_DIR/_claim-wait.sh"
 echo "Claimed $DEVICE_PORT" >&2
 export DEVICE_PORT
 

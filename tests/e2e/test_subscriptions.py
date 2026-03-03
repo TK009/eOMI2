@@ -11,10 +11,15 @@ import time
 import pytest
 import websockets
 
-from helpers import omi_cancel, omi_delete, omi_poll, omi_subscribe, omi_write
-
-
-WS_TIMEOUT = 10  # seconds
+from helpers import (
+    WS_TIMEOUT,
+    omi_cancel,
+    omi_delete,
+    omi_poll,
+    omi_subscribe,
+    omi_write,
+    run_async,
+)
 
 
 @pytest.fixture(autouse=True, scope="module")
@@ -25,16 +30,6 @@ def cleanup_test_paths(base_url, token):
         omi_delete(base_url, "/Test", token=token)
     except Exception:
         pass
-
-
-@pytest.fixture(scope="session")
-def ws_url(device_ip):
-    return f"ws://{device_ip}/omi/ws"
-
-
-def _run(coro):
-    """Run an async coroutine synchronously."""
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 # ── Test 1: Poll subscription lifecycle ──────────────────────────────────
@@ -73,12 +68,12 @@ def test_poll_sub_lifecycle(base_url, token):
 
 def test_poll_sub_expiry(base_url, token):
     """Poll sub with short TTL expires; polling afterwards returns 404."""
-    data = omi_subscribe(base_url, "/Test/SubExp", interval=-1, ttl=5, token=token)
+    data = omi_subscribe(base_url, "/Test/SubExp", interval=-1, ttl=3, token=token)
     assert data["response"]["status"] == 200
     rid = data["response"]["rid"]
 
-    # Wait for expiry
-    time.sleep(6)
+    # Wait for expiry (3x the TTL for generous margin)
+    time.sleep(9)
 
     # Poll expired subscription — expect 404
     poll = omi_poll(base_url, rid, token=token, check=False)
@@ -130,22 +125,24 @@ def test_event_sub_on_ws(base_url, token, ws_url):
                 cancel_resp = json.loads(cancel_raw)
                 assert cancel_resp["response"]["status"] == 200
 
-    _run(_test())
+    run_async(_test())
 
 
 # ── Test 4: Interval subscription ────────────────────────────────────────
 
 
-def test_interval_sub(ws_url):
+def test_interval_sub(base_url, token, ws_url):
     """Interval subscription delivers at least one push within the interval."""
+    # Write an initial value so the path exists for interval reads
+    omi_write(base_url, "/Test/SubInterval", "initial", token=token)
 
     async def _test():
         async with websockets.connect(ws_url, open_timeout=WS_TIMEOUT) as ws:
-            # Subscribe to sensor with 10 s interval
+            # Subscribe with 3 s interval
             sub_msg = json.dumps({
                 "omi": "1.0",
                 "ttl": 30,
-                "read": {"path": "/Dht11/Temperature", "interval": 10},
+                "read": {"path": "/Test/SubInterval", "interval": 3},
             })
             await ws.send(sub_msg)
             resp_raw = await asyncio.wait_for(ws.recv(), timeout=WS_TIMEOUT)
@@ -154,8 +151,8 @@ def test_interval_sub(ws_url):
             rid = resp["response"]["rid"]
 
             try:
-                # Wait up to 15 s for at least one push
-                push_raw = await asyncio.wait_for(ws.recv(), timeout=15)
+                # Wait for at least one push (generous timeout)
+                push_raw = await asyncio.wait_for(ws.recv(), timeout=WS_TIMEOUT)
                 push = json.loads(push_raw)
                 assert push["response"]["status"] == 200
                 assert push["response"]["rid"] == rid
@@ -169,7 +166,7 @@ def test_interval_sub(ws_url):
                 await ws.send(cancel_msg)
                 await asyncio.wait_for(ws.recv(), timeout=WS_TIMEOUT)
 
-    _run(_test())
+    run_async(_test())
 
 
 # ── Test 5: Cancel subscription ──────────────────────────────────────────

@@ -1,8 +1,16 @@
 """OMI helper functions for e2e tests."""
 
+import asyncio
+
 import requests
 
 REQUEST_TIMEOUT = 10  # seconds – avoid hanging on unresponsive devices
+WS_TIMEOUT = 10  # seconds – WebSocket operation timeout
+
+
+def run_async(coro):
+    """Run an async coroutine synchronously."""
+    return asyncio.run(coro)
 
 
 def _omi_post(base_url, payload, token=None, timeout=None, check=True):

@@ -130,10 +130,14 @@ fn check_auth(
     check_bearer_auth(req.header("authorization"), token)
 }
 
-/// Stack size for HTTP server threads.  Must accommodate serde's recursive
-/// deserialization of nested Object trees (bounded by `MAX_OBJECT_DEPTH`
-/// in `omi::write`).
-const HTTP_THREAD_STACK: usize = 8192;
+/// Stack size for the HTTP server task.
+///
+/// Must accommodate serde_json's recursive-descent parser when handling
+/// deeply nested tree-write payloads.  For `MAX_OBJECT_DEPTH = 8` the
+/// JSON nesting reaches ~18 levels; at ~500-600 bytes per Xtensa frame
+/// that needs ~11 KB for recursion plus ~3 KB for HTTP/handler overhead.
+/// 16 KB provides comfortable headroom.
+const HTTP_THREAD_STACK: usize = 16384;
 
 pub fn start_http_server(
     nvs_dirty: Arc<AtomicBool>,

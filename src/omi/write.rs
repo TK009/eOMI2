@@ -8,6 +8,7 @@ use super::error::ParseError;
 
 /// Maximum nesting depth for Object trees in write operations.
 /// Limits recursive serde deserialization to stay within the HTTP thread stack.
+/// NOTE: If you change this value, also update `HTTP_THREAD_STACK` in `server.rs`.
 const MAX_OBJECT_DEPTH: usize = 8;
 
 #[derive(Debug, Clone, PartialEq)]

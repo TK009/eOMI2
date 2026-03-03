@@ -21,7 +21,7 @@ def omi_read(base_url, path="/", token=None):
 
 def omi_write(base_url, path, value, token=None):
     """Send an OMI write request and return the parsed JSON response."""
-    payload = {"omi": "1.0", "ttl": 0, "write": {"path": path, "value": value}}
+    payload = {"omi": "1.0", "ttl": 0, "write": {"path": path, "v": value}}
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     resp = requests.post(
         f"{base_url}/omi",

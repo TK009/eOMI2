@@ -295,7 +295,7 @@ pub fn start_http_server(
         let (resp, deliveries) = {
             let mut eng = lock_or_recover(&eng, "engine");
             let resp = eng.process(msg, now_secs(), None);
-            let deliveries = if is_write { eng.take_deliveries() } else { Vec::new() };
+            let deliveries = eng.take_deliveries();
             (resp, deliveries)
         };
         if is_write && is_successful_write_response(&resp) {

@@ -272,9 +272,7 @@ impl Engine {
             Err(e) => return Self::tree_error_to_response(e),
         }
 
-        let notify_value = v.clone();
-        #[cfg(feature = "scripting")]
-        let write_value = v.clone();
+        let saved_value = v.clone();
         match self.tree.write_value(path, v, t) {
             Ok(created) => {
                 if created {
@@ -282,11 +280,11 @@ impl Engine {
                 }
 
                 #[cfg(feature = "scripting")]
-                self.run_onwrite_script(path, &write_value, t, depth, now);
+                self.run_onwrite_script(path, &saved_value, t, depth, now);
 
                 let deliveries = self.subscriptions.notify_event(
                     path,
-                    &[crate::odf::Value::new(notify_value, t)],
+                    &[crate::odf::Value::new(saved_value, t)],
                     now,
                 );
                 self.pending_deliveries.extend(deliveries);
@@ -335,9 +333,7 @@ impl Engine {
             Err(e) => return Self::tree_error_to_item_status(&path, e),
         }
 
-        let notify_value = v.clone();
-        #[cfg(feature = "scripting")]
-        let write_value = v.clone();
+        let saved_value = v.clone();
         match self.tree.write_value(&path, v, t) {
             Ok(created) => {
                 if created {
@@ -345,11 +341,11 @@ impl Engine {
                 }
 
                 #[cfg(feature = "scripting")]
-                self.run_onwrite_script(&path, &write_value, t, 0, now);
+                self.run_onwrite_script(&path, &saved_value, t, 0, now);
 
                 let deliveries = self.subscriptions.notify_event(
                     &path,
-                    &[crate::odf::Value::new(notify_value, t)],
+                    &[crate::odf::Value::new(saved_value, t)],
                     now,
                 );
                 self.pending_deliveries.extend(deliveries);

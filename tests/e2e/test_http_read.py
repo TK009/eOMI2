@@ -7,6 +7,7 @@ the JSON response body at ``response.status``.
 
 import time
 
+import pytest
 import requests
 
 from helpers import omi_read
@@ -22,6 +23,23 @@ def _status(data):
 def _result(data):
     """Extract the result payload from a response envelope."""
     return data["response"]["result"]
+
+
+_BACKOFF = [1, 2, 3, 5, 5, 5]
+
+
+def _wait_for_values(base_url, path="/System/FreeHeap", delays=_BACKOFF):
+    """Poll *path* with increasing back-off until at least one value exists."""
+    for delay in delays:
+        time.sleep(delay)
+        try:
+            data = omi_read(base_url, path=path)
+        except requests.RequestException:
+            continue
+        if _status(data) == 200 and len(_result(data)["values"]) >= 1:
+            return _result(data)["values"]
+    total = sum(delays)
+    pytest.fail(f"No values at {path} after {total} s")
 
 
 # -- tests -------------------------------------------------------------------
@@ -45,29 +63,17 @@ def test_read_sensor_object(base_url):
 
 def test_read_sensor_value(base_url):
     """Reading a sensor value path returns at least one measurement."""
-    # The main loop writes free-heap every 5 s; poll a few times to allow
-    # for the first iteration after boot.
-    values = []
-    for _ in range(6):
-        time.sleep(5)
-        try:
-            data = omi_read(base_url, path="/System/FreeHeap")
-        except requests.RequestException:
-            continue
-        assert _status(data) == 200
-        result = _result(data)
-        values = result["values"]
-        if len(values) >= 1:
-            break
-    assert len(values) >= 1, "Sensor produced no readings after 30 s"
+    values = _wait_for_values(base_url)
+    assert len(values) >= 1
 
 
 def test_read_newest(base_url):
-    """Reading with newest=1 returns at most one value."""
+    """Reading with newest=1 returns exactly one value."""
+    _wait_for_values(base_url)
     data = omi_read(base_url, path="/System/FreeHeap", newest=1)
     assert _status(data) == 200
     result = _result(data)
-    assert len(result["values"]) <= 1
+    assert len(result["values"]) == 1
 
 
 def test_read_nonexistent(base_url):

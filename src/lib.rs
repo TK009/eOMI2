@@ -19,8 +19,6 @@ pub mod http;
 #[cfg(feature = "scripting")]
 pub mod scripting;
 #[cfg(feature = "esp")]
-pub mod dht11;
-#[cfg(feature = "esp")]
 pub mod nvs;
 #[cfg(feature = "esp")]
 pub mod server;

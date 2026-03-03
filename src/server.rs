@@ -20,8 +20,9 @@ use esp_idf_svc::{
 use log::{info, warn};
 
 use crate::http::{
-    build_read_op, is_mutating_operation, is_successful_write_response, now_secs,
-    omi_uri_to_odf_path, render_landing_page, uri_path, uri_query, BodyError, OmiReadParams,
+    build_read_op, check_bearer_auth, is_mutating_operation, is_successful_write_response,
+    now_secs, omi_uri_to_odf_path, render_landing_page, uri_path, uri_query,
+    validate_content_length, BodyError, OmiReadParams,
 };
 use crate::omi::{Engine, OmiMessage, OmiResponse, Operation};
 use crate::pages::{PageError, PageStore};
@@ -46,16 +47,7 @@ fn read_body(
     req: &mut esp_idf_svc::http::server::Request<&mut esp_idf_svc::http::server::EspHttpConnection>,
     max: usize,
 ) -> std::result::Result<Vec<u8>, BodyError> {
-    let content_len = req
-        .header("content-length")
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(0);
-    if content_len == 0 {
-        return Err(BodyError::Empty);
-    }
-    if content_len > max {
-        return Err(BodyError::TooLarge);
-    }
+    let content_len = validate_content_length(req.header("content-length"), max)?;
     let mut buf = vec![0u8; content_len];
     if let Err(e) = req.read_exact(&mut buf) {
         warn!("Body read failed: {}", e);
@@ -128,27 +120,12 @@ fn send_ws_omi(
     Ok(())
 }
 
-/// Constant-time byte comparison to prevent timing side-channel attacks.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
-
 /// Check if the request carries a valid `Authorization: Bearer <token>` header.
 fn check_auth(
     req: &esp_idf_svc::http::server::Request<&mut esp_idf_svc::http::server::EspHttpConnection>,
     token: &str,
 ) -> bool {
-    req.header("authorization")
-        .and_then(|h| h.strip_prefix("Bearer "))
-        .map(|t| constant_time_eq(t.as_bytes(), token.as_bytes()))
-        .unwrap_or(false)
+    check_bearer_auth(req.header("authorization"), token)
 }
 
 /// Stack size for HTTP server threads.  Must accommodate serde's recursive

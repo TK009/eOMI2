@@ -6,18 +6,13 @@
 use esp_idf_svc::nvs::{EspNvs, EspNvsPartition, NvsDefault};
 use log::{info, warn};
 
-use crate::device::SavedItem;
+use crate::device::{deserialize_saved_items, serialize_saved_items, SavedItem};
 
 /// NVS namespace for the OMI object tree.
 const NVS_NAMESPACE: &str = "omi_tree";
 
 /// NVS key for the writable items blob.
 const NVS_KEY: &str = "writable";
-
-/// Maximum blob size to write to NVS. Leave headroom below the NVS page
-/// size (~4096 bytes) to avoid write failures that could leave NVS in an
-/// inconsistent state.
-const MAX_BLOB_SIZE: usize = 4000;
 
 /// Open the NVS namespace for OMI tree persistence.
 pub fn open_nvs(partition: EspNvsPartition<NvsDefault>) -> Result<EspNvs<NvsDefault>, esp_idf_svc::sys::EspError> {
@@ -42,7 +37,7 @@ pub fn load_writable_items(nvs: &EspNvs<NvsDefault>) -> Vec<SavedItem> {
     let mut buf = vec![0u8; len];
     match nvs.get_blob(NVS_KEY, &mut buf) {
         Ok(Some(data)) => {
-            match serde_json::from_slice::<Vec<SavedItem>>(data) {
+            match deserialize_saved_items(data) {
                 Ok(items) => {
                     info!("NVS: loaded {} writable items", items.len());
                     items
@@ -66,27 +61,19 @@ pub fn load_writable_items(nvs: &EspNvs<NvsDefault>) -> Vec<SavedItem> {
 
 /// Save writable items to NVS as a JSON blob.
 pub fn save_writable_items(nvs: &mut EspNvs<NvsDefault>, items: &[SavedItem]) {
-    match serde_json::to_vec(items) {
-        Ok(blob) => {
-            if blob.len() > MAX_BLOB_SIZE {
-                warn!(
-                    "NVS: writable items blob is {} bytes (>{} limit), skipping write to avoid NVS corruption",
-                    blob.len(),
-                    MAX_BLOB_SIZE,
-                );
-                return;
-            }
-            match nvs.set_blob(NVS_KEY, &blob) {
-                Ok(()) => {
-                    info!("NVS: saved {} writable items ({} bytes)", items.len(), blob.len());
-                }
-                Err(e) => {
-                    warn!("NVS: failed to save writable items: {}", e);
-                }
-            }
+    let blob = match serialize_saved_items(items) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!("NVS: skipping write: {:?}", e);
+            return;
+        }
+    };
+    match nvs.set_blob(NVS_KEY, &blob) {
+        Ok(()) => {
+            info!("NVS: saved {} writable items ({} bytes)", items.len(), blob.len());
         }
         Err(e) => {
-            warn!("NVS: failed to serialize writable items: {}", e);
+            warn!("NVS: failed to save writable items: {}", e);
         }
     }
 }

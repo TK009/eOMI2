@@ -24,11 +24,52 @@ pub fn now_secs() -> f64 {
 // ---------------------------------------------------------------------------
 
 /// Body reading error — empty, too large, or I/O failure.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum BodyError {
     Empty,
     TooLarge,
     ReadFailed,
+}
+
+// ---------------------------------------------------------------------------
+// Auth / body validation helpers (platform-independent)
+// ---------------------------------------------------------------------------
+
+/// Constant-time byte comparison to prevent timing side-channel attacks.
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Check a raw `Authorization` header value for a valid `Bearer <token>`.
+pub fn check_bearer_auth(header_value: Option<&str>, token: &str) -> bool {
+    header_value
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .map(|t| constant_time_eq(t.as_bytes(), token.as_bytes()))
+        .unwrap_or(false)
+}
+
+/// Validate a Content-Length header value against a maximum size.
+///
+/// Returns the parsed length on success, or a `BodyError` if the header is
+/// missing/zero (`Empty`), exceeds `max` (`TooLarge`), or is unparseable (`Empty`).
+pub fn validate_content_length(content_length: Option<&str>, max: usize) -> Result<usize, BodyError> {
+    let len = content_length
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    if len == 0 {
+        return Err(BodyError::Empty);
+    }
+    if len > max {
+        return Err(BodyError::TooLarge);
+    }
+    Ok(len)
 }
 
 /// Check if an OMI response indicates a successful write (status 200 or 201).
@@ -518,5 +559,103 @@ mod tests {
             }
             _ => panic!("expected Read"),
         }
+    }
+
+    // --- constant_time_eq ---
+
+    #[test]
+    fn constant_time_eq_equal() {
+        assert!(constant_time_eq(b"secret", b"secret"));
+    }
+
+    #[test]
+    fn constant_time_eq_different() {
+        assert!(!constant_time_eq(b"secret", b"secreT"));
+    }
+
+    #[test]
+    fn constant_time_eq_different_lengths() {
+        assert!(!constant_time_eq(b"short", b"longer"));
+    }
+
+    #[test]
+    fn constant_time_eq_empty() {
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn constant_time_eq_one_empty() {
+        assert!(!constant_time_eq(b"", b"x"));
+        assert!(!constant_time_eq(b"x", b""));
+    }
+
+    // --- check_bearer_auth ---
+
+    #[test]
+    fn bearer_auth_valid() {
+        assert!(check_bearer_auth(Some("Bearer my-token"), "my-token"));
+    }
+
+    #[test]
+    fn bearer_auth_wrong_token() {
+        assert!(!check_bearer_auth(Some("Bearer wrong"), "my-token"));
+    }
+
+    #[test]
+    fn bearer_auth_missing_header() {
+        assert!(!check_bearer_auth(None, "my-token"));
+    }
+
+    #[test]
+    fn bearer_auth_wrong_prefix() {
+        assert!(!check_bearer_auth(Some("Basic my-token"), "my-token"));
+    }
+
+    #[test]
+    fn bearer_auth_empty_token() {
+        assert!(check_bearer_auth(Some("Bearer "), ""));
+    }
+
+    #[test]
+    fn bearer_auth_case_sensitive_prefix() {
+        // "bearer " (lowercase) should not match — RFC 6750 uses "Bearer"
+        assert!(!check_bearer_auth(Some("bearer my-token"), "my-token"));
+    }
+
+    // --- validate_content_length ---
+
+    #[test]
+    fn validate_cl_valid() {
+        assert_eq!(validate_content_length(Some("100"), 1024), Ok(100));
+    }
+
+    #[test]
+    fn validate_cl_at_max() {
+        assert_eq!(validate_content_length(Some("1024"), 1024), Ok(1024));
+    }
+
+    #[test]
+    fn validate_cl_exceeds_max() {
+        assert_eq!(validate_content_length(Some("1025"), 1024), Err(BodyError::TooLarge));
+    }
+
+    #[test]
+    fn validate_cl_zero() {
+        assert_eq!(validate_content_length(Some("0"), 1024), Err(BodyError::Empty));
+    }
+
+    #[test]
+    fn validate_cl_missing() {
+        assert_eq!(validate_content_length(None, 1024), Err(BodyError::Empty));
+    }
+
+    #[test]
+    fn validate_cl_unparseable() {
+        assert_eq!(validate_content_length(Some("abc"), 1024), Err(BodyError::Empty));
+    }
+
+    #[test]
+    fn validate_cl_negative() {
+        assert_eq!(validate_content_length(Some("-1"), 1024), Err(BodyError::Empty));
     }
 }

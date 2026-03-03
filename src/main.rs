@@ -39,9 +39,15 @@ fn main() -> Result<()> {
     }
 
     // Quiet noisy ESP-IDF C components
-    let _ = esp_idf_svc::log::set_target_level("wifi", log::LevelFilter::Warn);
-    let _ = esp_idf_svc::log::set_target_level("httpd", log::LevelFilter::Warn);
-    let _ = esp_idf_svc::log::set_target_level("httpd_ws", log::LevelFilter::Warn);
+    if let Err(e) = esp_idf_svc::log::set_target_level("wifi", log::LevelFilter::Warn) {
+        warn!("Failed to set log level for 'wifi': {}", e);
+    }
+    if let Err(e) = esp_idf_svc::log::set_target_level("httpd", log::LevelFilter::Warn) {
+        warn!("Failed to set log level for 'httpd': {}", e);
+    }
+    if let Err(e) = esp_idf_svc::log::set_target_level("httpd_ws", log::LevelFilter::Warn) {
+        warn!("Failed to set log level for 'httpd_ws': {}", e);
+    }
 
     info!("\n\n========================================");
     info!("  Reconfigurable Device v0.1.0");
@@ -108,9 +114,17 @@ fn main() -> Result<()> {
                 warn!("Wi-Fi disconnected, reconnecting... attempt={}", wifi_retry_count + 1);
             }
             wifi_retry_count = wifi_retry_count.saturating_add(1);
-            connect_wifi(&mut wifi)?;
-            info!("Wi-Fi reconnected after {} attempts", wifi_retry_count);
-            wifi_retry_count = 0;
+            match connect_wifi(&mut wifi) {
+                Ok(()) => {
+                    let label = if wifi_retry_count == 1 { "attempt" } else { "attempts" };
+                    info!("Wi-Fi reconnected after {} {}", wifi_retry_count, label);
+                    wifi_retry_count = 0;
+                }
+                Err(e) => {
+                    warn!("Wi-Fi reconnect failed: {}", e);
+                    continue;
+                }
+            }
         }
 
         // Record free heap memory

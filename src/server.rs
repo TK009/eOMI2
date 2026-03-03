@@ -153,7 +153,8 @@ fn check_auth(
 
 /// Stack size for HTTP server threads.  Must accommodate serde's recursive
 /// deserialization of nested Object trees (bounded by `MAX_OBJECT_DEPTH`
-/// in `omi::write`).
+/// in `omi::write`).  InfoItem metadata fields (e.g. `onwrite` scripts)
+/// add extra recursion depth on top of pure object nesting.
 const HTTP_THREAD_STACK: usize = 12288;
 
 pub fn start_http_server(

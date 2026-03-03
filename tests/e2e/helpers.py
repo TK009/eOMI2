@@ -8,6 +8,7 @@ import pytest
 import requests
 
 REQUEST_TIMEOUT = 10  # seconds – avoid hanging on unresponsive devices
+TREE_WRITE_TIMEOUT = 30  # seconds – tree writes with metadata need more time
 WS_TIMEOUT = 10  # seconds – WebSocket operation timeout
 
 

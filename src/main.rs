@@ -17,6 +17,7 @@ use reconfigurable_device::omi::subscriptions::DeliveryTarget;
 use reconfigurable_device::omi::SessionId;
 use reconfigurable_device::http::now_secs;
 use reconfigurable_device::server::start_http_server;
+use reconfigurable_device::sync_util::lock_or_recover;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -63,7 +64,7 @@ fn main() -> Result<()> {
 
     // Populate sensor tree
     {
-        let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());
+        let mut eng = lock_or_recover(&engine, "engine");
         eng.tree.write_tree("/", build_sensor_tree()).unwrap();
         info!("Sensor tree populated: System/FreeHeap");
     }
@@ -73,7 +74,7 @@ fn main() -> Result<()> {
     {
         let saved_items = load_writable_items(&nvs_store);
         if !saved_items.is_empty() {
-            let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());
+            let mut eng = lock_or_recover(&engine, "engine");
             for saved in &saved_items {
                 if let Err(e) = eng.tree.write_value(&saved.path, saved.v.clone(), saved.t) {
                     warn!("Failed to restore {}: {}", saved.path, e);
@@ -98,7 +99,7 @@ fn main() -> Result<()> {
             // SAFETY: esp-idf C function with no preconditions; always safe to call.
             let heap_free = unsafe { esp_idf_svc::sys::esp_get_free_heap_size() };
             let now = now_secs();
-            let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());
+            let mut eng = lock_or_recover(&engine, "engine");
             if let Err(e) = eng.tree.write_value(PATH_FREE_HEAP, OmiValue::Number(heap_free as f64), Some(now)) {
                 warn!("Failed to write {}: {}", PATH_FREE_HEAP, e);
             }
@@ -106,12 +107,12 @@ fn main() -> Result<()> {
 
         // Tick subscriptions
         let deliveries = {
-            let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());
+            let mut eng = lock_or_recover(&engine, "engine");
             eng.tick(now_secs())
         };
         let mut failed_sessions: Vec<SessionId> = Vec::new();
         {
-            let mut senders = ws_senders.lock().unwrap_or_else(|e| e.into_inner());
+            let mut senders = lock_or_recover(&ws_senders, "ws_senders");
             for d in &deliveries {
                 match &d.target {
                     DeliveryTarget::WebSocket(session) => {
@@ -148,7 +149,7 @@ fn main() -> Result<()> {
         }
         // Cancel subscriptions for failed sessions outside the senders lock
         if !failed_sessions.is_empty() {
-            let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());
+            let mut eng = lock_or_recover(&engine, "engine");
             for sid in &failed_sessions {
                 eng.subscriptions().cancel_by_ws_session(*sid);
             }
@@ -156,7 +157,7 @@ fn main() -> Result<()> {
 
         // Persist writable items to NVS if dirty
         if nvs_dirty.swap(false, Ordering::Acquire) {
-            let eng = engine.lock().unwrap_or_else(|e| e.into_inner());
+            let eng = lock_or_recover(&engine, "engine");
             let items = collect_writable_items(&eng.tree);
             save_writable_items(&mut nvs_store, &items);
         }

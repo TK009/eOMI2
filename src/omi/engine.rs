@@ -448,6 +448,7 @@ impl Engine {
                 }
             };
             let mut res: ffi::mjs_val_t = 0;
+            ffi::mjs_reset_ops_count(mjs);
             let err = ffi::mjs_exec(mjs, c_src.as_ptr(), &mut res);
             if err != ffi::MJS_OK {
                 let err_ptr = ffi::mjs_strerror(mjs, err);

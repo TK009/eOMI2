@@ -25,6 +25,7 @@ use crate::http::{
 };
 use crate::omi::{Engine, OmiMessage, OmiResponse, Operation};
 use crate::pages::{PageError, PageStore};
+use crate::sync_util::lock_or_recover;
 
 /// Monotonic counter for assigning unique WebSocket session IDs.
 /// Avoids fd-reuse races where a new connection gets the same fd as a
@@ -179,7 +180,7 @@ pub fn start_http_server(
     // GET / — landing page with list of stored pages
     let s = store.clone();
     server.fn_handler::<Infallible, _>("/", Method::Get, move |req| {
-        let store = s.lock().unwrap_or_else(|e| e.into_inner());
+        let store = lock_or_recover(&s, "page_store");
         let html = render_landing_page(&store);
         let headers = [("Content-Type", "text/html")];
         send_response(req, 200, "OK", &headers, html.as_bytes());
@@ -253,7 +254,7 @@ pub fn start_http_server(
 
         let is_write = matches!(&msg.operation, Operation::Write(_));
         let resp = {
-            let mut eng = eng.lock().unwrap_or_else(|e| e.into_inner());
+            let mut eng = lock_or_recover(&eng, "engine");
             eng.process(msg, now_secs(), None)
         };
         if is_write && is_successful_write_response(&resp) {
@@ -271,7 +272,7 @@ pub fn start_http_server(
             .unwrap_or_default();
         let read_msg = build_read_op("/", &params);
         let resp = {
-            let mut eng = eng.lock().unwrap_or_else(|e| e.into_inner());
+            let mut eng = lock_or_recover(&eng, "engine");
             eng.process(read_msg, now_secs(), None)
         };
         send_omi_json(req, &resp);
@@ -293,20 +294,20 @@ pub fn start_http_server(
             let fd = conn.session();
             let session_id = NEXT_WS_SESSION.fetch_add(1, Ordering::Relaxed);
             info!("WS connect: fd={}, session={}", fd, session_id);
-            fd_map.lock().unwrap_or_else(|e| e.into_inner()).insert(fd, session_id);
-            ws.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id, sender);
+            lock_or_recover(&fd_map, "fd_to_session").insert(fd, session_id);
+            lock_or_recover(&ws, "ws_senders").insert(session_id, sender);
             return Ok(());
         }
         if conn.is_closed() {
             let fd = conn.session();
-            let session_id = fd_map.lock().unwrap_or_else(|e| e.into_inner()).remove(&fd);
+            let session_id = lock_or_recover(&fd_map, "fd_to_session").remove(&fd);
             if let Some(sid) = session_id {
                 info!("WS close: fd={}, session={}", fd, sid);
                 // Lock Engine before WsSenders (documented ordering invariant)
-                eng.lock().unwrap_or_else(|e| e.into_inner())
+                lock_or_recover(&eng, "engine")
                     .subscriptions()
                     .cancel_by_ws_session(sid);
-                ws.lock().unwrap_or_else(|e| e.into_inner()).remove(&sid);
+                lock_or_recover(&ws, "ws_senders").remove(&sid);
             }
             return Ok(());
         }
@@ -371,10 +372,10 @@ pub fn start_http_server(
             return Ok(());
         }
         let fd = conn.session();
-        let session_id = fd_map.lock().unwrap_or_else(|e| e.into_inner())
+        let session_id = lock_or_recover(&fd_map, "fd_to_session")
             .get(&fd).copied().unwrap_or(0);
         let resp = {
-            let mut eng = eng.lock().unwrap_or_else(|e| e.into_inner());
+            let mut eng = lock_or_recover(&eng, "engine");
             eng.process(msg, now_secs(), Some(session_id))
         };
         match serde_json::to_string(&resp) {
@@ -398,7 +399,7 @@ pub fn start_http_server(
             .unwrap_or_default();
         let read_msg = build_read_op(odf_path, &params);
         let resp = {
-            let mut eng = eng.lock().unwrap_or_else(|e| e.into_inner());
+            let mut eng = lock_or_recover(&eng, "engine");
             eng.process(read_msg, now_secs(), None)
         };
         send_omi_json(req, &resp);
@@ -427,7 +428,7 @@ pub fn start_http_server(
                 return Ok(());
             }
         };
-        let mut store = s.lock().unwrap_or_else(|e| e.into_inner());
+        let mut store = lock_or_recover(&s, "page_store");
         match store.store(&path, &html) {
             Ok(()) => {
                 info!("PATCH {} — stored {} bytes", path, html.len());
@@ -460,7 +461,7 @@ pub fn start_http_server(
             return Ok(());
         }
         let path = uri_path(req.uri()).to_string();
-        let mut store = s.lock().unwrap_or_else(|e| e.into_inner());
+        let mut store = lock_or_recover(&s, "page_store");
         match store.remove(&path) {
             Ok(()) => {
                 info!("DELETE {} — removed", path);
@@ -480,7 +481,7 @@ pub fn start_http_server(
     let s = store.clone();
     server.fn_handler::<Infallible, _>("/*", Method::Get, move |req| {
         let path = uri_path(req.uri()).to_string();
-        let store = s.lock().unwrap_or_else(|e| e.into_inner());
+        let store = lock_or_recover(&s, "page_store");
         match store.get(&path) {
             Some(html) => {
                 let headers = [("Content-Type", "text/html")];

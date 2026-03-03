@@ -18,6 +18,8 @@ pub mod psram;
 pub mod http;
 #[cfg(feature = "scripting")]
 pub mod scripting;
+#[cfg(feature = "std")]
+pub mod sync_util;
 #[cfg(feature = "esp")]
 pub mod nvs;
 #[cfg(feature = "esp")]

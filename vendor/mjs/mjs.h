@@ -124,6 +124,7 @@ typedef enum mjs_err {
   MJS_NOT_IMPLEMENTED_ERROR,
   MJS_FILE_READ_ERROR,
   MJS_BAD_ARGS_ERROR,
+  MJS_OP_LIMIT_ERROR,
 
   MJS_ERRS_CNT
 } mjs_err_t;
@@ -258,6 +259,9 @@ const char *mjs_strerror(struct mjs *mjs, enum mjs_err err);
  * effect.
  */
 void mjs_set_generate_jsc(struct mjs *mjs, int generate_jsc);
+
+void mjs_set_max_ops(struct mjs *mjs, unsigned long max_ops);
+void mjs_reset_ops_count(struct mjs *mjs);
 
 /*
  * When invoked from a cfunction, returns number of arguments passed to the
@@ -441,6 +445,7 @@ typedef enum mjs_err {
   MJS_NOT_IMPLEMENTED_ERROR,
   MJS_FILE_READ_ERROR,
   MJS_BAD_ARGS_ERROR,
+  MJS_OP_LIMIT_ERROR,
 
   MJS_ERRS_CNT
 } mjs_err_t;
@@ -575,6 +580,9 @@ const char *mjs_strerror(struct mjs *mjs, enum mjs_err err);
  * effect.
  */
 void mjs_set_generate_jsc(struct mjs *mjs, int generate_jsc);
+
+void mjs_set_max_ops(struct mjs *mjs, unsigned long max_ops);
+void mjs_reset_ops_count(struct mjs *mjs);
 
 /*
  * When invoked from a cfunction, returns number of arguments passed to the

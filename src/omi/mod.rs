@@ -20,7 +20,7 @@ use self::cancel::CancelOp;
 use self::response::ResponseBody;
 pub use self::write::WriteItem;
 pub use self::response::{StatusCode, ResponseResult, ItemStatus, OmiResponse};
-pub use self::subscriptions::Delivery;
+pub use self::subscriptions::{Delivery, SessionId};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OmiMessage {

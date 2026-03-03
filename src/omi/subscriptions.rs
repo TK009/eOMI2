@@ -4,6 +4,9 @@ use std::collections::VecDeque;
 use crate::odf::{OmiValue, Value};
 use crate::psram::PsramBox;
 
+/// Monotonic WebSocket session identifier (not the raw fd).
+pub type SessionId = u32;
+
 /// How a subscription delivers results.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DeliveryTarget {
@@ -11,8 +14,8 @@ pub enum DeliveryTarget {
     Callback(String),
     /// Client polls via rid.
     Poll,
-    /// Push via WebSocket. The u64 is a monotonic session ID (not the raw fd).
-    WebSocket(u64),
+    /// Push via WebSocket. The value is a monotonic session ID (not the raw fd).
+    WebSocket(SessionId),
 }
 
 /// A single subscription entry.
@@ -264,7 +267,7 @@ impl SubscriptionRegistry {
 
     /// Cancel all subscriptions bound to a WebSocket session.
     /// Returns the number of subscriptions removed.
-    pub fn cancel_by_ws_session(&mut self, session: u64) -> usize {
+    pub fn cancel_by_ws_session(&mut self, session: SessionId) -> usize {
         let rids: Vec<String> = self
             .subscriptions
             .iter()

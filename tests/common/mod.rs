@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use reconfigurable_device::device;
-use reconfigurable_device::omi::{Engine, ItemStatus, OmiMessage, Operation, ResponseResult};
+use reconfigurable_device::omi::{Engine, ItemStatus, OmiMessage, Operation, ResponseResult, SessionId};
 
 /// Build an engine pre-populated with the real DHT11 sensor tree.
 pub fn engine_with_sensor_tree() -> Engine {
@@ -13,7 +13,7 @@ pub fn engine_with_sensor_tree() -> Engine {
 }
 
 /// Parse a JSON request, feed it to the engine at a given time/session, return response.
-pub fn process_at(engine: &mut Engine, json: &str, now: f64, ws_session: Option<u64>) -> OmiMessage {
+pub fn process_at(engine: &mut Engine, json: &str, now: f64, ws_session: Option<SessionId>) -> OmiMessage {
     let msg = OmiMessage::parse(json).expect("request JSON should parse");
     engine.process(msg, now, ws_session)
 }

@@ -5,7 +5,7 @@ use esp_idf_svc::{
     nvs::EspDefaultNvsPartition,
     wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi},
 };
-use log::{info, warn};
+use log::{debug, info, warn};
 use reconfigurable_device::device::{
     build_sensor_tree, collect_writable_items, PATH_FREE_HEAP,
 };
@@ -26,6 +26,24 @@ fn main() -> Result<()> {
     // Link ESP-IDF patches and initialize logging
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
+
+    // Set log level: Debug for dev builds, Info for release
+    if cfg!(debug_assertions) {
+        log::set_max_level(log::LevelFilter::Debug);
+    } else {
+        log::set_max_level(log::LevelFilter::Info);
+    }
+
+    // Quiet noisy ESP-IDF C components
+    if let Err(e) = esp_idf_svc::log::set_target_level("wifi", log::LevelFilter::Warn) {
+        warn!("Failed to set log level for 'wifi': {}", e);
+    }
+    if let Err(e) = esp_idf_svc::log::set_target_level("httpd", log::LevelFilter::Warn) {
+        warn!("Failed to set log level for 'httpd': {}", e);
+    }
+    if let Err(e) = esp_idf_svc::log::set_target_level("httpd_ws", log::LevelFilter::Warn) {
+        warn!("Failed to set log level for 'httpd_ws': {}", e);
+    }
 
     info!("\n\n========================================");
     info!("  Reconfigurable Device v0.1.0");
@@ -83,11 +101,26 @@ fn main() -> Result<()> {
     }
 
     // Main loop — read sensor, tick subscriptions, persist, keep Wi-Fi alive
+    let mut wifi_retry_count: u32 = 0;
     loop {
         std::thread::sleep(std::time::Duration::from_secs(5));
         if !wifi.is_connected()? {
-            warn!("Wi-Fi disconnected, reconnecting...");
-            connect_wifi(&mut wifi)?;
+            // Log on first attempt and every 12th (~once/min at 5s interval)
+            if wifi_retry_count % 12 == 0 {
+                warn!("Wi-Fi disconnected, reconnecting... attempt={}", wifi_retry_count + 1);
+            }
+            wifi_retry_count = wifi_retry_count.saturating_add(1);
+            match connect_wifi(&mut wifi) {
+                Ok(()) => {
+                    let label = if wifi_retry_count == 1 { "attempt" } else { "attempts" };
+                    info!("Wi-Fi reconnected after {} {}", wifi_retry_count, label);
+                    wifi_retry_count = 0;
+                }
+                Err(e) => {
+                    warn!("Wi-Fi reconnect failed: {}", e);
+                    continue;
+                }
+            }
         }
 
         // Record free heap memory

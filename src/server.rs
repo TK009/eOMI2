@@ -16,7 +16,7 @@ use esp_idf_svc::{
     io::{Read, Write},
     ws::FrameType,
 };
-use log::{info, warn};
+use log::{debug, info, warn};
 
 use crate::http::{
     build_read_op, check_bearer_auth, is_mutating_operation, is_successful_write_response,
@@ -192,7 +192,8 @@ pub fn dispatch_deliveries(
 /// deeply nested tree-write payloads.  For `MAX_OBJECT_DEPTH = 8` the
 /// JSON nesting reaches ~18 levels; at ~500-600 bytes per Xtensa frame
 /// that needs ~11 KB for recursion plus ~3 KB for HTTP/handler overhead.
-/// 16 KB provides comfortable headroom.
+/// InfoItem metadata fields (e.g. `onwrite` scripts) add extra recursion
+/// depth on top of pure object nesting.  16 KB provides comfortable headroom.
 const HTTP_THREAD_STACK: usize = 16384;
 
 pub fn start_http_server(
@@ -241,8 +242,8 @@ pub fn start_http_server(
                 return Ok(());
             }
         };
-        info!("POST / received {} bytes", body.len());
-        info!("Payload:\n{}", body);
+        info!("POST / len={}", body.len());
+        debug!("Payload:\n{}", body);
 
         // TODO: parse HTML, extract <script> tags, execute JS
         send_response(req, 200, "OK", &[], b"OK: payload received");
@@ -267,6 +268,7 @@ pub fn start_http_server(
             Ok(b) => b,
             Err(e) => { send_body_error(req, e, "Body exceeds 16KB limit"); return Ok(()); }
         };
+        debug!("POST /omi len={}", buf.len());
 
         let text = match std::str::from_utf8(&buf) {
             Ok(s) => s,
@@ -416,6 +418,7 @@ pub fn start_http_server(
         let fd = conn.session();
         let session_id = lock_or_recover(&fd_map, "fd_to_session")
             .get(&fd).copied().unwrap_or(0);
+        debug!("WS recv session={} len={}", session_id, len);
         let resp = {
             let mut eng = lock_or_recover(&eng, "engine");
             eng.process(msg, now_secs(), Some(session_id))
@@ -423,7 +426,7 @@ pub fn start_http_server(
         match serde_json::to_string(&resp) {
             Ok(json) => conn.send(FrameType::Text(false), json.as_bytes())?,
             Err(e) => {
-                warn!("WS response serialization failed: {}", e);
+                warn!("WS response serialization failed session={}: {}", session_id, e);
                 send_ws_omi(conn, OmiResponse::error("Serialization error"))?;
             }
         }
@@ -473,7 +476,7 @@ pub fn start_http_server(
         let mut store = lock_or_recover(&s, "page_store");
         match store.store(&path, &html) {
             Ok(()) => {
-                info!("PATCH {} — stored {} bytes", path, html.len());
+                info!("PATCH path={} bytes={}", path, html.len());
                 send_response(req, 200, "OK", &[], b"OK: page stored");
             }
             Err(PageError::ReservedPath) => {

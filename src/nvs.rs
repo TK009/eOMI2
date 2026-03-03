@@ -63,6 +63,14 @@ pub fn load_writable_items(nvs: &EspNvs<NvsDefault>) -> Vec<SavedItem> {
 pub fn save_writable_items(nvs: &mut EspNvs<NvsDefault>, items: &[SavedItem]) {
     let blob = match serialize_saved_items(items) {
         Ok(b) => b,
+        Err(crate::device::NvsSaveError::TooLarge(size)) => {
+            warn!(
+                "NVS: writable items blob is {} bytes (>{} limit), skipping write",
+                size,
+                crate::device::MAX_NVS_BLOB,
+            );
+            return;
+        }
         Err(e) => {
             warn!("NVS: skipping write: {:?}", e);
             return;

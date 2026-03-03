@@ -98,7 +98,8 @@ pub const MAX_NVS_BLOB: usize = 4000;
 #[cfg(feature = "json")]
 #[derive(Debug, PartialEq)]
 pub enum NvsSaveError {
-    TooLarge,
+    /// Serialized blob exceeds [`MAX_NVS_BLOB`]. Contains the actual size.
+    TooLarge(usize),
     SerializeFailed,
 }
 
@@ -107,7 +108,7 @@ pub enum NvsSaveError {
 pub fn serialize_saved_items(items: &[SavedItem]) -> Result<Vec<u8>, NvsSaveError> {
     let blob = serde_json::to_vec(items).map_err(|_| NvsSaveError::SerializeFailed)?;
     if blob.len() > MAX_NVS_BLOB {
-        return Err(NvsSaveError::TooLarge);
+        return Err(NvsSaveError::TooLarge(blob.len()));
     }
     Ok(blob)
 }
@@ -249,7 +250,11 @@ mod tests {
                 t: Some(i as f64),
             })
             .collect();
-        assert_eq!(serialize_saved_items(&items), Err(NvsSaveError::TooLarge));
+        let err = serialize_saved_items(&items).unwrap_err();
+        match err {
+            NvsSaveError::TooLarge(size) => assert!(size > MAX_NVS_BLOB),
+            other => panic!("expected TooLarge, got {:?}", other),
+        }
     }
 
     #[test]

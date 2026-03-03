@@ -83,6 +83,7 @@ fn send_body_error(
     match err {
         BodyError::Empty => send_response(req, 400, "Bad Request", &[], b"Empty body"),
         BodyError::TooLarge => send_response(req, 413, "Payload Too Large", &[], max_desc.as_bytes()),
+        BodyError::Invalid => send_response(req, 400, "Bad Request", &[], b"Invalid Content-Length"),
         BodyError::ReadFailed => send_response(req, 500, "Internal Server Error", &[], b"Failed to read body"),
     }
 }

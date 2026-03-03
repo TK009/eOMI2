@@ -95,6 +95,7 @@ fn main() -> Result<()> {
 
         // Record free heap memory
         {
+            // SAFETY: esp-idf C function with no preconditions; always safe to call.
             let heap_free = unsafe { esp_idf_svc::sys::esp_get_free_heap_size() };
             let now = now_secs();
             let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());

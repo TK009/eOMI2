@@ -8,21 +8,9 @@ also registered.  This catches handler-registration-order regressions
 import asyncio
 import json
 
-import pytest
 import websockets
 
-
-WS_TIMEOUT = 10  # seconds
-
-
-@pytest.fixture(scope="session")
-def ws_url(device_ip):
-    return f"ws://{device_ip}/omi/ws"
-
-
-def _run(coro):
-    """Run an async coroutine synchronously."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+from helpers import WS_TIMEOUT, run_async
 
 
 async def _ws_read(ws_url, path="/"):
@@ -36,14 +24,14 @@ async def _ws_read(ws_url, path="/"):
 
 def test_ws_endpoint_reachable(ws_url):
     """WebSocket upgrade to /omi/ws succeeds (not claimed by GET /omi/*)."""
-    data = _run(_ws_read(ws_url))
+    data = run_async(_ws_read(ws_url))
     assert data["omi"] == "1.0"
     assert data["response"]["status"] == 200
 
 
 def test_ws_read_root(ws_url):
     """OMI read over WS returns the object tree root."""
-    data = _run(_ws_read(ws_url, path="/"))
+    data = run_async(_ws_read(ws_url, path="/"))
     result = data["response"]["result"]
     assert isinstance(result, (list, dict))
     assert len(result) > 0, "OMI root tree is empty"

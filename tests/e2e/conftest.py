@@ -37,3 +37,9 @@ def token():
 def auth_headers(token):
     """Authorization header dict."""
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture(scope="session")
+def ws_url(device_ip):
+    """WebSocket URL for OMI."""
+    return f"ws://{device_ip}/omi/ws"

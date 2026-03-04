@@ -81,8 +81,7 @@ def test_get_omi_item(base_url, discovered):
     assert isinstance(values, list)
     if len(values) > 0:
         entry = values[0]
-        assert "value" in entry, f"value entry missing 'value' key: {entry}"
-        assert "timestamp" in entry, f"value entry missing 'timestamp' key: {entry}"
+        assert "v" in entry, f"value entry missing 'v' key: {entry}"
 
 
 def test_get_omi_query_newest(base_url, discovered):

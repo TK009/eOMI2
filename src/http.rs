@@ -143,15 +143,16 @@ pub struct OmiReadParams {
 
 impl OmiReadParams {
     /// Parse from a raw query string. Invalid values are silently ignored.
+    /// Negative values for newest/oldest/depth are clamped to 0.
     pub fn from_query(query: &str) -> Self {
         let mut p = Self::default();
         for (k, v) in parse_query_params(query) {
             match k {
-                "newest" => p.newest = v.parse().ok(),
-                "oldest" => p.oldest = v.parse().ok(),
+                "newest" => p.newest = v.parse::<i64>().ok().map(|n| n.max(0) as u64),
+                "oldest" => p.oldest = v.parse::<i64>().ok().map(|n| n.max(0) as u64),
                 "begin" => p.begin = v.parse().ok(),
                 "end" => p.end = v.parse().ok(),
-                "depth" => p.depth = v.parse().ok(),
+                "depth" => p.depth = v.parse::<i64>().ok().map(|n| n.max(0) as u64),
                 _ => {}
             }
         }
@@ -350,7 +351,14 @@ mod tests {
     fn omi_read_params_invalid_ignored() {
         let p = OmiReadParams::from_query("newest=abc&depth=-1");
         assert_eq!(p.newest, None);
-        assert_eq!(p.depth, None); // u64 can't be negative
+        assert_eq!(p.depth, Some(0)); // negative clamped to 0
+    }
+
+    #[test]
+    fn omi_read_params_negative_clamped() {
+        let p = OmiReadParams::from_query("newest=-1&oldest=-5");
+        assert_eq!(p.newest, Some(0));
+        assert_eq!(p.oldest, Some(0));
     }
 
     #[test]

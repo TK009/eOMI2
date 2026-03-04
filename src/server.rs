@@ -34,6 +34,11 @@ use crate::sync_util::lock_or_recover;
 static NEXT_WS_SESSION: AtomicU32 = AtomicU32::new(1);
 
 pub type WsSenders = Arc<Mutex<BTreeMap<SessionId, EspHttpWsDetachedSender>>>;
+/// Write-triggered event deliveries queued by HTTP handlers for dispatch
+/// by the main loop. `httpd_ws_send_frame_async` must not be called from
+/// within the httpd task thread (where handlers run), so deliveries are
+/// buffered here and drained externally.
+pub type PendingDeliveries = Arc<Mutex<Vec<crate::omi::Delivery>>>;
 /// Maps raw fd → monotonic session ID so the WS handler can look up the
 /// session ID for an existing connection without allocating new IDs.
 ///
@@ -142,7 +147,7 @@ const HTTP_THREAD_STACK: usize = 16384;
 pub fn start_http_server(
     nvs_dirty: Arc<AtomicBool>,
     api_token: &'static str,
-) -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>, WsSenders)> {
+) -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>, WsSenders, PendingDeliveries)> {
     let config = HttpConfig {
         http_port: 80,
         uri_match_wildcard: true,
@@ -155,6 +160,7 @@ pub fn start_http_server(
     let engine = Arc::new(Mutex::new(Engine::new()));
     let ws_senders: WsSenders = Arc::new(Mutex::new(BTreeMap::new()));
     let fd_to_session: FdToSession = Arc::new(Mutex::new(BTreeMap::new()));
+    let pending_deliveries: PendingDeliveries = Arc::new(Mutex::new(Vec::new()));
 
     // Route registration order: exact before wildcard, WS before OMI wildcard,
     // OMI wildcard before page wildcard.
@@ -196,7 +202,7 @@ pub fn start_http_server(
     // POST /omi — OMI message endpoint
     let eng = engine.clone();
     let dirty = nvs_dirty.clone();
-    let ws = ws_senders.clone();
+    let pd = pending_deliveries.clone();
     server.fn_handler::<Infallible, _>("/omi", Method::Post, move |mut req| {
         // Content-Type check: reject non-JSON (allow missing/empty)
         if let Some(ct) = req.header("content-type") {
@@ -243,19 +249,12 @@ pub fn start_http_server(
         if is_write && is_successful_write_response(&resp) {
             dirty.store(true, Ordering::Release);
         }
-        // Dispatch event deliveries to WebSocket subscribers
+        // Buffer event deliveries for dispatch by the main loop.
+        // httpd_ws_send_frame_async must not be called from within an
+        // httpd handler (same task context), so we queue and let the
+        // main loop's external thread send them.
         if !deliveries.is_empty() {
-            let mut senders = lock_or_recover(&ws, "ws_senders");
-            for d in &deliveries {
-                if let crate::omi::subscriptions::DeliveryTarget::WebSocket(session) = &d.target {
-                    if let Some(sender) = senders.get_mut(session) {
-                        let sub_resp = OmiResponse::subscription_event(&d.rid, &d.path, &d.values);
-                        if let Ok(json) = serde_json::to_string(&sub_resp) {
-                            let _ = sender.send(FrameType::Text(false), json.as_bytes());
-                        }
-                    }
-                }
-            }
+            lock_or_recover(&pd, "pending_deliveries").extend(deliveries);
         }
         send_omi_json(req, &resp);
         Ok(())
@@ -491,5 +490,5 @@ pub fn start_http_server(
         Ok(())
     })?;
 
-    Ok((server, engine, ws_senders))
+    Ok((server, engine, ws_senders, pending_deliveries))
 }

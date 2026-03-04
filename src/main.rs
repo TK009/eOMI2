@@ -12,14 +12,14 @@ use reconfigurable_device::device::{
 };
 use reconfigurable_device::nvs::{load_writable_items, open_nvs, save_writable_items};
 use reconfigurable_device::odf::OmiValue;
-use reconfigurable_device::omi::OmiResponse;
+use reconfigurable_device::omi::{Delivery, Engine, OmiResponse};
 use reconfigurable_device::omi::subscriptions::DeliveryTarget;
 use reconfigurable_device::omi::SessionId;
 use reconfigurable_device::http::now_secs;
-use reconfigurable_device::server::start_http_server;
+use reconfigurable_device::server::{start_http_server, WsSenders};
 use reconfigurable_device::sync_util::lock_or_recover;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 const WIFI_SSID: &str = env!("WIFI_SSID");
 const WIFI_PASS: &str = env!("WIFI_PASS");
@@ -59,7 +59,7 @@ fn main() -> Result<()> {
     let nvs_dirty = Arc::new(AtomicBool::new(false));
 
     // Start HTTP server
-    let (_server, engine, ws_senders) = start_http_server(nvs_dirty.clone(), API_TOKEN)?;
+    let (_server, engine, ws_senders, pending_deliveries) = start_http_server(nvs_dirty.clone(), API_TOKEN)?;
     info!("HTTP server listening on port 80");
 
     // Populate sensor tree
@@ -86,9 +86,32 @@ fn main() -> Result<()> {
         }
     }
 
-    // Main loop — read sensor, tick subscriptions, persist, keep Wi-Fi alive
+    // Main loop — read sensor, tick subscriptions, persist, keep Wi-Fi alive.
+    // Sleep is split into short intervals so write-triggered event deliveries
+    // (queued by HTTP handlers) are dispatched with low latency.
+    const TICK_INTERVAL_MS: u64 = 5000;
+    const POLL_INTERVAL_MS: u64 = 100;
+    let mut elapsed_ms: u64 = TICK_INTERVAL_MS; // start with immediate first tick
     loop {
-        std::thread::sleep(std::time::Duration::from_secs(5));
+        std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
+        elapsed_ms += POLL_INTERVAL_MS;
+
+        // Drain write-triggered event deliveries queued by HTTP handlers.
+        // Dispatched every POLL_INTERVAL_MS for low-latency event delivery.
+        {
+            let event_deliveries: Vec<_> = lock_or_recover(&pending_deliveries, "pending_deliveries")
+                .drain(..)
+                .collect();
+            if !event_deliveries.is_empty() {
+                dispatch_deliveries(&event_deliveries, &ws_senders, &engine);
+            }
+        }
+
+        if elapsed_ms < TICK_INTERVAL_MS {
+            continue;
+        }
+        elapsed_ms = 0;
+
         if !wifi.is_connected()? {
             warn!("Wi-Fi disconnected, reconnecting...");
             connect_wifi(&mut wifi)?;
@@ -105,54 +128,13 @@ fn main() -> Result<()> {
             }
         }
 
-        // Tick subscriptions
-        let deliveries = {
+        // Tick interval subscriptions and dispatch
+        let tick_deliveries = {
             let mut eng = lock_or_recover(&engine, "engine");
             eng.tick(now_secs())
         };
-        let mut failed_sessions: Vec<SessionId> = Vec::new();
-        {
-            let mut senders = lock_or_recover(&ws_senders, "ws_senders");
-            for d in &deliveries {
-                match &d.target {
-                    DeliveryTarget::WebSocket(session) => {
-                        if let Some(sender) = senders.get_mut(session) {
-                            let resp = OmiResponse::subscription_event(&d.rid, &d.path, &d.values);
-                            match serde_json::to_string(&resp) {
-                                Ok(json) => {
-                                    if sender.send(FrameType::Text(false), json.as_bytes()).is_err() {
-                                        info!("WS send failed for session {}, removing", session);
-                                        if !failed_sessions.contains(session) {
-                                            failed_sessions.push(*session);
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!("WS delivery serialization failed: {}", e);
-                                }
-                            }
-                        }
-                    }
-                    DeliveryTarget::Callback(_url) => {
-                        info!(
-                            "Sub delivery: rid={}, path={}, {} values (callback not yet implemented)",
-                            d.rid, d.path, d.values.len()
-                        );
-                    }
-                    DeliveryTarget::Poll => {} // handled via poll()
-                }
-            }
-            // Remove failed senders
-            for sid in &failed_sessions {
-                senders.remove(sid);
-            }
-        }
-        // Cancel subscriptions for failed sessions outside the senders lock
-        if !failed_sessions.is_empty() {
-            let mut eng = lock_or_recover(&engine, "engine");
-            for sid in &failed_sessions {
-                eng.subscriptions().cancel_by_ws_session(*sid);
-            }
+        if !tick_deliveries.is_empty() {
+            dispatch_deliveries(&tick_deliveries, &ws_senders, &engine);
         }
 
         // Persist writable items to NVS if dirty
@@ -160,6 +142,57 @@ fn main() -> Result<()> {
             let eng = lock_or_recover(&engine, "engine");
             let items = collect_writable_items(&eng.tree);
             save_writable_items(&mut nvs_store, &items);
+        }
+    }
+}
+
+/// Dispatch subscription deliveries to WebSocket subscribers.
+/// Removes failed senders and cancels their subscriptions.
+fn dispatch_deliveries(
+    deliveries: &[Delivery],
+    ws_senders: &WsSenders,
+    engine: &Arc<Mutex<Engine>>,
+) {
+    let mut failed_sessions: Vec<SessionId> = Vec::new();
+    {
+        let mut senders = lock_or_recover(ws_senders, "ws_senders");
+        for d in deliveries {
+            match &d.target {
+                DeliveryTarget::WebSocket(session) => {
+                    if let Some(sender) = senders.get_mut(session) {
+                        let resp = OmiResponse::subscription_event(&d.rid, &d.path, &d.values);
+                        match serde_json::to_string(&resp) {
+                            Ok(json) => {
+                                if sender.send(FrameType::Text(false), json.as_bytes()).is_err() {
+                                    info!("WS send failed for session {}, removing", session);
+                                    if !failed_sessions.contains(session) {
+                                        failed_sessions.push(*session);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!("WS delivery serialization failed: {}", e);
+                            }
+                        }
+                    }
+                }
+                DeliveryTarget::Callback(_url) => {
+                    info!(
+                        "Sub delivery: rid={}, path={}, {} values (callback not yet implemented)",
+                        d.rid, d.path, d.values.len()
+                    );
+                }
+                DeliveryTarget::Poll => {} // handled via poll()
+            }
+        }
+        for sid in &failed_sessions {
+            senders.remove(sid);
+        }
+    }
+    if !failed_sessions.is_empty() {
+        let mut eng = lock_or_recover(engine, "engine");
+        for sid in &failed_sessions {
+            eng.subscriptions().cancel_by_ws_session(*sid);
         }
     }
 }

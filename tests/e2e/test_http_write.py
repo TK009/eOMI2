@@ -66,7 +66,7 @@ def test_write_overwrite(base_url, token):
 
 def test_write_sensor_rejected(base_url, token):
     """Writing to a hardware-owned sensor path is rejected (403)."""
-    data = omi_write(base_url, "/Dht11/Temperature", 99, token=token)
+    data = omi_write(base_url, "/System/FreeHeap", 99, token=token)
     assert data["response"]["status"] == 403
     assert data["response"].get("desc")
 

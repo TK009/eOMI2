@@ -5,7 +5,7 @@ use super::cancel::CancelOp;
 use super::delete::DeleteOp;
 use super::read::{ReadKind, ReadOp};
 use super::response::{ItemStatus, OmiResponse, ResponseBody, StatusCode};
-use super::subscriptions::{DeliveryTarget, PollResult, SessionId, SubscriptionRegistry};
+use super::subscriptions::{Delivery, DeliveryTarget, PollResult, SessionId, SubscriptionRegistry};
 use super::write::{WriteItem, WriteOp};
 use super::{OmiMessage, Operation};
 
@@ -45,15 +45,15 @@ impl Engine {
     /// `ws_session` is the monotonic WebSocket session ID when the request
     /// arrives over a WebSocket connection. Subscriptions created without a
     /// callback will use WebSocket delivery instead of poll when this is `Some`.
-    pub fn process(&mut self, msg: OmiMessage, now: f64, ws_session: Option<SessionId>) -> OmiMessage {
+    pub fn process(&mut self, msg: OmiMessage, now: f64, ws_session: Option<SessionId>) -> (OmiMessage, Vec<Delivery>) {
         let ttl = msg.ttl;
         match msg.operation {
-            Operation::Read(op) => self.process_read(op, ttl, now, ws_session),
-            Operation::Write(op) => self.process_write(op),
-            Operation::Delete(op) => self.process_delete(op),
-            Operation::Cancel(op) => self.process_cancel(op),
+            Operation::Read(op) => (self.process_read(op, ttl, now, ws_session), Vec::new()),
+            Operation::Write(op) => self.process_write(op, now),
+            Operation::Delete(op) => (self.process_delete(op), Vec::new()),
+            Operation::Cancel(op) => (self.process_cancel(op), Vec::new()),
             Operation::Response(_) => {
-                OmiResponse::bad_request("Engine processes requests, not responses")
+                (OmiResponse::bad_request("Engine processes requests, not responses"), Vec::new())
             }
         }
     }
@@ -173,9 +173,6 @@ impl Engine {
             return OmiResponse::bad_request("Subscription requires ttl > 0");
         }
         let path = op.path.as_deref().unwrap_or("/");
-        if let Err(e) = self.tree.resolve(path) {
-            return Self::tree_error_to_response(e);
-        }
         let interval = op.interval.unwrap_or(-1.0);
         let target = if let Some(url) = op.callback {
             DeliveryTarget::Callback(url)
@@ -215,19 +212,19 @@ impl Engine {
 
     // --- Write ---
 
-    fn process_write(&mut self, op: WriteOp) -> OmiMessage {
+    fn process_write(&mut self, op: WriteOp, now: f64) -> (OmiMessage, Vec<Delivery>) {
         match op {
-            WriteOp::Single { path, v, t } => self.write_single(&path, v, t),
-            WriteOp::Batch { items } => self.process_write_batch(items),
+            WriteOp::Single { path, v, t } => self.write_single(&path, v, t, now),
+            WriteOp::Batch { items } => self.process_write_batch(items, now),
             WriteOp::Tree { path, objects } => match self.tree.write_tree(&path, objects) {
-                Ok(()) => OmiResponse::ok(serde_json::json!(null)),
-                Err(e) => Self::tree_error_to_response(e),
+                Ok(()) => (OmiResponse::ok(serde_json::json!(null)), Vec::new()),
+                Err(e) => (Self::tree_error_to_response(e), Vec::new()),
             },
         }
     }
 
-    fn write_single(&mut self, path: &str, v: OmiValue, t: Option<f64>) -> OmiMessage {
-        self.write_single_inner(path, v, t, 0)
+    fn write_single(&mut self, path: &str, v: OmiValue, t: Option<f64>, now: f64) -> (OmiMessage, Vec<Delivery>) {
+        self.write_single_inner(path, v, t, now, 0)
     }
 
     /// Inner write logic with depth tracking for script cascading.
@@ -239,26 +236,27 @@ impl Engine {
         path: &str,
         v: OmiValue,
         t: Option<f64>,
+        now: f64,
         #[cfg_attr(not(feature = "scripting"), allow(unused))]
         depth: u8,
-    ) -> OmiMessage {
+    ) -> (OmiMessage, Vec<Delivery>) {
         match self.tree.resolve(path) {
             Ok(PathTarget::InfoItem(item)) => {
                 if !item.is_writable() {
-                    return OmiResponse::forbidden(&format!(
+                    return (OmiResponse::forbidden(&format!(
                         "InfoItem at '{}' is not writable",
                         path
-                    ));
+                    )), Vec::new());
                 }
             }
             Ok(PathTarget::Object(_)) | Ok(PathTarget::Root(_)) => {
-                return OmiResponse::bad_request(&format!(
+                return (OmiResponse::bad_request(&format!(
                     "Cannot write value to object path '{}'",
                     path
-                ));
+                )), Vec::new());
             }
             Err(TreeError::NotFound(_)) => {} // will auto-create
-            Err(e) => return Self::tree_error_to_response(e),
+            Err(e) => return (Self::tree_error_to_response(e), Vec::new()),
         }
 
         #[cfg(feature = "scripting")]
@@ -272,48 +270,61 @@ impl Engine {
                 #[cfg(feature = "scripting")]
                 self.run_onwrite_script(path, &write_value, t, depth);
 
-                if created {
+                // Notify event subscribers
+                let deliveries = match self.tree.resolve(path) {
+                    Ok(PathTarget::InfoItem(item)) => {
+                        let values = item.query_values(Some(1), None, None, None);
+                        self.subscriptions.notify_event(path, &values, now)
+                    }
+                    _ => Vec::new(),
+                };
+
+                let response = if created {
                     OmiResponse::created()
                 } else {
                     OmiResponse::ok(serde_json::json!(null))
-                }
+                };
+                (response, deliveries)
             }
-            Err(e) => Self::tree_error_to_response(e),
+            Err(e) => (Self::tree_error_to_response(e), Vec::new()),
         }
     }
 
-    fn process_write_batch(&mut self, items: Vec<WriteItem>) -> OmiMessage {
+    fn process_write_batch(&mut self, items: Vec<WriteItem>, now: f64) -> (OmiMessage, Vec<Delivery>) {
         let mut statuses = Vec::with_capacity(items.len());
+        let mut all_deliveries = Vec::new();
         for item in items {
-            statuses.push(self.write_batch_item(item));
+            let (status, deliveries) = self.write_batch_item(item, now);
+            statuses.push(status);
+            all_deliveries.extend(deliveries);
         }
-        OmiResponse::partial_batch(statuses)
+        (OmiResponse::partial_batch(statuses), all_deliveries)
     }
 
-    fn write_batch_item(&mut self, item: WriteItem) -> ItemStatus {
+    fn write_batch_item(&mut self, item: WriteItem, now: f64) -> (ItemStatus, Vec<Delivery>) {
         let WriteItem { path, v, t } = item;
 
         match self.tree.resolve(&path) {
             Ok(PathTarget::InfoItem(existing)) => {
                 if !existing.is_writable() {
                     let desc = format!("InfoItem at '{}' is not writable", path);
-                    return ItemStatus {
+                    return (ItemStatus {
                         path,
                         status: StatusCode::Forbidden.as_u16(),
                         desc: Some(desc),
-                    };
+                    }, Vec::new());
                 }
             }
             Ok(PathTarget::Object(_)) | Ok(PathTarget::Root(_)) => {
                 let desc = format!("Cannot write value to object path '{}'", path);
-                return ItemStatus {
+                return (ItemStatus {
                     path,
                     status: StatusCode::BadRequest.as_u16(),
                     desc: Some(desc),
-                };
+                }, Vec::new());
             }
             Err(TreeError::NotFound(_)) => {} // will auto-create
-            Err(e) => return Self::tree_error_to_item_status(&path, e),
+            Err(e) => return (Self::tree_error_to_item_status(&path, e), Vec::new()),
         }
 
         #[cfg(feature = "scripting")]
@@ -327,7 +338,16 @@ impl Engine {
                 #[cfg(feature = "scripting")]
                 self.run_onwrite_script(&path, &write_value, t, 0);
 
-                if created {
+                // Notify event subscribers
+                let deliveries = match self.tree.resolve(&path) {
+                    Ok(PathTarget::InfoItem(item)) => {
+                        let values = item.query_values(Some(1), None, None, None);
+                        self.subscriptions.notify_event(&path, &values, now)
+                    }
+                    _ => Vec::new(),
+                };
+
+                let status = if created {
                     ItemStatus {
                         path,
                         status: StatusCode::Created.as_u16(),
@@ -339,9 +359,10 @@ impl Engine {
                         status: StatusCode::Ok.as_u16(),
                         desc: None,
                     }
-                }
+                };
+                (status, deliveries)
             }
-            Err(e) => Self::tree_error_to_item_status(&path, e),
+            Err(e) => (Self::tree_error_to_item_status(&path, e), Vec::new()),
         }
     }
 
@@ -472,7 +493,7 @@ impl Engine {
         // Process collected writes — each may trigger further onwrite scripts
         // at depth + 1, using normal &mut self calls with no aliasing.
         for pw in pending_writes {
-            let _ = self.write_single_inner(&pw.path, pw.value, timestamp, depth + 1);
+            let _ = self.write_single_inner(&pw.path, pw.value, timestamp, timestamp.unwrap_or(0.0), depth + 1);
         }
 
         // Run GC at the top level after the entire cascade completes
@@ -638,15 +659,15 @@ mod tests {
         }
     }
 
-    fn status(msg: &OmiMessage) -> u16 {
-        match &msg.operation {
+    fn status(resp: &(OmiMessage, Vec<Delivery>)) -> u16 {
+        match &resp.0.operation {
             Operation::Response(body) => body.status,
             _ => panic!("expected Response"),
         }
     }
 
-    fn body(msg: &OmiMessage) -> &ResponseBody {
-        match &msg.operation {
+    fn body(resp: &(OmiMessage, Vec<Delivery>)) -> &ResponseBody {
+        match &resp.0.operation {
             Operation::Response(b) => b,
             _ => panic!("expected Response"),
         }

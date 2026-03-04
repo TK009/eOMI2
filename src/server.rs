@@ -196,6 +196,7 @@ pub fn start_http_server(
     // POST /omi — OMI message endpoint
     let eng = engine.clone();
     let dirty = nvs_dirty.clone();
+    let ws = ws_senders.clone();
     server.fn_handler::<Infallible, _>("/omi", Method::Post, move |mut req| {
         // Content-Type check: reject non-JSON (allow missing/empty)
         if let Some(ct) = req.header("content-type") {
@@ -235,12 +236,26 @@ pub fn start_http_server(
         }
 
         let is_write = matches!(&msg.operation, Operation::Write(_));
-        let resp = {
+        let (resp, deliveries) = {
             let mut eng = lock_or_recover(&eng, "engine");
             eng.process(msg, now_secs(), None)
         };
         if is_write && is_successful_write_response(&resp) {
             dirty.store(true, Ordering::Release);
+        }
+        // Dispatch event deliveries to WebSocket subscribers
+        if !deliveries.is_empty() {
+            let mut senders = lock_or_recover(&ws, "ws_senders");
+            for d in &deliveries {
+                if let crate::omi::subscriptions::DeliveryTarget::WebSocket(session) = &d.target {
+                    if let Some(sender) = senders.get_mut(session) {
+                        let sub_resp = OmiResponse::subscription_event(&d.rid, &d.path, &d.values);
+                        if let Ok(json) = serde_json::to_string(&sub_resp) {
+                            let _ = sender.send(FrameType::Text(false), json.as_bytes());
+                        }
+                    }
+                }
+            }
         }
         send_omi_json(req, &resp);
         Ok(())
@@ -253,7 +268,7 @@ pub fn start_http_server(
             .map(OmiReadParams::from_query)
             .unwrap_or_default();
         let read_msg = build_read_op("/", &params);
-        let resp = {
+        let (resp, _) = {
             let mut eng = lock_or_recover(&eng, "engine");
             eng.process(read_msg, now_secs(), None)
         };
@@ -356,7 +371,7 @@ pub fn start_http_server(
         let fd = conn.session();
         let session_id = lock_or_recover(&fd_map, "fd_to_session")
             .get(&fd).copied().unwrap_or(0);
-        let resp = {
+        let (resp, _) = {
             let mut eng = lock_or_recover(&eng, "engine");
             eng.process(msg, now_secs(), Some(session_id))
         };
@@ -380,7 +395,7 @@ pub fn start_http_server(
             .map(OmiReadParams::from_query)
             .unwrap_or_default();
         let read_msg = build_read_op(odf_path, &params);
-        let resp = {
+        let (resp, _) = {
             let mut eng = lock_or_recover(&eng, "engine");
             eng.process(read_msg, now_secs(), None)
         };

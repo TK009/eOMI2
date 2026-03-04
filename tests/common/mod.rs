@@ -15,6 +15,14 @@ pub fn engine_with_sensor_tree() -> Engine {
 /// Parse a JSON request, feed it to the engine at a given time/session, return response.
 pub fn process_at(engine: &mut Engine, json: &str, now: f64, ws_session: Option<SessionId>) -> OmiMessage {
     let msg = OmiMessage::parse(json).expect("request JSON should parse");
+    let (resp, _deliveries) = engine.process(msg, now, ws_session);
+    resp
+}
+
+/// Parse a JSON request, feed it to the engine at a given time/session,
+/// return both response and deliveries.
+pub fn process_at_with_deliveries(engine: &mut Engine, json: &str, now: f64, ws_session: Option<SessionId>) -> (OmiMessage, Vec<reconfigurable_device::omi::Delivery>) {
+    let msg = OmiMessage::parse(json).expect("request JSON should parse");
     engine.process(msg, now, ws_session)
 }
 

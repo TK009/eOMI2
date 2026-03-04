@@ -479,3 +479,68 @@ fn cancel_batch() {
     let resp = process_at(&mut e, &poll_json, BASE_TIME + 2.0, None);
     assert_eq!(response_status(&resp), 200, "surviving sub should be 200");
 }
+
+// ===========================================================================
+// 2.6  Write-triggered event delivery
+// ===========================================================================
+
+#[test]
+fn subscribe_nonexistent_path_then_write_triggers_event() {
+    let mut e = engine_with_sensor_tree();
+
+    // Subscribe to a path that doesn't exist yet (event sub with callback)
+    let resp = process_at(
+        &mut e,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Test/SubVal","interval":-1,"callback":"http://example.com/omi"}}"#,
+        BASE_TIME,
+        None,
+    );
+    assert_eq!(response_status(&resp), 200);
+    let rid = response_rid(&resp).to_string();
+
+    // Write to that path via the engine — should trigger event notification
+    let (write_resp, deliveries) = process_at_with_deliveries(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Test/SubVal","v":42}}"#,
+        BASE_TIME + 1.0,
+        None,
+    );
+    assert_eq!(response_status(&write_resp), 201);
+    assert_eq!(deliveries.len(), 1);
+    assert_eq!(deliveries[0].rid, rid);
+    assert_eq!(deliveries[0].path, "/Test/SubVal");
+}
+
+#[test]
+fn write_triggers_poll_sub_event() {
+    let mut e = engine_with_sensor_tree();
+
+    // Create poll event subscription (interval=-1, no callback → Poll target)
+    let resp = process_at(
+        &mut e,
+        r#"{"omi":"1.0","ttl":60,"read":{"path":"/Test/PollVal","interval":-1}}"#,
+        BASE_TIME,
+        None,
+    );
+    assert_eq!(response_status(&resp), 200);
+    let rid = response_rid(&resp).to_string();
+
+    // Write via engine — poll sub buffers internally (no deliveries returned)
+    let (write_resp, deliveries) = process_at_with_deliveries(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Test/PollVal","v":"hello"}}"#,
+        BASE_TIME + 1.0,
+        None,
+    );
+    assert_eq!(response_status(&write_resp), 201);
+    assert!(deliveries.is_empty(), "poll sub should not produce deliveries");
+
+    // Poll should now have the buffered value
+    let poll_json = format!(r#"{{"omi":"1.0","ttl":0,"read":{{"rid":"{}"}}}}"#, rid);
+    let resp = process_at(&mut e, &poll_json, BASE_TIME + 2.0, None);
+    assert_eq!(response_status(&resp), 200);
+    let result = extract_single_result(&resp);
+    let polled = result["values"].as_array().expect("expected values array");
+    assert_eq!(polled.len(), 1);
+    assert_eq!(polled[0]["v"], "hello");
+}

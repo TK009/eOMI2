@@ -432,7 +432,7 @@ fn subscribe_then_poll_interval() {
         rid
     );
     let msg = OmiMessage::parse(&poll_json).expect("poll JSON should parse");
-    let resp = e.process(msg, 6.0, None);
+    let (resp, _) = e.process(msg, 6.0, None);
     assert_eq!(response_status(&resp), 200);
     let result = extract_single_result(&resp);
     assert_eq!(result["path"], "/System/FreeHeap");
@@ -463,7 +463,7 @@ fn cancel_active_subscription() {
         rid
     );
     let msg = OmiMessage::parse(&poll_json).expect("poll JSON should parse");
-    let resp = e.process(msg, 1.0, None);
+    let (resp, _) = e.process(msg, 1.0, None);
     assert_eq!(response_status(&resp), 404);
 }
 

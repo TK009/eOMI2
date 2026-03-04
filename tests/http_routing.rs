@@ -29,7 +29,8 @@ fn get_omi(engine: &mut Engine, uri: &str) -> OmiMessage {
         None => OmiReadParams::default(),
     };
     let msg = build_read_op(odf_path, &params);
-    engine.process(msg, 0.0, None)
+    let (resp, _) = engine.process(msg, 0.0, None);
+    resp
 }
 
 // ===========================================================================

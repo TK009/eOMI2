@@ -18,7 +18,7 @@ import websockets
 from helpers import WS_TIMEOUT, run_async
 
 SUB_PUSH_TIMEOUT = 20  # seconds — wait for interval sub delivery (~2-4 ticks)
-SUB_PATH = "/Dht11/Temperature"  # coupled to device tree — update if sensors change
+SUB_PATH = "/System/FreeHeap"  # coupled to device tree — update if sensors change
 SUB_INTERVAL = 5  # seconds — matches main loop tick period
 SUB_TTL = 60
 

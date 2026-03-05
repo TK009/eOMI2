@@ -12,6 +12,7 @@ use reconfigurable_device::device::{
 use reconfigurable_device::nvs::{load_writable_items, open_nvs, save_writable_items};
 use reconfigurable_device::odf::OmiValue;
 use reconfigurable_device::http::now_secs;
+use reconfigurable_device::log_util::RateLimiter;
 use reconfigurable_device::server::{dispatch_deliveries, start_http_server};
 use reconfigurable_device::sync_util::lock_or_recover;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -119,6 +120,8 @@ fn main() -> Result<()> {
     const POLL_INTERVAL_MS: u64 = 100;
     let mut elapsed_ms: u64 = TICK_INTERVAL_MS; // start with immediate first tick
     let mut wifi_retry_count: u32 = 0;
+    let mut wifi_rl = RateLimiter::new();
+    let mut delivery_rl = RateLimiter::new();
     loop {
         std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
         elapsed_ms += POLL_INTERVAL_MS;
@@ -130,7 +133,7 @@ fn main() -> Result<()> {
                 .drain(..)
                 .collect();
             if !event_deliveries.is_empty() {
-                dispatch_deliveries(&event_deliveries, &ws_senders, &engine);
+                dispatch_deliveries(&event_deliveries, &ws_senders, &engine, &mut delivery_rl);
             }
         }
 
@@ -152,7 +155,10 @@ fn main() -> Result<()> {
                     wifi_retry_count = 0;
                 }
                 Err(e) => {
-                    warn!("Wi-Fi reconnect failed: {}", e);
+                    let msg = format!("Wi-Fi reconnect failed: {}", e);
+                    if wifi_rl.should_emit(&msg) {
+                        warn!("{}", msg);
+                    }
                     continue;
                 }
             }
@@ -175,7 +181,7 @@ fn main() -> Result<()> {
             eng.tick(now_secs())
         };
         if !tick_deliveries.is_empty() {
-            dispatch_deliveries(&tick_deliveries, &ws_senders, &engine);
+            dispatch_deliveries(&tick_deliveries, &ws_senders, &engine, &mut delivery_rl);
         }
 
         // Persist writable items to NVS if dirty

@@ -23,6 +23,7 @@ use crate::http::{
     now_secs, omi_uri_to_odf_path, render_landing_page, uri_path, uri_query,
     validate_content_length, BodyError, OmiReadParams,
 };
+use crate::log_util::RateLimiter;
 use crate::omi::{Engine, OmiMessage, OmiResponse, Operation, SessionId};
 use crate::omi::subscriptions::{Delivery, DeliveryTarget};
 use crate::pages::{PageError, PageStore};
@@ -143,6 +144,7 @@ pub fn dispatch_deliveries(
     deliveries: &[Delivery],
     ws_senders: &WsSenders,
     engine: &Arc<Mutex<Engine>>,
+    rate_limiter: &mut RateLimiter,
 ) {
     if deliveries.is_empty() {
         return;
@@ -171,10 +173,13 @@ pub fn dispatch_deliveries(
                     }
                 }
                 DeliveryTarget::Callback(_url) => {
-                    info!(
+                    let msg = format!(
                         "Sub delivery: rid={}, path={}, {} values (callback not yet implemented)",
                         d.rid, d.path, d.values.len()
                     );
+                    if rate_limiter.should_emit(&msg) {
+                        info!("{}", msg);
+                    }
                 }
                 DeliveryTarget::Poll => {} // handled via poll()
             }

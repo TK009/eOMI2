@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use log::warn;
 
+use crate::log_util::RateLimiter;
 use crate::odf::{Object, ObjectTree, PathTarget, PathTargetMut, TreeError, OmiValue};
 use super::cancel::CancelOp;
 use super::delete::DeleteOp;
@@ -22,6 +23,7 @@ pub struct Engine {
     pending_deliveries: Vec<Delivery>,
     #[cfg(feature = "scripting")]
     script_engine: Option<crate::scripting::ScriptEngine>,
+    script_rl: RateLimiter,
 }
 
 impl Engine {
@@ -34,6 +36,7 @@ impl Engine {
             script_engine: crate::scripting::ScriptEngine::new()
                 .map_err(|e| warn!("Script engine init failed: {}", e))
                 .ok(),
+            script_rl: RateLimiter::new(),
         }
     }
 
@@ -522,7 +525,10 @@ impl Engine {
                 } else {
                     std::ffi::CStr::from_ptr(err_ptr).to_str().unwrap_or("unknown error")
                 };
-                warn!("onwrite script error at '{}': {}", path, msg);
+                let log_msg = format!("onwrite script error at '{}': {}", path, msg);
+                if self.script_rl.should_emit(&log_msg) {
+                    warn!("{}", log_msg);
+                }
             }
 
             // Clear context to prevent stale use

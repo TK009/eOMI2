@@ -20,6 +20,8 @@ pub mod http;
 pub mod scripting;
 #[cfg(feature = "std")]
 pub mod sync_util;
+#[cfg(feature = "std")]
+pub mod log_util;
 #[cfg(feature = "esp")]
 pub mod nvs;
 #[cfg(feature = "esp")]

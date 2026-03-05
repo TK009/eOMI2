@@ -170,11 +170,16 @@ pub fn dispatch_deliveries(
                         }
                     }
                 }
-                DeliveryTarget::Callback(_url) => {
-                    info!(
-                        "Sub delivery: rid={}, path={}, {} values (callback not yet implemented)",
-                        d.rid, d.path, d.values.len()
-                    );
+                DeliveryTarget::Callback(url) => {
+                    let resp = OmiResponse::subscription_event(&d.rid, &d.path, &d.values);
+                    match serde_json::to_string(&resp) {
+                        Ok(json) => {
+                            crate::callback::deliver_callback(url, json.as_bytes(), &d.rid);
+                        }
+                        Err(e) => {
+                            warn!("Callback delivery serialization failed: {}", e);
+                        }
+                    }
                 }
                 DeliveryTarget::Poll => {} // handled via poll()
             }

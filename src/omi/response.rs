@@ -442,6 +442,32 @@ mod tests {
         }
 
         #[test]
+        fn subscription_event_format() {
+            use crate::odf::OmiValue;
+            let values = vec![
+                Value::new(OmiValue::Number(22.5), None),
+                Value::new(OmiValue::Number(60.0), Some(1000.0)),
+            ];
+            let msg = OmiResponse::subscription_event("sub-1", "/Device/Sensor", &values);
+            let json = serde_json::to_value(&msg).unwrap();
+
+            assert_eq!(json["omi"], "1.0");
+            assert_eq!(json["ttl"], 0);
+            assert_eq!(json["response"]["status"], 200);
+            assert_eq!(json["response"]["rid"], "sub-1");
+            assert!(json["response"]["desc"].is_null());
+
+            let result = &json["response"]["result"];
+            assert_eq!(result["path"], "/Device/Sensor");
+            let vals = result["values"].as_array().unwrap();
+            assert_eq!(vals.len(), 2);
+            assert_eq!(vals[0]["v"], 22.5);
+            assert!(vals[0]["t"].is_null());
+            assert_eq!(vals[1]["v"], 60.0);
+            assert_eq!(vals[1]["t"], 1000.0);
+        }
+
+        #[test]
         fn response_body_from_value() {
             let v = serde_json::json!({
                 "status": 200,

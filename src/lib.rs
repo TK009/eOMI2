@@ -23,4 +23,6 @@ pub mod sync_util;
 #[cfg(feature = "esp")]
 pub mod nvs;
 #[cfg(feature = "esp")]
+pub mod callback;
+#[cfg(feature = "esp")]
 pub mod server;

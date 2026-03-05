@@ -165,7 +165,7 @@ pub fn dispatch_deliveries(
                                 }
                             }
                             Err(e) => {
-                                warn!("WS delivery serialization failed: {}", e);
+                                warn!("WS delivery serialization failed session={}: {}", session, e);
                             }
                         }
                     }

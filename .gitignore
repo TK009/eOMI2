@@ -12,3 +12,8 @@ tests/e2e/.venv/
 /fuzz/corpus/
 /fuzz/Cargo.lock
 /fuzz/target/
+
+# Gas Town (added by gt)
+.runtime/
+.logs/
+.beads/

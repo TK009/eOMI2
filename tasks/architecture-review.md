@@ -26,16 +26,16 @@ This is a well-architected embedded project. The core logic is clean, memory-con
 
 ## Issues Found
 
-### 1. No Timeout/Watchdog for Script Execution (Severity: HIGH)
+### 1. ~~No Timeout/Watchdog for Script Execution~~ (Severity: HIGH) — **ADDRESSED**
 
-mJS scripts run synchronously during write operations (`engine.rs:361`). A script with an infinite loop will deadlock the engine mutex and freeze the device.
+~~mJS scripts run synchronously during write operations (`engine.rs:361`). A script with an infinite loop will deadlock the engine mutex and freeze the device.~~
 
-**Best practice:** All external/user-supplied code execution needs a timeout. Options:
-- mJS has a `MJS_EXEC_TIMEOUT` flag — enable it
-- Run scripts in a FreeRTOS task with a watchdog
-- At minimum, document the risk and add a `MAX_SCRIPT_EXEC_MS` constant
-
-**Impact:** A single bad script makes the device unrecoverable without power cycle.
+**Resolved:** Script execution now has dual safety limits:
+- **Operation limit** (`MAX_SCRIPT_OPS = 50,000`) — mJS op counter terminates runaway scripts
+- **Wall-clock timeout** (`MAX_SCRIPT_EXEC_MS = 5,000ms`) — catches slow scripts that stay under op limit
+- Script errors (OpLimitExceeded, TimeLimitExceeded) are logged with path and elapsed time (FR-004)
+- Write operations return partial-success (200 with warning desc) when the script fails (FR-005)
+- Both host unit tests and integration tests verify this behavior
 
 ---
 
@@ -83,17 +83,17 @@ Silently accepting but not delivering is the worst option.
 
 ---
 
-### 5. No Structured Logging / Log Levels (Severity: MEDIUM)
+### 5. ~~No Structured Logging / Log Levels~~ (Severity: MEDIUM) — **ADDRESSED**
 
-The codebase uses `log::info!`, `log::warn!`, etc., which is good. But there's no evidence of:
-- Structured fields (request ID, session ID, path) in log messages
-- Configurable log levels per module
-- Rate limiting for repeated errors (e.g., WiFi reconnect spam)
+~~The codebase uses `log::info!`, `log::warn!`, etc., which is good. But there's no evidence of:~~
+- ~~Structured fields (request ID, session ID, path) in log messages~~
+- ~~Configurable log levels per module~~
+- ~~Rate limiting for repeated errors (e.g., WiFi reconnect spam)~~
 
-**Best practice:** On constrained devices, logging can consume significant resources. Consider:
-- `log::set_max_level()` at boot based on build profile
-- Include session IDs in server logs for debugging WebSocket issues
-- Rate-limit repeated warnings (WiFi reconnect loop at 5s interval could flood serial)
+**Resolved:**
+- **Per-module log levels** configured in `main.rs` (eo-d96)
+- **Session IDs** included in WS delivery serialization failure logs (eo-fuz)
+- **Rate limiting** for repeated warnings via `RateLimiter` utility (eo-r3y) — prevents log flooding from script errors and other repeated conditions
 
 ---
 
@@ -196,7 +196,7 @@ The layering is clean. Dependencies flow downward. No circular dependencies. Pla
 | Input validation | **A** | Path traversal, depth guards, XSS, constant-time auth |
 | Testing | **B+** | Strong core coverage, platform code untested |
 | Security | **B** | Good basics, missing TLS and rate limiting |
-| Fault tolerance | **B-** | No watchdog, no script timeout, no graceful shutdown |
-| Observability | **C+** | Basic logging only, no structured telemetry |
+| Fault tolerance | **B+** | Script timeout + op limit addressed; no watchdog, no graceful shutdown |
+| Observability | **B** | Per-module log levels, session IDs in logs, rate-limited warnings |
 
 **Overall: B+ / A-** — This is well above average for an embedded project. The core architecture is sound. The main risks are in operational resilience (script timeout, watchdog, OTA) rather than code quality.

@@ -61,6 +61,14 @@ pub fn response_batch(resp: &OmiMessage) -> &[ItemStatus] {
     }
 }
 
+/// Extract the `desc` field from a response.
+pub fn response_desc(resp: &OmiMessage) -> Option<&str> {
+    match &resp.operation {
+        Operation::Response(body) => body.desc.as_deref(),
+        _ => panic!("expected Response"),
+    }
+}
+
 /// Extract the `rid` field from a response (returned by subscription creation).
 pub fn response_rid(resp: &OmiMessage) -> &str {
     match &resp.operation {

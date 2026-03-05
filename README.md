@@ -1,4 +1,4 @@
-# Hyper-Text IoT device
+# Embedded O-MI v2
 
 In development
 

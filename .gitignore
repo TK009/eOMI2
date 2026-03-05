@@ -4,7 +4,6 @@
 sdkconfig
 .env
 /.device-locks
-/tasks
 __pycache__/
 *.pyc
 tests/e2e/.venv/

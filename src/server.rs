@@ -135,10 +135,12 @@ fn check_auth(
     check_bearer_auth(req.header("authorization"), token)
 }
 
-/// Dispatch subscription deliveries: send WebSocket frames, log callbacks, skip poll.
+/// Dispatch subscription deliveries: send WebSocket frames, POST callbacks, skip poll.
 ///
-/// Acquires `ws_senders` lock, then (if needed) `engine` lock to cancel
-/// failed-session subscriptions. Caller must NOT hold either lock.
+/// Acquires `ws_senders` lock for WebSocket sends only, then releases it
+/// before delivering callbacks (which may block on HTTP I/O). If needed,
+/// acquires `engine` lock to cancel failed-session subscriptions.
+/// Caller must NOT hold either lock.
 pub fn dispatch_deliveries(
     deliveries: &[Delivery],
     ws_senders: &WsSenders,
@@ -148,6 +150,8 @@ pub fn dispatch_deliveries(
         return;
     }
     let mut failed_sessions: Vec<SessionId> = Vec::new();
+    // Collect callback deliveries to dispatch after releasing the lock.
+    let mut pending_callbacks: Vec<(String, String, String)> = Vec::new();
     {
         let mut senders = lock_or_recover(ws_senders, "ws_senders");
         for d in deliveries {
@@ -174,7 +178,7 @@ pub fn dispatch_deliveries(
                     let resp = OmiResponse::subscription_event(&d.rid, &d.path, &d.values);
                     match serde_json::to_string(&resp) {
                         Ok(json) => {
-                            crate::callback::deliver_callback(url, json.as_bytes(), &d.rid);
+                            pending_callbacks.push((url.clone(), json, d.rid.clone()));
                         }
                         Err(e) => {
                             warn!("Callback delivery serialization failed: {}", e);
@@ -187,6 +191,11 @@ pub fn dispatch_deliveries(
         for sid in &failed_sessions {
             senders.remove(sid);
         }
+    }
+    // Deliver callbacks outside the ws_senders lock to avoid blocking
+    // WebSocket sends on potentially slow HTTP I/O (up to 10s with retry).
+    for (url, json, rid) in &pending_callbacks {
+        crate::callback::deliver_callback(url, json.as_bytes(), rid);
     }
     if !failed_sessions.is_empty() {
         let mut eng = lock_or_recover(engine, "engine");

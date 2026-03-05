@@ -5,11 +5,19 @@
 **Status**: Draft
 **Input**: User description: "Remaining important items from architecture review"
 
+## Clarifications
+
+### Session 2026-03-05
+
+- Q: Should the spec add a wall-clock time limit alongside the existing op-count limit (`MAX_SCRIPT_OPS = 50_000`), or is op-count sufficient? → A: Add wall-clock time limit alongside op-count (belt and suspenders approach).
+- Q: Should mutex poisoning recovery (Story 2) target debug/test builds only, change release panic strategy, or be removed entirely? → A: Remove Story 2 entirely; `panic = "abort"` in release already handles the production case.
+- Q: Should a timed-out script cause the triggering write to be rolled back, or is "write committed, script effects lost" acceptable? → A: Write committed, script effects lost; report script error to caller.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Script Execution Safety (Priority: P1)
 
-A device operator deploys user-authored mJS scripts to customize device behavior. If a script contains an infinite loop or takes too long, the device must protect itself by terminating the script and continuing normal operation, rather than freezing and requiring a power cycle.
+A device operator deploys user-authored mJS scripts to customize device behavior. The system already enforces a bytecode operation count limit to catch simple runaway loops. Additionally, the system must enforce a wall-clock time limit to catch scripts that consume excessive real time (e.g., expensive FFI calls that bypass the op counter). Both mechanisms together ensure the device remains responsive regardless of the failure mode.
 
 **Why this priority**: A single bad script can make the device completely unresponsive. This is the highest-severity issue identified in the architecture review and directly threatens device availability.
 
@@ -21,26 +29,11 @@ A device operator deploys user-authored mJS scripts to customize device behavior
 2. **Given** a script that completes within the timeout, **When** a write triggers the script, **Then** the script executes normally and its effects are applied.
 3. **Given** a script is terminated due to timeout, **When** subsequent writes occur, **Then** the device continues processing normally without requiring a restart.
 4. **Given** a script times out, **When** the timeout event is logged, **Then** the log includes the script path and elapsed time.
+5. **Given** a script times out after the triggering write was committed, **When** the error is reported to the caller, **Then** the write value is preserved and the response indicates partial success (write succeeded, script failed).
 
 ---
 
-### User Story 2 - Mutex Poisoning Recovery (Priority: P2)
-
-When an internal panic poisons a mutex, the device must handle this safely rather than silently continuing with potentially corrupt data. The device should log the event and reset to a known-good state or restart, preventing silent data corruption.
-
-**Why this priority**: Operating on corrupt data after a mutex poisoning can cause unpredictable behavior and data loss. This is a medium-severity issue that affects data integrity.
-
-**Independent Test**: Can be tested by simulating a panic within a mutex-guarded section and verifying the recovery behavior (log output and restart).
-
-**Acceptance Scenarios**:
-
-1. **Given** a mutex becomes poisoned due to a panic, **When** another thread attempts to lock it, **Then** the poisoning event is logged with context about the affected subsystem.
-2. **Given** a mutex poisoning is detected, **When** the recovery handler runs, **Then** the device restarts cleanly rather than continuing with potentially corrupt state.
-3. **Given** the device restarts after a mutex poisoning, **When** it comes back up, **Then** it loads the last known-good state from persistent storage.
-
----
-
-### User Story 3 - Structured Logging (Priority: P3)
+### User Story 2 - Structured Logging (Priority: P2)
 
 Device operators need structured, filterable log output to diagnose issues in the field. Logs should include contextual fields (session ID, request path) and support configurable verbosity levels per module to control resource usage on the constrained device.
 
@@ -58,8 +51,7 @@ Device operators need structured, filterable log output to diagnose issues in th
 
 ### Edge Cases
 
-- What happens when a script timeout occurs during a cascading write (script triggers another script)?
-- How does the system behave if a mutex poisoning occurs during NVS persistence?
+- Cascading script timeout: Each script in a cascade (up to `MAX_SCRIPT_DEPTH = 4`) gets its own independent op-count and wall-clock time limit. A timeout at any depth terminates that script and its pending cascade writes, but writes already committed at earlier depths are preserved.
 - How does log rate-limiting behave when errors alternate between two different messages rapidly?
 
 ## Requirements *(mandatory)*
@@ -68,36 +60,29 @@ Device operators need structured, filterable log output to diagnose issues in th
 
 #### Script Execution Safety
 
-- **FR-001**: System MUST enforce a maximum execution time for user-supplied scripts.
-- **FR-002**: System MUST terminate scripts that exceed the execution time limit and report a timeout error.
+- **FR-001**: System MUST enforce both a bytecode operation count limit (existing) and a wall-clock time limit for user-supplied scripts.
+- **FR-002**: System MUST terminate scripts that exceed either limit and report the specific violation (op-count exceeded or time limit exceeded).
 - **FR-003**: System MUST remain fully operational after a script timeout, without requiring a restart.
 - **FR-004**: System MUST log script timeout events with the script's associated path and elapsed duration.
-
-#### Mutex Poisoning Recovery
-
-- **FR-005**: System MUST log mutex poisoning events with the affected subsystem's identity.
-- **FR-006**: System MUST restart the device when a mutex poisoning is detected, rather than continuing with potentially corrupt data.
-- **FR-007**: After restart, system MUST load state from the last successful persistent storage save.
+- **FR-005**: When a script times out, the triggering write MUST remain committed. The system MUST report a partial-success response indicating the write succeeded but the script failed.
 
 #### Structured Logging
 
-- **FR-008**: System MUST support configurable log levels per module at boot time based on build profile.
-- **FR-009**: Server-side log messages MUST include session IDs for WebSocket-related events.
-- **FR-010**: System MUST rate-limit repeated identical log messages to prevent log flooding.
+- **FR-006**: System MUST support configurable log levels per module at boot time based on build profile.
+- **FR-007**: Server-side log messages MUST include session IDs for WebSocket-related events.
+- **FR-008**: System MUST rate-limit repeated identical log messages to prevent log flooding.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
 - **SC-001**: A script containing an infinite loop is terminated and the device remains responsive, with zero power-cycle restarts needed due to script hangs.
-- **SC-002**: Mutex poisoning events result in a controlled device restart within 5 seconds, with no silent data corruption.
-- **SC-003**: Operators can filter log output by module and severity level, reducing irrelevant log noise by at least 50% in production builds compared to default.
-- **SC-004**: Repeated error conditions produce no more than 1 log message per 10-second window per unique message.
+- **SC-002**: Operators can filter log output by module and severity level, reducing irrelevant log noise by at least 50% in production builds compared to default.
+- **SC-003**: Repeated error conditions produce no more than 1 log message per 10-second window per unique message.
 
 ## Assumptions
 
-- The mJS scripting engine supports a timeout or execution-limit mechanism (e.g., `MJS_EXEC_TIMEOUT` flag referenced in the architecture review).
-- The device uses `panic = "abort"` in release builds, so mutex poisoning recovery primarily applies to debug/test builds or is handled via a pre-panic hook.
-- NVS persistence is reliable enough to serve as the "last known-good state" after a restart.
+- The existing bytecode operation count limit (`MAX_SCRIPT_OPS`) is functional and tested. The wall-clock time limit is a new addition to catch cases the op counter misses (e.g., FFI calls).
+- Release builds use `panic = "abort"`, so mutex poisoning cannot occur in production. The existing `lock_or_recover` logging in debug/test builds is sufficient; no additional mutex recovery work is needed.
 - Build profiles (debug vs release) are the appropriate mechanism for controlling default log verbosity.
 - Rate-limiting log messages by deduplication window (time-based) is acceptable rather than count-based throttling.

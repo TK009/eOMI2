@@ -2,6 +2,7 @@
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-03-05
+**Updated**: 2026-03-05 (post-clarification)
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality
@@ -31,6 +32,7 @@
 
 ## Notes
 
-- All items pass validation. Spec is ready for `/speckit.clarify` or `/speckit.plan`.
-- The Assumptions section documents reasonable defaults chosen for areas that could have had multiple interpretations (mutex poisoning strategy, log rate-limiting approach).
-- The spec references the mJS timeout mechanism from the architecture review as an assumption rather than a requirement, keeping it technology-agnostic.
+- All items pass validation. Spec is ready for `/speckit.plan`.
+- 3 clarifications resolved: dual timeout mechanism, mutex story removal, write-commit-on-timeout semantics.
+- Scope reduced from 4 stories to 2 after confirming mutex poisoning is already handled by `panic = "abort"`.
+- Existing codebase mechanisms (op-count limit, depth limit, lock_or_recover) acknowledged in spec to avoid redundant work.

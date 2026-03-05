@@ -27,22 +27,34 @@ fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    // Set log level: Debug for dev builds, Info for release
+    // Log level configuration:
+    //   Release — default Info; noisy modules suppressed to Warn
+    //   Debug   — default Debug; all modules at Debug unless overridden below
+    //
+    // Per-module targets (applied in both profiles):
+    //   wifi, httpd, httpd_ws  — ESP-IDF C components, Warn only
+    //   reconfigurable_device::omi — OMI protocol layer, Warn in release
     if cfg!(debug_assertions) {
         log::set_max_level(log::LevelFilter::Debug);
     } else {
         log::set_max_level(log::LevelFilter::Info);
     }
 
-    // Quiet noisy ESP-IDF C components
-    if let Err(e) = esp_idf_svc::log::set_target_level("wifi", log::LevelFilter::Warn) {
-        warn!("Failed to set log level for 'wifi': {}", e);
+    // Quiet noisy ESP-IDF C components (both profiles)
+    for target in &["wifi", "httpd", "httpd_ws"] {
+        if let Err(e) = esp_idf_svc::log::set_target_level(target, log::LevelFilter::Warn) {
+            warn!("Failed to set log level for '{}': {}", target, e);
+        }
     }
-    if let Err(e) = esp_idf_svc::log::set_target_level("httpd", log::LevelFilter::Warn) {
-        warn!("Failed to set log level for 'httpd': {}", e);
-    }
-    if let Err(e) = esp_idf_svc::log::set_target_level("httpd_ws", log::LevelFilter::Warn) {
-        warn!("Failed to set log level for 'httpd_ws': {}", e);
+
+    // Suppress verbose OMI protocol logging in release builds
+    if !cfg!(debug_assertions) {
+        if let Err(e) = esp_idf_svc::log::set_target_level(
+            "reconfigurable_device::omi",
+            log::LevelFilter::Warn,
+        ) {
+            warn!("Failed to set log level for 'reconfigurable_device::omi': {}", e);
+        }
     }
 
     info!("\n\n========================================");

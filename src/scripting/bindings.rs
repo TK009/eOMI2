@@ -223,10 +223,21 @@ pub(crate) unsafe extern "C" fn js_odf_read_item(mjs: *mut ffi::mjs) {
         ffi::mjs_return(mjs, ffi::mjs_mk_null());
         return;
     }
-    let tree = &*(*ctx_ptr).tree;
+    let ctx = &*ctx_ptr;
+    let tree = &*ctx.tree;
+    let pending_writes = &*ctx.pending_writes;
 
     // Detect /value suffix (InfoItem named "value" takes precedence)
     let (effective_path, wants_raw) = strip_value_suffix(path, tree);
+
+    // Read-after-write consistency: check pending writes from the same
+    // script cycle first. The last write to this path wins.
+    if wants_raw {
+        if let Some(pw) = pending_writes.iter().rev().find(|pw| pw.path == effective_path) {
+            ffi::mjs_return(mjs, convert::omi_to_mjs(mjs, &pw.value));
+            return;
+        }
+    }
 
     // Resolve path via ObjectTree
     let target = match tree.resolve(effective_path) {
@@ -253,14 +264,15 @@ pub(crate) unsafe extern "C" fn js_odf_read_item(mjs: *mut ffi::mjs) {
         return;
     }
 
-    // Empty ring buffer → null
-    if item.values.is_empty() {
+    // Empty ring buffer → null (unless pending writes exist for non-raw)
+    if item.values.is_empty() && !pending_writes.iter().any(|pw| pw.path == effective_path) {
         ffi::mjs_return(mjs, ffi::mjs_mk_null());
         return;
     }
 
     if wants_raw {
         // /value suffix: return raw primitive of most recent value
+        // (pending writes already checked above)
         let newest = item.query_values(Some(1), None, None, None);
         if newest.is_empty() {
             ffi::mjs_return(mjs, ffi::mjs_mk_null());

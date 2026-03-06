@@ -439,7 +439,7 @@ impl Engine {
         depth: u8,
     ) -> (Vec<Delivery>, Option<String>) {
         use crate::scripting::bindings::{MAX_SCRIPT_DEPTH, PendingWrite, ScriptCallbackCtx,
-                                          js_odf_write_item};
+                                          js_odf_write_item, js_odf_read_item};
         use crate::scripting::ffi;
         use crate::scripting::ffi::mjs_name;
         use crate::scripting::convert::omi_to_mjs;
@@ -493,11 +493,14 @@ impl Engine {
             let (n, l) = mjs_name!("event");
             ffi::mjs_set(mjs, global, n, l, event);
 
-            // Set up `odf.writeItem` binding
+            // Set up `odf.writeItem` and `odf.readItem` bindings
             let odf = ffi::mjs_mk_object(mjs);
             let write_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_write_item));
             let (n, l) = mjs_name!("writeItem");
             ffi::mjs_set(mjs, odf, n, l, write_fn);
+            let read_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_read_item));
+            let (n, l) = mjs_name!("readItem");
+            ffi::mjs_set(mjs, odf, n, l, read_fn);
             let (n, l) = mjs_name!("odf");
             ffi::mjs_set(mjs, global, n, l, odf);
 

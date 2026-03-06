@@ -33,3 +33,5 @@ pub mod wifi_sm;
 pub mod callback;
 #[cfg(feature = "esp")]
 pub mod server;
+#[cfg(feature = "std")]
+pub mod wifi_ap;

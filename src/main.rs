@@ -15,6 +15,7 @@ use reconfigurable_device::http::now_secs;
 use reconfigurable_device::log_util::RateLimiter;
 use reconfigurable_device::server::{dispatch_deliveries, start_http_server};
 use reconfigurable_device::sync_util::lock_or_recover;
+use reconfigurable_device::wifi_ap;
 use reconfigurable_device::wifi_sm::{WifiSm, WifiSmConfig, WifiEvent, WifiAction, WifiState};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -88,6 +89,7 @@ fn main() -> Result<()> {
     }
 
     info!("WiFi credentials: {} available", creds.len());
+    let hostname = wifi_cfg.hostname.clone();
 
     // Resolve API token: prefer build-time, fall back to NVS-stored hash presence check
     let api_token: &'static str = if let Some(t) = API_TOKEN {
@@ -107,26 +109,31 @@ fn main() -> Result<()> {
     let sm_config = WifiSmConfig::default();
     let mut wifi_sm = WifiSm::new(creds.len(), sm_config);
 
+    // Track whether AP (portal) is currently active
+    let mut ap_active = false;
+
     // Execute the initial action from the state machine
     let initial_action = wifi_sm.initial_action();
-    execute_wifi_action(&mut wifi, &creds, &initial_action)?;
-
-    // If we're already connected after initial action, log it
-    if *wifi_sm.state() == WifiState::Connected {
-        let ip_info = wifi.wifi().sta_netif().get_ip_info()?;
-        info!("Wi-Fi connected. IP: {}", ip_info.ip);
-    } else if *wifi_sm.state() == WifiState::Unconfigured || *wifi_sm.state() == WifiState::Portal {
-        // TODO: Start captive portal (eo-dnn: AP mode / soft-AP setup)
-        anyhow::bail!("No WiFi credentials available and captive portal not yet implemented");
+    match &initial_action {
+        WifiAction::StartPortal => {
+            wifi_ap::start_ap(&mut wifi, &hostname)?;
+            ap_active = true;
+            info!("Captive portal active — waiting for provisioning");
+        }
+        _ => {}
     }
 
     // Drive initial connection through the state machine
     if matches!(*wifi_sm.state(), WifiState::Connecting { .. }) {
-        drive_initial_connect(&mut wifi_sm, &mut wifi, &creds)?;
+        drive_initial_connect(&mut wifi_sm, &mut wifi, &creds, &hostname, &mut ap_active)?;
     }
 
-    let ip_info = wifi.wifi().sta_netif().get_ip_info()?;
-    info!("Wi-Fi connected. IP: {}", ip_info.ip);
+    if *wifi_sm.state() == WifiState::Connected {
+        let ip_info = wifi.wifi().sta_netif().get_ip_info()?;
+        info!("Wi-Fi connected. IP: {}", ip_info.ip);
+    } else if ap_active {
+        info!("No STA connection yet — captive portal active on {}", wifi_ap::AP_IP);
+    }
 
     // Dirty flag: set by HTTP handlers on successful writes, cleared by main loop after NVS save
     let nvs_dirty = Arc::new(AtomicBool::new(false));
@@ -190,7 +197,7 @@ fn main() -> Result<()> {
         // WiFi reconnection via state machine
         if !wifi.is_connected()? {
             let action = wifi_sm.handle_event(WifiEvent::ConnectionLost);
-            handle_reconnect_action(&mut wifi_sm, &mut wifi, &creds, action, &mut wifi_rl);
+            handle_reconnect_action(&mut wifi_sm, &mut wifi, &creds, action, &mut wifi_rl, &hostname, &mut ap_active);
         }
 
         // Record free heap memory
@@ -228,15 +235,19 @@ fn drive_initial_connect(
     sm: &mut WifiSm,
     wifi: &mut BlockingWifi<EspWifi<'static>>,
     creds: &[(String, String)],
+    hostname: &str,
+    ap_active: &mut bool,
 ) -> Result<()> {
     loop {
         match sm.state() {
             WifiState::Connected => return Ok(()),
             WifiState::Portal | WifiState::Unconfigured => {
-                // TODO: Start captive portal (eo-dnn: AP mode / soft-AP setup)
-                anyhow::bail!(
-                    "All WiFi credentials exhausted and captive portal not yet implemented"
-                );
+                if !*ap_active {
+                    wifi_ap::start_ap(wifi, hostname)?;
+                    *ap_active = true;
+                }
+                info!("Captive portal active — waiting for provisioning");
+                return Ok(());
             }
             WifiState::Connecting { ssid_index } => {
                 let idx = *ssid_index;
@@ -255,31 +266,11 @@ fn drive_initial_connect(
                 sm.handle_event(event);
             }
             WifiState::Backoff => {
-                // The SM told us to wait — sleep briefly during boot
                 info!("WiFi backoff: waiting before next rotation");
                 std::thread::sleep(std::time::Duration::from_millis(2000));
                 sm.handle_event(WifiEvent::BackoffComplete);
             }
         }
-    }
-}
-
-/// Execute a single WiFi action (for initial setup).
-fn execute_wifi_action(
-    wifi: &mut BlockingWifi<EspWifi<'static>>,
-    creds: &[(String, String)],
-    action: &WifiAction,
-) -> Result<()> {
-    match action {
-        WifiAction::TryConnect { ssid_index } => {
-            // Connection will be driven by drive_initial_connect
-            Ok(())
-        }
-        WifiAction::StartPortal => {
-            // Portal not yet implemented (eo-dnn)
-            Ok(())
-        }
-        _ => Ok(()),
     }
 }
 
@@ -290,6 +281,8 @@ fn handle_reconnect_action(
     creds: &[(String, String)],
     mut action: WifiAction,
     rl: &mut RateLimiter,
+    hostname: &str,
+    ap_active: &mut bool,
 ) {
     loop {
         match action {
@@ -313,9 +306,29 @@ fn handle_reconnect_action(
                 };
                 action = sm.handle_event(event);
             }
-            WifiAction::WaitBackoff { .. } | WifiAction::StartPortal | WifiAction::StopPortal => {
-                // During main loop, don't block on backoff — just return and
-                // let the next tick handle it. Portal actions are TODO (eo-dnn).
+            WifiAction::StartPortal => {
+                if !*ap_active {
+                    if let Err(e) = wifi_ap::start_ap(wifi, hostname) {
+                        warn!("Failed to start soft-AP: {}", e);
+                    } else {
+                        *ap_active = true;
+                        info!("Captive portal started after connection loss");
+                    }
+                }
+                break;
+            }
+            WifiAction::StopPortal => {
+                if *ap_active {
+                    if let Err(e) = wifi_ap::stop_ap(wifi) {
+                        warn!("Failed to stop soft-AP: {}", e);
+                    } else {
+                        *ap_active = false;
+                    }
+                }
+                break;
+            }
+            WifiAction::WaitBackoff { .. } => {
+                // Don't block on backoff — let the next tick handle it
                 break;
             }
             WifiAction::Idle => break,

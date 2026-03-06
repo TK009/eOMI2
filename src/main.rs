@@ -15,6 +15,7 @@ use reconfigurable_device::http::now_secs;
 use reconfigurable_device::log_util::RateLimiter;
 use reconfigurable_device::server::{dispatch_deliveries, start_http_server};
 use reconfigurable_device::sync_util::lock_or_recover;
+use reconfigurable_device::wifi_sm::{WifiSm, WifiSmConfig, WifiEvent, WifiAction, WifiState};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -71,16 +72,22 @@ fn main() -> Result<()> {
     // Clone NVS partition for OMI tree persistence (Wi-Fi consumes the other)
     let nvs_omi = nvs.clone();
 
-    // Resolve WiFi credentials: prefer build-time, fall back to NVS
+    // Build credential list: build-time creds first, then NVS-saved
     let nvs_wifi = nvs.clone();
     let wifi_cfg = reconfigurable_device::wifi_cfg::load_wifi_config_or_default(nvs_wifi);
-    let (ssid, pass) = if let (Some(s), Some(p)) = (WIFI_SSID, WIFI_PASS) {
-        (s.to_string(), p.to_string())
-    } else if let Some((s, p)) = wifi_cfg.ssids.first() {
-        (s.clone(), p.clone())
-    } else {
-        anyhow::bail!("No WiFi credentials: set WIFI_SSID/WIFI_PASS at build time or provision via captive portal");
-    };
+    let mut creds: Vec<(String, String)> = Vec::new();
+
+    if let (Some(s), Some(p)) = (WIFI_SSID, WIFI_PASS) {
+        creds.push((s.to_string(), p.to_string()));
+    }
+    for (s, p) in &wifi_cfg.ssids {
+        // Avoid duplicating build-time SSID if it's also in NVS
+        if !creds.iter().any(|(existing, _)| existing == s) {
+            creds.push((s.clone(), p.clone()));
+        }
+    }
+
+    info!("WiFi credentials: {} available", creds.len());
 
     // Resolve API token: prefer build-time, fall back to NVS-stored hash presence check
     let api_token: &'static str = if let Some(t) = API_TOKEN {
@@ -90,12 +97,33 @@ fn main() -> Result<()> {
         anyhow::bail!("No API_TOKEN: set at build time or provision via captive portal");
     };
 
-    // Connect to Wi-Fi
+    // Initialize Wi-Fi driver
     let mut wifi = BlockingWifi::wrap(
         EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs))?,
         sys_loop,
     )?;
-    connect_wifi(&mut wifi, &ssid, &pass)?;
+
+    // Initialize WiFi state machine
+    let sm_config = WifiSmConfig::default();
+    let mut wifi_sm = WifiSm::new(creds.len(), sm_config);
+
+    // Execute the initial action from the state machine
+    let initial_action = wifi_sm.initial_action();
+    execute_wifi_action(&mut wifi, &creds, &initial_action)?;
+
+    // If we're already connected after initial action, log it
+    if *wifi_sm.state() == WifiState::Connected {
+        let ip_info = wifi.wifi().sta_netif().get_ip_info()?;
+        info!("Wi-Fi connected. IP: {}", ip_info.ip);
+    } else if *wifi_sm.state() == WifiState::Unconfigured || *wifi_sm.state() == WifiState::Portal {
+        // TODO: Start captive portal (eo-dnn: AP mode / soft-AP setup)
+        anyhow::bail!("No WiFi credentials available and captive portal not yet implemented");
+    }
+
+    // Drive initial connection through the state machine
+    if matches!(*wifi_sm.state(), WifiState::Connecting { .. }) {
+        drive_initial_connect(&mut wifi_sm, &mut wifi, &creds)?;
+    }
 
     let ip_info = wifi.wifi().sta_netif().get_ip_info()?;
     info!("Wi-Fi connected. IP: {}", ip_info.ip);
@@ -137,7 +165,6 @@ fn main() -> Result<()> {
     const TICK_INTERVAL_MS: u64 = 5000;
     const POLL_INTERVAL_MS: u64 = 100;
     let mut elapsed_ms: u64 = TICK_INTERVAL_MS; // start with immediate first tick
-    let mut wifi_retry_count: u32 = 0;
     let mut wifi_rl = RateLimiter::new();
     let mut delivery_rl = RateLimiter::new();
     loop {
@@ -160,26 +187,10 @@ fn main() -> Result<()> {
         }
         elapsed_ms = 0;
 
+        // WiFi reconnection via state machine
         if !wifi.is_connected()? {
-            // Log on first attempt and every 12th (~once/min at 5s interval)
-            if wifi_retry_count % 12 == 0 {
-                warn!("Wi-Fi disconnected, reconnecting... attempt={}", wifi_retry_count + 1);
-            }
-            wifi_retry_count = wifi_retry_count.saturating_add(1);
-            match connect_wifi(&mut wifi, &ssid, &pass) {
-                Ok(()) => {
-                    let label = if wifi_retry_count == 1 { "attempt" } else { "attempts" };
-                    info!("Wi-Fi reconnected after {} {}", wifi_retry_count, label);
-                    wifi_retry_count = 0;
-                }
-                Err(e) => {
-                    let msg = format!("Wi-Fi reconnect failed: {}", e);
-                    if wifi_rl.should_emit(&msg) {
-                        warn!("{}", msg);
-                    }
-                    continue;
-                }
-            }
+            let action = wifi_sm.handle_event(WifiEvent::ConnectionLost);
+            handle_reconnect_action(&mut wifi_sm, &mut wifi, &creds, action, &mut wifi_rl);
         }
 
         // Record free heap memory
@@ -211,7 +222,108 @@ fn main() -> Result<()> {
     }
 }
 
-fn connect_wifi(wifi: &mut BlockingWifi<EspWifi<'static>>, ssid: &str, pass: &str) -> Result<()> {
+/// Drive the state machine through initial connection attempts until
+/// connected or portal is needed.
+fn drive_initial_connect(
+    sm: &mut WifiSm,
+    wifi: &mut BlockingWifi<EspWifi<'static>>,
+    creds: &[(String, String)],
+) -> Result<()> {
+    loop {
+        match sm.state() {
+            WifiState::Connected => return Ok(()),
+            WifiState::Portal | WifiState::Unconfigured => {
+                // TODO: Start captive portal (eo-dnn: AP mode / soft-AP setup)
+                anyhow::bail!(
+                    "All WiFi credentials exhausted and captive portal not yet implemented"
+                );
+            }
+            WifiState::Connecting { ssid_index } => {
+                let idx = *ssid_index;
+                let (ssid, pass) = &creds[idx];
+                info!("Trying WiFi SSID [{}]: {}", idx, ssid);
+                let event = match try_connect(wifi, ssid, pass) {
+                    Ok(()) => {
+                        info!("WiFi connected to {}", ssid);
+                        WifiEvent::ConnectSuccess
+                    }
+                    Err(e) => {
+                        warn!("WiFi connect to {} failed: {}", ssid, e);
+                        WifiEvent::ConnectFailed
+                    }
+                };
+                sm.handle_event(event);
+            }
+            WifiState::Backoff => {
+                // The SM told us to wait — sleep briefly during boot
+                info!("WiFi backoff: waiting before next rotation");
+                std::thread::sleep(std::time::Duration::from_millis(2000));
+                sm.handle_event(WifiEvent::BackoffComplete);
+            }
+        }
+    }
+}
+
+/// Execute a single WiFi action (for initial setup).
+fn execute_wifi_action(
+    wifi: &mut BlockingWifi<EspWifi<'static>>,
+    creds: &[(String, String)],
+    action: &WifiAction,
+) -> Result<()> {
+    match action {
+        WifiAction::TryConnect { ssid_index } => {
+            // Connection will be driven by drive_initial_connect
+            Ok(())
+        }
+        WifiAction::StartPortal => {
+            // Portal not yet implemented (eo-dnn)
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Handle reconnection in the main loop using the state machine.
+fn handle_reconnect_action(
+    sm: &mut WifiSm,
+    wifi: &mut BlockingWifi<EspWifi<'static>>,
+    creds: &[(String, String)],
+    mut action: WifiAction,
+    rl: &mut RateLimiter,
+) {
+    loop {
+        match action {
+            WifiAction::TryConnect { ssid_index } => {
+                if ssid_index >= creds.len() {
+                    break;
+                }
+                let (ssid, pass) = &creds[ssid_index];
+                let event = match try_connect(wifi, ssid, pass) {
+                    Ok(()) => {
+                        info!("Wi-Fi reconnected to {}", ssid);
+                        WifiEvent::ConnectSuccess
+                    }
+                    Err(e) => {
+                        let msg = format!("Wi-Fi reconnect to {} failed: {}", ssid, e);
+                        if rl.should_emit(&msg) {
+                            warn!("{}", msg);
+                        }
+                        WifiEvent::ConnectFailed
+                    }
+                };
+                action = sm.handle_event(event);
+            }
+            WifiAction::WaitBackoff { .. } | WifiAction::StartPortal | WifiAction::StopPortal => {
+                // During main loop, don't block on backoff — just return and
+                // let the next tick handle it. Portal actions are TODO (eo-dnn).
+                break;
+            }
+            WifiAction::Idle => break,
+        }
+    }
+}
+
+fn try_connect(wifi: &mut BlockingWifi<EspWifi<'static>>, ssid: &str, pass: &str) -> Result<()> {
     wifi.set_configuration(&Configuration::Client(ClientConfiguration {
         ssid: ssid.try_into().map_err(|_| anyhow::anyhow!("SSID too long"))?,
         password: pass.try_into().map_err(|_| anyhow::anyhow!("Password too long"))?,
@@ -219,11 +331,7 @@ fn connect_wifi(wifi: &mut BlockingWifi<EspWifi<'static>>, ssid: &str, pass: &st
     }))?;
 
     wifi.start()?;
-    info!("Wi-Fi started, scanning...");
-
     wifi.connect()?;
-    info!("Wi-Fi associated, waiting for IP...");
-
     wifi.wait_netif_up()?;
     Ok(())
 }

@@ -28,6 +28,7 @@ pub mod log_util;
 pub mod nvs;
 #[cfg(feature = "json")]
 pub mod wifi_cfg;
+pub mod wifi_sm;
 #[cfg(feature = "esp")]
 pub mod callback;
 #[cfg(feature = "esp")]

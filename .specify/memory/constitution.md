@@ -75,6 +75,10 @@ any device-level testing occurs.
   is inherently hardware-dependent.
 - Device locking protocol MUST be followed for all hardware
   interactions (see Development Workflow).
+- Major features or major changes to device behaviour MUST have
+  a passing end-to-end test.
+- Epics should have passing of full end-to-end test run on actual
+  device.
 - Rationale: Host tests are fast, deterministic, and free of
   hardware contention; catching bugs early saves device cycles.
 

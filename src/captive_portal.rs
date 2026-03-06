@@ -250,10 +250,14 @@ pub fn parse_provision_form(body: &str, max_aps: usize) -> Result<ProvisionForm,
 
 /// Render the captive portal provisioning form HTML.
 ///
+/// Single compact HTML page with embedded CSS/JS (no external deps).
+/// SSID dropdown populated from `/scan` via JS, with manual entry fallback
+/// for hidden networks. Up to `max_aps` credential slots (FR-004).
+///
 /// - `max_aps`: maximum number of WiFi AP slots to show (FR-004)
 /// - `saved_ssids`: previously saved SSIDs to pre-fill (passwords NOT shown, FR-006)
 /// - `hostname`: current hostname to pre-fill
-/// - `is_first_setup`: if true, API key is mandatory
+/// - `is_first_setup`: if true, API key is mandatory (FR-005)
 /// - `error_message`: optional error from a previous submission attempt
 pub fn render_provisioning_form(
     max_aps: usize,
@@ -262,7 +266,7 @@ pub fn render_provisioning_form(
     is_first_setup: bool,
     error_message: Option<&str>,
 ) -> String {
-    let mut html = String::with_capacity(2048);
+    let mut html = String::with_capacity(4096);
     html.push_str("<!DOCTYPE html><html><head>\
         <meta charset=\"utf-8\">\
         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
@@ -279,7 +283,10 @@ pub fn render_provisioning_form(
         .error{background:#fee;border:1px solid #c00;padding:.75em;border-radius:4px;margin-bottom:1em;color:#c00}\
         .ap-group{border:1px solid #ddd;padding:.75em;margin-bottom:.5em;border-radius:4px;background:#fff}\
         .ap-group h3{margin-bottom:.5em}\
+        .saved-hint{font-size:.85em;color:#666;margin-top:.25em}\
+        .hidden-input{display:none}\
         #status{display:none;padding:.75em;border-radius:4px;margin-top:1em}\
+        .scan-info{font-size:.85em;color:#666;margin-bottom:.25em}\
         </style></head><body>\
         <h1>Device Setup</h1>");
 
@@ -289,27 +296,55 @@ pub fn render_provisioning_form(
         html.push_str("</div>");
     }
 
-    html.push_str("<form method=\"POST\" action=\"/provision\" id=\"provForm\">");
+    html.push_str("<p class=\"scan-info\" id=\"scanInfo\">Scanning for networks...</p>\
+        <form method=\"POST\" action=\"/provision\" id=\"provForm\">");
 
-    // WiFi AP slots
+    // WiFi AP slots — each has a <select> for scanned networks + hidden text input
     for i in 0..max_aps {
-        let label = if i == 0 { "WiFi Network (required)" } else { "WiFi Network (optional)" };
+        let label = if i == 0 {
+            "WiFi Network (required)"
+        } else {
+            "WiFi Network (optional)"
+        };
         let saved = saved_ssids.get(i).copied().unwrap_or("");
+        let idx = alloc::format!("{}", i);
+
         html.push_str("<div class=\"ap-group\"><h3>");
         html.push_str(label);
         html.push_str("</h3><div class=\"field\"><label>SSID</label>\
-            <input type=\"text\" name=\"ssid_");
-        html.push_str(&alloc::format!("{}", i));
+            <select class=\"ssid-select\" data-idx=\"");
+        html.push_str(&idx);
+        html.push_str("\">");
+        // Default option
+        if saved.is_empty() {
+            html.push_str("<option value=\"\">-- Select network --</option>");
+        } else {
+            html.push_str("<option value=\"");
+            html.push_str(&html_escape(saved));
+            html.push_str("\" selected>");
+            html.push_str(&html_escape(saved));
+            html.push_str("</option>");
+            html.push_str("<option value=\"\">-- Select network --</option>");
+        }
+        html.push_str("<option value=\"__hidden__\">Hidden network...</option>\
+            </select>\
+            <input type=\"text\" class=\"hidden-input\" placeholder=\"Enter hidden SSID\">\
+            <input type=\"hidden\" name=\"ssid_");
+        html.push_str(&idx);
         html.push_str("\" value=\"");
         html.push_str(&html_escape(saved));
-        html.push('"');
-        if i == 0 {
-            html.push_str(" required");
-        }
-        html.push_str("></div><div class=\"field\"><label>Password</label>\
+        html.push_str("\"></div><div class=\"field\"><label>Password</label>\
             <input type=\"password\" name=\"password_");
-        html.push_str(&alloc::format!("{}", i));
-        html.push_str("\"></div></div>");
+        html.push_str(&idx);
+        html.push('"');
+        if !saved.is_empty() {
+            html.push_str(" placeholder=\"(unchanged if left empty)\"");
+        }
+        html.push_str(">");
+        if !saved.is_empty() {
+            html.push_str("<div class=\"saved-hint\">Password saved. Leave empty to keep.</div>");
+        }
+        html.push_str("</div></div>");
     }
 
     // Hostname
@@ -318,9 +353,9 @@ pub fn render_provisioning_form(
     html.push_str(&html_escape(hostname));
     html.push_str("\" placeholder=\"eOMI\"></div>");
 
-    // API key management
+    // API key management (FR-005)
     html.push_str("<div class=\"field\"><label>API Key</label>\
-        <select name=\"api_key_action\">");
+        <select name=\"api_key_action\" id=\"apiKeyAction\">");
     if !is_first_setup {
         html.push_str("<option value=\"keep\">Keep existing</option>");
     }
@@ -330,29 +365,168 @@ pub fn render_provisioning_form(
     }
     html.push_str(">Generate new</option>\
         <option value=\"set\">Set manually</option>\
-        </select></div>\
+        </select>");
+    if !is_first_setup {
+        html.push_str("<div class=\"saved-hint\">API key is set. Choose action above.</div>");
+    }
+    html.push_str("</div>\
         <div class=\"field\" id=\"apiKeyField\" style=\"display:none\">\
         <label>API Key Value</label>\
         <input type=\"text\" name=\"api_key\" placeholder=\"Enter API key\"></div>");
 
-    html.push_str("<button type=\"submit\">Save &amp; Connect</button></form>\
-        <div id=\"status\"></div>\
+    html.push_str("<button type=\"submit\" id=\"submitBtn\">Save &amp; Connect</button></form>\
+        <div id=\"status\"></div>");
+
+    // Embedded JS — scan fetch, SSID select logic, form validation, status polling
+    html.push_str("<script>\
+(function(){\
+var selects=document.querySelectorAll('.ssid-select');\
+var scanInfo=document.getElementById('scanInfo');\
+\
+function updateHidden(sel){\
+var grp=sel.parentNode;\
+var hi=grp.querySelector('.hidden-input');\
+var inp=grp.querySelector('input[type=hidden]');\
+if(sel.value==='__hidden__'){\
+hi.style.display='';hi.focus();\
+inp.value=hi.value;\
+hi.oninput=function(){inp.value=hi.value};\
+}else{\
+hi.style.display='none';\
+inp.value=sel.value;\
+}\
+}\
+\
+for(var i=0;i<selects.length;i++){\
+selects[i].addEventListener('change',function(){updateHidden(this)});\
+}\
+\
+fetch('/scan').then(function(r){return r.json()}).then(function(nets){\
+scanInfo.textContent=nets.length+' network'+(nets.length!==1?'s':'')+' found';\
+nets.sort(function(a,b){return b.rssi-a.rssi});\
+for(var i=0;i<selects.length;i++){\
+var sel=selects[i];\
+var cur=sel.parentNode.querySelector('input[type=hidden]').value;\
+var first=sel.options[0];\
+while(sel.options.length>0)sel.remove(0);\
+if(cur){\
+var oc=document.createElement('option');\
+oc.value=cur;oc.textContent=cur;oc.selected=true;sel.add(oc);\
+}\
+var blank=document.createElement('option');\
+blank.value='';blank.textContent='-- Select network --';sel.add(blank);\
+for(var j=0;j<nets.length;j++){\
+var o=document.createElement('option');\
+o.value=nets[j].ssid;\
+o.textContent=nets[j].ssid+' ('+nets[j].rssi+' dBm, '+nets[j].auth+')';\
+if(!cur&&nets[j].ssid===cur)o.selected=true;\
+sel.add(o);\
+}\
+var h=document.createElement('option');\
+h.value='__hidden__';h.textContent='Hidden network...';sel.add(h);\
+}\
+}).catch(function(){\
+scanInfo.textContent='Scan unavailable. Enter SSIDs manually.';\
+for(var i=0;i<selects.length;i++){\
+var sel=selects[i];\
+var inp=sel.parentNode.querySelector('input[type=hidden]');\
+var hi=sel.parentNode.querySelector('.hidden-input');\
+sel.style.display='none';\
+hi.style.display='';hi.value=inp.value;\
+hi.oninput=function(){this.parentNode.querySelector('input[type=hidden]').value=this.value};\
+}\
+});\
+\
+var akSel=document.getElementById('apiKeyAction');\
+var akField=document.getElementById('apiKeyField');\
+akSel.addEventListener('change',function(){akField.style.display=akSel.value==='set'?'':'none'});\
+akSel.dispatchEvent(new Event('change'));\
+\
+document.getElementById('provForm').addEventListener('submit',function(e){\
+var inp=document.querySelector('input[name=ssid_0]');\
+if(!inp.value){\
+e.preventDefault();\
+alert('At least one WiFi network is required.');return;\
+}\
+var s=document.getElementById('status');\
+s.style.display='block';s.style.background='#ffe';s.style.border='1px solid #cc0';\
+s.textContent='Saving and connecting...';\
+document.getElementById('submitBtn').disabled=true;\
+});\
+})();\
+</script></body></html>");
+
+    html
+}
+
+// ---------------------------------------------------------------------------
+// Provision success HTML (FR-012)
+// ---------------------------------------------------------------------------
+
+/// Render the post-provisioning success page.
+///
+/// When the API key was generated, it MUST be displayed exactly once (FR-012).
+/// The user copies it here — it will never be shown again.
+///
+/// - `generated_api_key`: the plaintext API key if one was generated (shown once)
+/// - `hostname`: the configured hostname
+/// - `ssid_count`: number of configured WiFi networks
+pub fn render_provision_success(
+    generated_api_key: Option<&str>,
+    hostname: &str,
+    ssid_count: usize,
+) -> String {
+    let mut html = String::with_capacity(2048);
+    html.push_str("<!DOCTYPE html><html><head>\
+        <meta charset=\"utf-8\">\
+        <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+        <title>Setup Complete</title>\
+        <style>\
+        *{box-sizing:border-box;margin:0;padding:0}\
+        body{font-family:sans-serif;padding:1em;max-width:480px;margin:0 auto;background:#f5f5f5}\
+        h1{margin-bottom:.5em;color:#080}\
+        .info{margin-bottom:1em}\
+        .key-box{background:#fff;border:2px solid #f90;padding:1em;border-radius:4px;margin:1em 0;\
+        word-break:break-all;font-family:monospace;font-size:1.1em;user-select:all}\
+        .warning{color:#c60;font-weight:bold;margin-bottom:.5em}\
+        #status{padding:.75em;border-radius:4px;margin-top:1em;background:#ffe;border:1px solid #cc0}\
+        .connected{background:#efe!important;border:1px solid #0c0!important}\
+        .failed{background:#fee!important;border:1px solid #c00!important}\
+        </style></head><body>\
+        <h1>Setup Complete</h1>\
+        <div class=\"info\"><p>Hostname: <strong>");
+    html.push_str(&html_escape(hostname));
+    html.push_str("</strong></p><p>WiFi networks configured: <strong>");
+    html.push_str(&alloc::format!("{}", ssid_count));
+    html.push_str("</strong></p></div>");
+
+    if let Some(key) = generated_api_key {
+        html.push_str("<div class=\"warning\">Save your API key now! \
+            It will not be shown again.</div>\
+            <div class=\"key-box\" id=\"apiKey\">");
+        html.push_str(&html_escape(key));
+        html.push_str("</div>");
+    }
+
+    html.push_str("<div id=\"status\">Connecting...</div>\
         <script>\
-        var sel=document.querySelector('[name=api_key_action]');\
-        var f=document.getElementById('apiKeyField');\
-        sel.addEventListener('change',function(){f.style.display=sel.value==='set'?'':'none'});\
-        sel.dispatchEvent(new Event('change'));\
-        document.getElementById('provForm').addEventListener('submit',function(){\
-        var s=document.getElementById('status');\
-        s.style.display='block';s.style.background='#ffe';s.style.border='1px solid #cc0';\
-        s.textContent='Connecting...';\
-        setTimeout(function(){fetch('/status').then(function(r){return r.json()}).then(function(d){\
-        if(d.state==='connected'){s.style.background='#efe';s.style.border='1px solid #0c0';\
-        s.textContent='Connected! IP: '+(d.ip||'unknown')}\
-        else if(d.state==='failed'){s.style.background='#fee';s.style.border='1px solid #c00';\
-        s.textContent='Failed: '+(d.message||'unknown error')}\
-        else{s.textContent='Status: '+d.state}}).catch(function(){s.textContent='Checking...'})},3000)});\
-        </script></body></html>");
+(function(){\
+var s=document.getElementById('status');\
+var poll=setInterval(function(){\
+fetch('/status').then(function(r){return r.json()}).then(function(d){\
+if(d.state==='connected'){\
+s.className='connected';\
+s.textContent='Connected! IP: '+(d.ip||'unknown');\
+clearInterval(poll);\
+}else if(d.state==='failed'){\
+s.className='failed';\
+s.textContent='Connection failed: '+(d.message||'unknown error');\
+clearInterval(poll);\
+}else{s.textContent='Connecting... ('+d.state+')'}\
+}).catch(function(){s.textContent='Checking connection...'});\
+},2000);\
+})();\
+</script></body></html>");
 
     html
 }
@@ -566,6 +740,25 @@ mod tests {
     }
 
     #[test]
+    fn form_has_ssid_select_dropdowns() {
+        let html = render_provisioning_form(2, &[], "eOMI", true, None);
+        // Each AP slot should have a select for scanned networks
+        assert!(html.contains("class=\"ssid-select\""));
+        assert!(html.contains("data-idx=\"0\""));
+        assert!(html.contains("data-idx=\"1\""));
+        // Hidden network option
+        assert!(html.contains("__hidden__"));
+        assert!(html.contains("Hidden network..."));
+    }
+
+    #[test]
+    fn form_has_scan_fetch_js() {
+        let html = render_provisioning_form(1, &[], "eOMI", true, None);
+        assert!(html.contains("fetch('/scan')"));
+        assert!(html.contains("scanInfo"));
+    }
+
+    #[test]
     fn form_prefills_saved_ssids() {
         let html = render_provisioning_form(3, &["SavedNet"], "myhost", false, None);
         assert!(html.contains("value=\"SavedNet\""));
@@ -573,11 +766,34 @@ mod tests {
     }
 
     #[test]
+    fn form_saved_ssid_in_select_and_hidden() {
+        let html = render_provisioning_form(2, &["MyNet"], "eOMI", false, None);
+        // Saved SSID should appear as selected option in select dropdown
+        assert!(html.contains("selected>MyNet</option>"));
+        // And in the hidden input that carries the form value
+        assert!(html.contains("name=\"ssid_0\" value=\"MyNet\""));
+    }
+
+    #[test]
+    fn form_shows_password_saved_hint() {
+        let html = render_provisioning_form(2, &["Net1"], "eOMI", false, None);
+        // First slot has a saved SSID — show password hint
+        assert!(html.contains("(unchanged if left empty)"));
+        assert!(html.contains("Password saved. Leave empty to keep."));
+    }
+
+    #[test]
+    fn form_no_password_hint_for_empty_slots() {
+        let html = render_provisioning_form(2, &[], "eOMI", true, None);
+        assert!(!html.contains("Password saved"));
+        assert!(!html.contains("unchanged if left empty"));
+    }
+
+    #[test]
     fn form_escapes_html_in_values() {
         let html = render_provisioning_form(1, &["<script>"], "h\"ost", false, None);
         assert!(html.contains("&lt;script&gt;"));
         assert!(html.contains("h&quot;ost"));
-        // The SSID value must be escaped — check it doesn't appear raw in a value attr
         assert!(!html.contains("value=\"<script>\""));
     }
 
@@ -599,6 +815,59 @@ mod tests {
     fn form_reprovisioning_has_keep_option() {
         let html = render_provisioning_form(1, &["Net"], "eOMI", false, None);
         assert!(html.contains("value=\"keep\""));
+    }
+
+    #[test]
+    fn form_reprovisioning_api_key_hint() {
+        let html = render_provisioning_form(1, &["Net"], "eOMI", false, None);
+        assert!(html.contains("API key is set"));
+    }
+
+    #[test]
+    fn form_has_client_side_validation() {
+        let html = render_provisioning_form(1, &[], "eOMI", true, None);
+        // FR-015: JS validates at least one SSID before submit
+        assert!(html.contains("At least one WiFi network is required"));
+    }
+
+    // --- render_provision_success ---
+
+    #[test]
+    fn success_page_shows_generated_key() {
+        let html = render_provision_success(Some("abc123secret"), "mydevice", 2);
+        // FR-012: display generated key once
+        assert!(html.contains("abc123secret"));
+        assert!(html.contains("will not be shown again"));
+        assert!(html.contains("key-box"));
+    }
+
+    #[test]
+    fn success_page_no_key_when_not_generated() {
+        let html = render_provision_success(None, "eOMI", 1);
+        assert!(!html.contains("id=\"apiKey\""));
+        assert!(!html.contains("will not be shown again"));
+    }
+
+    #[test]
+    fn success_page_shows_config_summary() {
+        let html = render_provision_success(None, "myhost", 3);
+        assert!(html.contains("myhost"));
+        assert!(html.contains("3"));
+        assert!(html.contains("Setup Complete"));
+    }
+
+    #[test]
+    fn success_page_escapes_values() {
+        let html = render_provision_success(Some("<key>"), "h\"ost", 1);
+        assert!(html.contains("&lt;key&gt;"));
+        assert!(html.contains("h&quot;ost"));
+    }
+
+    #[test]
+    fn success_page_polls_status() {
+        let html = render_provision_success(None, "eOMI", 1);
+        assert!(html.contains("fetch('/status')"));
+        assert!(html.contains("Connecting..."));
     }
 
     // --- ConnectionStatus / ScannedNetwork JSON ---

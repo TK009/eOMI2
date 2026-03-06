@@ -37,3 +37,5 @@ pub mod server;
 pub mod wifi_ap;
 #[cfg(feature = "std")]
 pub mod dns;
+#[cfg(feature = "std")]
+pub mod mdns;

@@ -505,6 +505,7 @@ impl Engine {
             let mut ctx = ScriptCallbackCtx {
                 pending_writes: &mut pending_writes,
                 depth,
+                tree: &self.tree as *const _,
             };
             let ctx_foreign = ffi::mjs_mk_foreign(mjs, &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void);
             let (n, l) = mjs_name!("__ctx");

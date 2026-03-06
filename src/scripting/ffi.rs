@@ -105,6 +105,10 @@ extern "C" {
     pub fn mjs_arg(mjs: *mut mjs, n: c_int) -> mjs_val_t;
     pub fn mjs_return(mjs: *mut mjs, v: mjs_val_t);
 
+    // --- Arrays ---
+    pub fn mjs_mk_array(mjs: *mut mjs) -> mjs_val_t;
+    pub fn mjs_array_push(mjs: *mut mjs, arr: mjs_val_t, val: mjs_val_t) -> mjs_err_t;
+
     // --- GC ---
     pub fn mjs_gc(mjs: *mut mjs, full: c_int);
 

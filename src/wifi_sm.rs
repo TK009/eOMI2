@@ -389,6 +389,58 @@ mod tests {
     }
 
     #[test]
+    fn credentials_updated_clamps_start_index() {
+        let mut sm = WifiSm::new(0, test_config());
+        // start_index beyond num_creds should be clamped
+        let action = sm.credentials_updated(2, 10);
+        assert_eq!(*sm.state(), WifiState::Connecting { ssid_index: 1 });
+        assert_eq!(action, WifiAction::TryConnect { ssid_index: 1 });
+    }
+
+    #[test]
+    fn credentials_updated_to_zero_starts_portal() {
+        let mut sm = WifiSm::new(2, test_config());
+        sm.handle_event(WifiEvent::ConnectSuccess);
+        assert_eq!(*sm.state(), WifiState::Connected);
+
+        let action = sm.credentials_updated(0, 0);
+        assert_eq!(*sm.state(), WifiState::Unconfigured);
+        assert_eq!(action, WifiAction::StartPortal);
+    }
+
+    #[test]
+    fn credentials_updated_resets_rotation_counter() {
+        let mut sm = WifiSm::new(1, test_config());
+        // Exhaust rotations to reach portal
+        sm.handle_event(WifiEvent::ConnectFailed);
+        sm.handle_event(WifiEvent::BackoffComplete);
+        sm.handle_event(WifiEvent::ConnectFailed);
+        sm.handle_event(WifiEvent::BackoffComplete);
+        sm.handle_event(WifiEvent::ConnectFailed);
+        assert_eq!(*sm.state(), WifiState::Portal);
+
+        // credentials_updated should reset rotation and restart
+        let action = sm.credentials_updated(2, 0);
+        assert_eq!(*sm.state(), WifiState::Connecting { ssid_index: 0 });
+        assert_eq!(action, WifiAction::TryConnect { ssid_index: 0 });
+
+        // Should be able to do full rotations again (not immediately portal)
+        sm.handle_event(WifiEvent::ConnectFailed);
+        sm.handle_event(WifiEvent::ConnectFailed);
+        assert!(matches!(*sm.state(), WifiState::Backoff));
+    }
+
+    #[test]
+    fn unconfigured_saved_ssid_found_connects() {
+        let mut sm = WifiSm::new(0, test_config());
+        assert_eq!(*sm.state(), WifiState::Unconfigured);
+
+        let action = sm.handle_event(WifiEvent::SavedSsidFound { ssid_index: 0 });
+        assert_eq!(*sm.state(), WifiState::Connecting { ssid_index: 0 });
+        assert_eq!(action, WifiAction::TryConnect { ssid_index: 0 });
+    }
+
+    #[test]
     fn ignores_mismatched_events() {
         let mut sm = WifiSm::new(1, test_config());
         // Connected state ignoring BackoffComplete

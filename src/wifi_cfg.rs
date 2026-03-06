@@ -265,6 +265,67 @@ mod tests {
 
     #[cfg(feature = "json")]
     #[test]
+    fn api_key_hash_roundtrip() {
+        // Simulate a realistic SHA-256 hash stored in api_key_hash
+        let mut cfg = WifiConfig::new();
+        cfg.api_key_hash = vec![
+            0x6a, 0x09, 0xe6, 0x67, 0xbb, 0x67, 0xae, 0x85,
+            0x3c, 0x6e, 0xf3, 0x72, 0xa5, 0x4f, 0xf5, 0x3a,
+            0x51, 0x0e, 0x52, 0x7f, 0x9b, 0x05, 0x68, 0x8c,
+            0x1f, 0x83, 0xd9, 0xab, 0x5b, 0xe0, 0xcd, 0x19,
+        ];
+        let blob = serialize_wifi_config(&cfg).unwrap();
+        let restored = deserialize_wifi_config(&blob).unwrap();
+        assert_eq!(cfg.api_key_hash, restored.api_key_hash);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn config_at_max_aps_roundtrip() {
+        let mut cfg = WifiConfig::new();
+        for i in 0..MAX_WIFI_APS {
+            assert!(cfg.add_ssid(format!("Network_{}", i), format!("password_{}", i)));
+        }
+        cfg.hostname = "my-device".into();
+        cfg.api_key_hash = vec![0xAA; 32];
+        let blob = serialize_wifi_config(&cfg).unwrap();
+        let restored = deserialize_wifi_config(&blob).unwrap();
+        assert_eq!(cfg, restored);
+        assert_eq!(restored.ssids.len(), MAX_WIFI_APS);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn unicode_ssid_password_roundtrip() {
+        let mut cfg = WifiConfig::new();
+        cfg.ssids.push(("カフェ".into(), "пароль123".into()));
+        cfg.ssids.push(("Ñoño".into(), "contraseña".into()));
+        let blob = serialize_wifi_config(&cfg).unwrap();
+        let restored = deserialize_wifi_config(&blob).unwrap();
+        assert_eq!(cfg.ssids, restored.ssids);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn empty_hostname_roundtrip() {
+        let mut cfg = WifiConfig::new();
+        cfg.hostname = String::new();
+        cfg.ssids.push(("Net".into(), "pass".into()));
+        let blob = serialize_wifi_config(&cfg).unwrap();
+        let restored = deserialize_wifi_config(&blob).unwrap();
+        assert_eq!(restored.hostname, "");
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn deserialize_missing_fields() {
+        // JSON missing required fields should fail
+        assert!(deserialize_wifi_config(b"{}").is_err());
+        assert!(deserialize_wifi_config(b"{\"ssids\":[]}").is_err());
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
     fn multiple_ssids_roundtrip() {
         let mut cfg = WifiConfig::new();
         cfg.ssids.push(("Home".into(), "pass1".into()));

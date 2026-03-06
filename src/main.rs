@@ -11,6 +11,7 @@ use reconfigurable_device::device::{
     build_sensor_tree, collect_writable_items, PATH_FREE_HEAP,
 };
 use reconfigurable_device::dns::DnsServer;
+use reconfigurable_device::mdns::{MdnsConfig, MdnsResponder};
 use reconfigurable_device::nvs::{load_writable_items, open_nvs, save_writable_items};
 use reconfigurable_device::odf::OmiValue;
 use reconfigurable_device::http::now_secs;
@@ -106,6 +107,8 @@ fn main() -> Result<()> {
 
     let mut ap_active = false;
     let mut dns_server: Option<DnsServer> = None;
+    let mut mdns_responder: Option<MdnsResponder> = None;
+    let mut last_sta_ip: Option<String> = None;
 
     // Determine initial server mode based on WiFi state
     let initial_mode = if creds.is_empty() {
@@ -148,6 +151,16 @@ fn main() -> Result<()> {
     if *wifi_sm.state() == WifiState::Connected {
         let ip_info = wifi.wifi().sta_netif().get_ip_info()?;
         info!("Wi-Fi connected. IP: {}", ip_info.ip);
+        last_sta_ip = Some(ip_info.ip.to_string());
+
+        // FR-007: start mDNS only in station mode (not AP)
+        match MdnsResponder::start(MdnsConfig::new(&hostname)) {
+            Ok(resp) => {
+                info!("mDNS responder started for {}.local", hostname);
+                mdns_responder = Some(resp);
+            }
+            Err(e) => warn!("Failed to start mDNS responder: {}", e),
+        }
     } else if ap_active {
         info!("No STA connection yet — captive portal active on {}", wifi_ap::AP_IP);
     }
@@ -303,6 +316,43 @@ fn main() -> Result<()> {
         if portal.mode() != target_mode {
             portal.set_mode(target_mode);
             info!("Server mode changed to {:?}", target_mode);
+        }
+
+        // mDNS lifecycle: start when Connected, stop otherwise (FR-007)
+        match wifi_sm.state() {
+            WifiState::Connected => {
+                if mdns_responder.is_none() {
+                    match MdnsResponder::start(MdnsConfig::new(&hostname)) {
+                        Ok(resp) => {
+                            info!("mDNS responder started for {}.local", hostname);
+                            mdns_responder = Some(resp);
+                        }
+                        Err(e) => warn!("Failed to start mDNS responder: {}", e),
+                    }
+                }
+
+                // Check for IP change (DHCP renewal)
+                if let Ok(ip_info) = wifi.wifi().sta_netif().get_ip_info() {
+                    let current_ip = ip_info.ip.to_string();
+                    if last_sta_ip.as_deref() != Some(&current_ip) {
+                        info!("STA IP changed: {:?} → {}", last_sta_ip, current_ip);
+                        last_sta_ip = Some(current_ip);
+                        if let Some(ref mut resp) = mdns_responder {
+                            if let Err(e) = resp.update_ip() {
+                                warn!("mDNS update_ip failed: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {
+                // FR-007: mDNS MUST NOT be active in AP mode or when disconnected
+                if let Some(resp) = mdns_responder.take() {
+                    info!("Stopping mDNS responder (state: {:?})", wifi_sm.state());
+                    resp.stop();
+                    last_sta_ip = None;
+                }
+            }
         }
 
         // Record free heap memory

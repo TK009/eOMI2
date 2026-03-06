@@ -215,7 +215,7 @@ pub fn build_read_op(odf_path: &str, params: &OmiReadParams) -> OmiMessage {
 }
 
 /// Escape HTML special characters to prevent XSS.
-fn html_escape(s: &str) -> String {
+pub fn html_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {

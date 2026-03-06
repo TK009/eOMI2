@@ -16,6 +16,8 @@ pub mod pages;
 pub mod psram;
 #[cfg(feature = "std")]
 pub mod http;
+#[cfg(feature = "std")]
+pub mod captive_portal;
 #[cfg(feature = "scripting")]
 pub mod scripting;
 #[cfg(feature = "std")]

@@ -35,3 +35,5 @@ pub mod callback;
 pub mod server;
 #[cfg(feature = "std")]
 pub mod wifi_ap;
+#[cfg(feature = "std")]
+pub mod dns;

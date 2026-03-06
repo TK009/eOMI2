@@ -24,6 +24,7 @@ use reconfigurable_device::wifi_cfg;
 use reconfigurable_device::wifi_sm::{WifiSm, WifiSmConfig, WifiEvent, WifiAction, WifiState};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 const WIFI_SSID: Option<&str> = option_env!("WIFI_SSID");
 const WIFI_PASS: Option<&str> = option_env!("WIFI_PASS");
@@ -194,17 +195,32 @@ fn main() -> Result<()> {
         }
     }
 
+    // Perform initial WiFi scan if portal is active (populate /scan results)
+    if ap_active {
+        match wifi_ap::scan_networks(&mut wifi) {
+            Ok(networks) => {
+                info!("Initial WiFi scan: {} networks found", networks.len());
+                *lock_or_recover(&portal.scan_results, "scan_results") = networks;
+            }
+            Err(e) => warn!("Initial WiFi scan failed: {}", e),
+        }
+    }
+
     // Main loop
     const TICK_INTERVAL_MS: u64 = 5000;
     const POLL_INTERVAL_MS: u64 = 100;
+    const SCAN_INTERVAL_MS: u64 = 15_000; // WiFi scan every 15s in portal mode
     let mut elapsed_ms: u64 = TICK_INTERVAL_MS;
+    let mut scan_elapsed_ms: u64 = 0;
+    let mut backoff_deadline: Option<Instant> = None;
     let mut wifi_rl = RateLimiter::new();
     let mut delivery_rl = RateLimiter::new();
     loop {
         std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
         elapsed_ms += POLL_INTERVAL_MS;
+        scan_elapsed_ms += POLL_INTERVAL_MS;
 
-        // Drain write-triggered event deliveries
+        // Drain write-triggered event deliveries (100ms cadence preserved)
         {
             let event_deliveries: Vec<_> = lock_or_recover(&pending_deliveries, "pending_deliveries")
                 .drain(..)
@@ -228,6 +244,41 @@ fn main() -> Result<()> {
             );
         }
 
+        // Check backoff timer completion
+        if let Some(deadline) = backoff_deadline {
+            if Instant::now() >= deadline {
+                backoff_deadline = None;
+                let action = wifi_sm.handle_event(WifiEvent::BackoffComplete);
+                handle_reconnect_action(
+                    &mut wifi_sm, &mut wifi, &creds, action, &mut wifi_rl,
+                    &hostname, &mut ap_active, &mut dns_server, &portal,
+                    &mut backoff_deadline,
+                );
+            }
+        }
+
+        // Periodic WiFi scan while portal is active (FR-018 + populate /scan)
+        if ap_active && scan_elapsed_ms >= SCAN_INTERVAL_MS {
+            scan_elapsed_ms = 0;
+            match wifi_ap::scan_networks(&mut wifi) {
+                Ok(networks) => {
+                    // Check for saved SSIDs in scan results (FR-018 auto-reconnect)
+                    if matches!(*wifi_sm.state(), WifiState::Portal | WifiState::Unconfigured) {
+                        if let Some(idx) = find_saved_ssid_in_scan(&networks, &creds) {
+                            info!("FR-018: saved SSID '{}' found in scan, attempting auto-reconnect", creds[idx].0);
+                            let action = wifi_sm.handle_event(WifiEvent::SavedSsidFound { ssid_index: idx });
+                            handle_portal_reconnect(
+                                &mut wifi_sm, &mut wifi, &creds, action,
+                                &hostname, &mut ap_active, &mut dns_server, &portal,
+                            );
+                        }
+                    }
+                    *lock_or_recover(&portal.scan_results, "scan_results") = networks;
+                }
+                Err(e) => warn!("WiFi scan failed: {}", e),
+            }
+        }
+
         if elapsed_ms < TICK_INTERVAL_MS {
             continue;
         }
@@ -239,6 +290,7 @@ fn main() -> Result<()> {
             handle_reconnect_action(
                 &mut wifi_sm, &mut wifi, &creds, action, &mut wifi_rl,
                 &hostname, &mut ap_active, &mut dns_server, &portal,
+                &mut backoff_deadline,
             );
         }
 
@@ -435,6 +487,7 @@ fn handle_reconnect_action(
     ap_active: &mut bool,
     dns_server: &mut Option<DnsServer>,
     portal: &Arc<PortalState>,
+    backoff_deadline: &mut Option<Instant>,
 ) {
     loop {
         match action {
@@ -485,10 +538,73 @@ fn handle_reconnect_action(
                 portal.set_mode(ServerMode::Normal);
                 break;
             }
-            WifiAction::WaitBackoff { .. } => {
+            WifiAction::WaitBackoff { ms } => {
+                info!("WiFi backoff: {}ms before next rotation", ms);
+                *backoff_deadline = Some(Instant::now() + std::time::Duration::from_millis(ms));
                 break;
             }
             WifiAction::Idle => break,
+        }
+    }
+}
+
+/// Find the first saved SSID that appears in scan results (FR-018).
+fn find_saved_ssid_in_scan(
+    networks: &[reconfigurable_device::captive_portal::ScannedNetwork],
+    creds: &[(String, String)],
+) -> Option<usize> {
+    for (idx, (ssid, _)) in creds.iter().enumerate() {
+        if networks.iter().any(|n| n.ssid == *ssid) {
+            return Some(idx);
+        }
+    }
+    None
+}
+
+/// Handle auto-reconnect attempt from portal when a saved SSID is found (FR-018).
+fn handle_portal_reconnect(
+    sm: &mut WifiSm,
+    wifi: &mut BlockingWifi<EspWifi<'static>>,
+    creds: &[(String, String)],
+    action: WifiAction,
+    hostname: &str,
+    ap_active: &mut bool,
+    dns_server: &mut Option<DnsServer>,
+    portal: &Arc<PortalState>,
+) {
+    if let WifiAction::TryConnect { ssid_index } = action {
+        if ssid_index < creds.len() {
+            let (ssid, pass) = &creds[ssid_index];
+            match wifi_ap::try_connect_sta(wifi, ssid, pass, hostname) {
+                Ok(()) => {
+                    info!("FR-018: auto-reconnected to {}", ssid);
+                    let stop_action = sm.portal_connect_succeeded();
+
+                    // Stop portal infrastructure
+                    if matches!(stop_action, WifiAction::StopPortal) {
+                        if let Some(dns) = dns_server.take() {
+                            drop(dns);
+                        }
+                        if *ap_active {
+                            if let Err(e) = wifi_ap::stop_ap(wifi) {
+                                warn!("Failed to stop soft-AP: {}", e);
+                            } else {
+                                *ap_active = false;
+                            }
+                        }
+                        portal.set_mode(ServerMode::Normal);
+
+                        let ip_info = wifi.wifi().sta_netif().get_ip_info()
+                            .map(|i| i.ip.to_string())
+                            .unwrap_or_default();
+                        info!("Wi-Fi connected. IP: {}", ip_info);
+                    }
+                }
+                Err(e) => {
+                    warn!("FR-018: auto-reconnect to {} failed: {}", ssid, e);
+                    sm.handle_event(WifiEvent::ConnectFailed);
+                }
+            }
         }
     }
 }

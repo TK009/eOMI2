@@ -83,6 +83,41 @@ mod esp_impl {
         Ok(())
     }
 
+    /// Scan for visible WiFi networks while AP is running (mixed mode).
+    ///
+    /// Returns a list of unique SSIDs with signal strength and auth type.
+    /// Safe to call periodically — non-destructive to the AP.
+    pub fn scan_networks(
+        wifi: &mut BlockingWifi<EspWifi<'static>>,
+    ) -> anyhow::Result<Vec<crate::captive_portal::ScannedNetwork>> {
+        use esp_idf_svc::wifi::AuthMethod;
+
+        let scan = wifi.scan()?;
+        let mut seen = std::collections::HashSet::new();
+        let mut results = Vec::new();
+        for ap in scan {
+            let ssid: String = ap.ssid.to_string();
+            if ssid.is_empty() || !seen.insert(ssid.clone()) {
+                continue;
+            }
+            let auth = match ap.auth_method.unwrap_or(AuthMethod::None) {
+                AuthMethod::None => "Open",
+                AuthMethod::WEP => "WEP",
+                AuthMethod::WPA => "WPA",
+                AuthMethod::WPA2Personal => "WPA2",
+                AuthMethod::WPA3Personal => "WPA3",
+                AuthMethod::WPA2WPA3Personal => "WPA2/WPA3",
+                _ => "Other",
+            };
+            results.push(crate::captive_portal::ScannedNetwork {
+                ssid,
+                rssi: ap.signal_strength as i32,
+                auth: auth.to_string(),
+            });
+        }
+        Ok(results)
+    }
+
     /// Try connecting the STA side while AP is running (mixed mode).
     ///
     /// Sets the mixed configuration with the given STA credentials and the
@@ -113,7 +148,7 @@ mod esp_impl {
 }
 
 #[cfg(feature = "esp")]
-pub use esp_impl::{start_ap, stop_ap, try_connect_sta};
+pub use esp_impl::{scan_networks, start_ap, stop_ap, try_connect_sta};
 
 #[cfg(test)]
 mod tests {

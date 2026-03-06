@@ -27,6 +27,8 @@ json = ["dep:serde", "dep:serde_json"]
 scripting = ["std", "dep:cc"]
 psram = []
 
+deny_api_during_provisioning = []
+
 experimental = ["esp-idf-svc/experimental"]
 
 [dependencies]

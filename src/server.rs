@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 use std::sync::{Arc, Mutex};
 
@@ -18,6 +18,9 @@ use esp_idf_svc::{
 };
 use log::{debug, info, warn};
 
+use crate::captive_portal::{
+    self, ConnectionState, ConnectionStatus, ProvisionForm, ScannedNetwork,
+};
 use crate::http::{
     build_read_op, check_bearer_auth, is_mutating_operation, is_successful_write_response,
     now_secs, omi_uri_to_odf_path, render_landing_page, uri_path, uri_query,
@@ -28,25 +31,138 @@ use crate::omi::{Engine, OmiMessage, OmiResponse, Operation, SessionId};
 use crate::omi::subscriptions::{Delivery, DeliveryTarget};
 use crate::pages::{PageError, PageStore};
 use crate::sync_util::lock_or_recover;
+use crate::wifi_ap;
+
+// ---------------------------------------------------------------------------
+// Server mode & portal state
+// ---------------------------------------------------------------------------
+
+/// Server routing mode — controls which routes are active.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerMode {
+    /// Normal operation — OMI routes + page store.
+    Normal = 0,
+    /// Captive portal active — provisioning form + optional OMI routes.
+    Portal = 1,
+}
+
+/// Pending provisioning request queued by POST /provision for the main loop.
+pub struct PendingProvision {
+    pub form: ProvisionForm,
+    /// Plaintext API key if generated. Main loop hashes and saves, then drops.
+    pub generated_api_key: Option<String>,
+}
+
+/// Configuration for rendering the captive portal form.
+struct FormConfig {
+    max_aps: usize,
+    saved_ssids: Vec<String>,
+    hostname: String,
+    is_first_setup: bool,
+    error_message: Option<String>,
+}
+
+/// Shared state for portal mode, accessed by HTTP handlers and main loop.
+pub struct PortalState {
+    mode: AtomicU8,
+    pub connection_status: Mutex<ConnectionStatus>,
+    pub pending_provision: Mutex<Option<PendingProvision>>,
+    pub scan_results: Mutex<Vec<ScannedNetwork>>,
+    form_config: Mutex<FormConfig>,
+}
+
+impl PortalState {
+    pub fn new(
+        mode: ServerMode,
+        max_aps: usize,
+        saved_ssids: Vec<String>,
+        hostname: String,
+        is_first_setup: bool,
+    ) -> Self {
+        Self {
+            mode: AtomicU8::new(mode as u8),
+            connection_status: Mutex::new(ConnectionStatus {
+                state: ConnectionState::Idle,
+                message: None,
+                ip: None,
+            }),
+            pending_provision: Mutex::new(None),
+            scan_results: Mutex::new(Vec::new()),
+            form_config: Mutex::new(FormConfig {
+                max_aps,
+                saved_ssids,
+                hostname,
+                is_first_setup,
+                error_message: None,
+            }),
+        }
+    }
+
+    /// Get the current server mode (lock-free).
+    pub fn mode(&self) -> ServerMode {
+        match self.mode.load(Ordering::Acquire) {
+            1 => ServerMode::Portal,
+            _ => ServerMode::Normal,
+        }
+    }
+
+    /// Set the server mode (lock-free).
+    pub fn set_mode(&self, mode: ServerMode) {
+        self.mode.store(mode as u8, Ordering::Release);
+    }
+
+    /// Take the pending provision request for main loop processing.
+    pub fn take_pending_provision(&self) -> Option<PendingProvision> {
+        lock_or_recover(&self.pending_provision, "pending_provision").take()
+    }
+
+    /// Update the form error message (shown on next GET /).
+    pub fn set_form_error(&self, msg: Option<String>) {
+        lock_or_recover(&self.form_config, "form_config").error_message = msg;
+    }
+
+    /// Update form rendering config after provisioning.
+    pub fn update_form_config(&self, saved_ssids: Vec<String>, hostname: String) {
+        let mut cfg = lock_or_recover(&self.form_config, "form_config");
+        cfg.saved_ssids = saved_ssids;
+        cfg.hostname = hostname;
+        cfg.is_first_setup = false;
+    }
+}
+
+/// Check if OMI API routes should be denied (portal mode + deny flag).
+fn is_api_denied(portal: &PortalState) -> bool {
+    cfg!(feature = "deny_api_during_provisioning") && portal.mode() == ServerMode::Portal
+}
+
+const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
+
+/// Generate a random 32-character hex API key using ESP hardware RNG.
+fn generate_api_key() -> String {
+    let mut bytes = [0u8; 16];
+    for chunk in bytes.chunks_mut(4) {
+        let r = unsafe { esp_idf_svc::sys::esp_random() };
+        let rb = r.to_ne_bytes();
+        chunk.copy_from_slice(&rb[..chunk.len()]);
+    }
+    let mut hex = String::with_capacity(32);
+    for b in bytes {
+        hex.push(HEX_CHARS[(b >> 4) as usize] as char);
+        hex.push(HEX_CHARS[(b & 0x0f) as usize] as char);
+    }
+    hex
+}
+
+// ---------------------------------------------------------------------------
+// Existing helpers (unchanged)
+// ---------------------------------------------------------------------------
 
 /// Monotonic counter for assigning unique WebSocket session IDs.
-/// Avoids fd-reuse races where a new connection gets the same fd as a
-/// recently closed one before the close handler fires.
 static NEXT_WS_SESSION: AtomicU32 = AtomicU32::new(1);
 
 pub type WsSenders = Arc<Mutex<BTreeMap<SessionId, EspHttpWsDetachedSender>>>;
-/// Write-triggered event deliveries queued by HTTP handlers for dispatch
-/// by the main loop. `httpd_ws_send_frame_async` must not be called from
-/// within the httpd task thread (where handlers run), so deliveries are
-/// buffered here and drained externally.
 pub type PendingDeliveries = Arc<Mutex<Vec<crate::omi::Delivery>>>;
-/// Maps raw fd → monotonic session ID so the WS handler can look up the
-/// session ID for an existing connection without allocating new IDs.
-///
-/// Note: WS upgrade requests cannot be authenticated because
-/// `EspHttpWsConnection` does not expose HTTP headers.  Write and delete
-/// operations are rejected at the message level; other state-modifying HTTP
-/// endpoints (PATCH, DELETE) require Bearer auth.
 type FdToSession = Arc<Mutex<BTreeMap<i32, SessionId>>>;
 
 /// Read request body up to `max` bytes.
@@ -95,8 +211,6 @@ fn send_body_error(
     }
 }
 
-/// Serialize an OmiMessage response and write it as JSON to the HTTP response.
-/// On serialization failure, sends a 500 with a structured OMI error.
 fn send_omi_json(
     req: esp_idf_svc::http::server::Request<&mut esp_idf_svc::http::server::EspHttpConnection>,
     msg: &OmiMessage,
@@ -115,8 +229,6 @@ fn send_omi_json(
     }
 }
 
-/// Serialize an OmiMessage and send as a WS text frame.
-/// Falls back to a hand-written JSON string if serialization itself fails.
 fn send_ws_omi(
     conn: &mut esp_idf_svc::http::server::ws::EspHttpWsConnection,
     msg: OmiMessage,
@@ -128,7 +240,6 @@ fn send_ws_omi(
     Ok(())
 }
 
-/// Check if the request carries a valid `Authorization: Bearer <token>` header.
 fn check_auth(
     req: &esp_idf_svc::http::server::Request<&mut esp_idf_svc::http::server::EspHttpConnection>,
     token: &str,
@@ -137,11 +248,6 @@ fn check_auth(
 }
 
 /// Dispatch subscription deliveries: send WebSocket frames, POST callbacks, skip poll.
-///
-/// Acquires `ws_senders` lock for WebSocket sends only, then releases it
-/// before delivering callbacks (which may block on HTTP I/O). If needed,
-/// acquires `engine` lock to cancel failed-session subscriptions.
-/// Caller must NOT hold either lock.
 pub fn dispatch_deliveries(
     deliveries: &[Delivery],
     ws_senders: &WsSenders,
@@ -152,7 +258,6 @@ pub fn dispatch_deliveries(
         return;
     }
     let mut failed_sessions: Vec<SessionId> = Vec::new();
-    // Collect callback deliveries to dispatch after releasing the lock.
     let mut pending_callbacks: Vec<(String, String, String)> = Vec::new();
     {
         let mut senders = lock_or_recover(ws_senders, "ws_senders");
@@ -187,15 +292,13 @@ pub fn dispatch_deliveries(
                         }
                     }
                 }
-                DeliveryTarget::Poll => {} // handled via poll()
+                DeliveryTarget::Poll => {}
             }
         }
         for sid in &failed_sessions {
             senders.remove(sid);
         }
     }
-    // Deliver callbacks outside the ws_senders lock to avoid blocking
-    // WebSocket sends on potentially slow HTTP I/O (up to 10s with retry).
     for (url, json, rid) in &pending_callbacks {
         crate::callback::deliver_callback(url, json.as_bytes(), rid);
     }
@@ -207,19 +310,16 @@ pub fn dispatch_deliveries(
     }
 }
 
-/// Stack size for the HTTP server task.
-///
-/// Must accommodate serde_json's recursive-descent parser when handling
-/// deeply nested tree-write payloads.  For `MAX_OBJECT_DEPTH = 8` the
-/// JSON nesting reaches ~18 levels; at ~500-600 bytes per Xtensa frame
-/// that needs ~11 KB for recursion plus ~3 KB for HTTP/handler overhead.
-/// InfoItem metadata fields (e.g. `onwrite` scripts) add extra recursion
-/// depth on top of pure object nesting.  16 KB provides comfortable headroom.
+// ---------------------------------------------------------------------------
+// Server setup
+// ---------------------------------------------------------------------------
+
 const HTTP_THREAD_STACK: usize = 16384;
 
 pub fn start_http_server(
     nvs_dirty: Arc<AtomicBool>,
     api_token: &'static str,
+    portal: Arc<PortalState>,
 ) -> Result<(EspHttpServer<'static>, Arc<Mutex<Engine>>, WsSenders, PendingDeliveries)> {
     let config = HttpConfig {
         http_port: 80,
@@ -238,19 +338,33 @@ pub fn start_http_server(
     // Route registration order: exact before wildcard, WS before OMI wildcard,
     // OMI wildcard before page wildcard.
 
-    // GET / — landing page with list of stored pages
+    // GET / — mode-aware: portal form vs landing page
     let s = store.clone();
+    let p = portal.clone();
     server.fn_handler::<Infallible, _>("/", Method::Get, move |req| {
-        let store = lock_or_recover(&s, "page_store");
-        let html = render_landing_page(&store);
-        let headers = [("Content-Type", "text/html")];
-        send_response(req, 200, "OK", &headers, html.as_bytes());
+        if p.mode() == ServerMode::Portal {
+            let cfg = lock_or_recover(&p.form_config, "form_config");
+            let saved: Vec<&str> = cfg.saved_ssids.iter().map(|s| s.as_str()).collect();
+            let html = captive_portal::render_provisioning_form(
+                cfg.max_aps,
+                &saved,
+                &cfg.hostname,
+                cfg.is_first_setup,
+                cfg.error_message.as_deref(),
+            );
+            let headers = [("Content-Type", "text/html")];
+            send_response(req, 200, "OK", &headers, html.as_bytes());
+        } else {
+            let store = lock_or_recover(&s, "page_store");
+            let html = render_landing_page(&store);
+            let headers = [("Content-Type", "text/html")];
+            send_response(req, 200, "OK", &headers, html.as_bytes());
+        }
         Ok(())
     })?;
 
     // POST / — accept HTML+JS payload (unchanged behavior)
     server.fn_handler::<Infallible, _>("/", Method::Post, |mut req| {
-        // Cap at 64KB to prevent OOM on constrained devices
         const MAX_PAYLOAD: usize = 64 * 1024;
         let buf = match read_body(&mut req, MAX_PAYLOAD) {
             Ok(b) => b,
@@ -267,8 +381,107 @@ pub fn start_http_server(
         info!("POST / len={}", body.len());
         debug!("Payload:\n{}", body);
 
-        // TODO: parse HTML, extract <script> tags, execute JS
         send_response(req, 200, "OK", &[], b"OK: payload received");
+        Ok(())
+    })?;
+
+    // POST /provision — captive portal form submission (FR-016)
+    let p = portal.clone();
+    server.fn_handler::<Infallible, _>("/provision", Method::Post, move |mut req| {
+        const MAX_FORM: usize = 4096;
+        let buf = match read_body(&mut req, MAX_FORM) {
+            Ok(b) => b,
+            Err(e) => { send_body_error(req, e, "Form body exceeds 4KB limit"); return Ok(()); }
+        };
+        let body = match String::from_utf8(buf) {
+            Ok(s) => s,
+            Err(_) => {
+                send_response(req, 400, "Bad Request", &[], b"Invalid UTF-8");
+                return Ok(());
+            }
+        };
+
+        let max_aps = lock_or_recover(&p.form_config, "form_config").max_aps;
+        match captive_portal::parse_provision_form(&body, max_aps) {
+            Ok(form) => {
+                let ssid_count = form.credentials.len();
+                let hostname = form.hostname.clone().unwrap_or_else(|| {
+                    lock_or_recover(&p.form_config, "form_config").hostname.clone()
+                });
+
+                // Generate API key if requested
+                let generated_key = if form.api_key_action == captive_portal::ApiKeyAction::Generate {
+                    Some(generate_api_key())
+                } else {
+                    None
+                };
+
+                // Set connection status to Connecting
+                *lock_or_recover(&p.connection_status, "connection_status") = ConnectionStatus {
+                    state: ConnectionState::Connecting,
+                    message: None,
+                    ip: None,
+                };
+
+                // Queue for main loop processing
+                *lock_or_recover(&p.pending_provision, "pending_provision") = Some(PendingProvision {
+                    form,
+                    generated_api_key: generated_key.clone(),
+                });
+
+                info!("Provision submitted: {} SSIDs, hostname={}", ssid_count, hostname);
+
+                let html = captive_portal::render_provision_success(
+                    generated_key.as_deref(),
+                    &hostname,
+                    ssid_count,
+                );
+                let headers = [("Content-Type", "text/html")];
+                send_response(req, 200, "OK", &headers, html.as_bytes());
+            }
+            Err(e) => {
+                let msg = match e {
+                    captive_portal::FormError::NoCredentials => "At least one WiFi network is required",
+                    captive_portal::FormError::EmptySsid => "SSID cannot be empty",
+                    captive_portal::FormError::InvalidEncoding => "Invalid form encoding",
+                };
+                let cfg = lock_or_recover(&p.form_config, "form_config");
+                let saved: Vec<&str> = cfg.saved_ssids.iter().map(|s| s.as_str()).collect();
+                let html = captive_portal::render_provisioning_form(
+                    cfg.max_aps,
+                    &saved,
+                    &cfg.hostname,
+                    cfg.is_first_setup,
+                    Some(msg),
+                );
+                let headers = [("Content-Type", "text/html")];
+                send_response(req, 400, "Bad Request", &headers, html.as_bytes());
+            }
+        }
+        Ok(())
+    })?;
+
+    // GET /scan — WiFi scan results as JSON
+    let p = portal.clone();
+    server.fn_handler::<Infallible, _>("/scan", Method::Get, move |req| {
+        let results = lock_or_recover(&p.scan_results, "scan_results");
+        let headers = [("Content-Type", "application/json")];
+        match serde_json::to_string(&*results) {
+            Ok(json) => send_response(req, 200, "OK", &headers, json.as_bytes()),
+            Err(_) => send_response(req, 200, "OK", &headers, b"[]"),
+        }
+        Ok(())
+    })?;
+
+    // GET /status — connection status as JSON (FR-016)
+    let p = portal.clone();
+    server.fn_handler::<Infallible, _>("/status", Method::Get, move |req| {
+        let status = lock_or_recover(&p.connection_status, "connection_status");
+        let headers = [("Content-Type", "application/json")];
+        match serde_json::to_string(&*status) {
+            Ok(json) => send_response(req, 200, "OK", &headers, json.as_bytes()),
+            Err(_) => send_response(req, 200, "OK", &headers, b"{\"state\":\"idle\"}"),
+        }
         Ok(())
     })?;
 
@@ -276,8 +489,13 @@ pub fn start_http_server(
     let eng = engine.clone();
     let dirty = nvs_dirty.clone();
     let pd = pending_deliveries.clone();
+    let p = portal.clone();
     server.fn_handler::<Infallible, _>("/omi", Method::Post, move |mut req| {
-        // Content-Type check: reject non-JSON (allow missing/empty)
+        if is_api_denied(&p) {
+            send_response(req, 503, "Service Unavailable", &[], b"API disabled during provisioning");
+            return Ok(());
+        }
+
         if let Some(ct) = req.header("content-type") {
             if !ct.contains("application/json") {
                 send_response(req, 415, "Unsupported Media Type", &[], b"Expected application/json");
@@ -323,10 +541,6 @@ pub fn start_http_server(
         if is_write && is_successful_write_response(&resp) {
             dirty.store(true, Ordering::Release);
         }
-        // Buffer event deliveries for dispatch by the main loop.
-        // httpd_ws_send_frame_async must not be called from within an
-        // httpd handler (same task context), so we queue and let the
-        // main loop's external thread send them.
         if !deliveries.is_empty() {
             lock_or_recover(&pd, "pending_deliveries").extend(deliveries);
         }
@@ -336,7 +550,12 @@ pub fn start_http_server(
 
     // GET /omi — REST root listing (exact match)
     let eng = engine.clone();
+    let p = portal.clone();
     server.fn_handler::<Infallible, _>("/omi", Method::Get, move |req| {
+        if is_api_denied(&p) {
+            send_response(req, 503, "Service Unavailable", &[], b"API disabled during provisioning");
+            return Ok(());
+        }
         let params = uri_query(req.uri())
             .map(OmiReadParams::from_query)
             .unwrap_or_default();
@@ -350,16 +569,16 @@ pub fn start_http_server(
     })?;
 
     // WS /omi/ws — WebSocket endpoint for persistent OMI connections.
-    // Must be registered BEFORE the GET /omi/* wildcard, otherwise the
-    // wildcard's GET handler claims the /omi/ws path first and the WS
-    // registration fails with ESP_ERR_HTTPD_HANDLER_EXISTS.
-    // Two locks used: Engine (for processing) and WsSenders (for send handles).
-    // Lock ordering: always Engine before WsSenders; never hold both at once.
     let eng = engine.clone();
     let ws = ws_senders.clone();
     let fd_map = fd_to_session.clone();
+    let p = portal.clone();
     server.ws_handler("/omi/ws", move |conn| -> anyhow::Result<()> {
         if conn.is_new() {
+            if is_api_denied(&p) {
+                // Can't send HTTP error on WS upgrade, just close
+                return Ok(());
+            }
             let sender = conn.create_detached_sender()?;
             let fd = conn.session();
             let session_id = NEXT_WS_SESSION.fetch_add(1, Ordering::Relaxed);
@@ -373,7 +592,6 @@ pub fn start_http_server(
             let session_id = lock_or_recover(&fd_map, "fd_to_session").remove(&fd);
             if let Some(sid) = session_id {
                 info!("WS close: fd={}, session={}", fd, sid);
-                // Lock Engine before WsSenders (documented ordering invariant)
                 lock_or_recover(&eng, "engine")
                     .subscriptions()
                     .cancel_by_ws_session(sid);
@@ -381,13 +599,11 @@ pub fn start_http_server(
             }
             return Ok(());
         }
-        // Receive frame — first call with empty buf to get length and type
         const MAX_WS_MSG: usize = 16 * 1024;
         let (frame_type, len) = conn.recv(&mut [])?;
 
-        // Handle control and non-text frames
         match frame_type {
-            FrameType::Text(_) | FrameType::Continue(_) => {} // process below
+            FrameType::Text(_) | FrameType::Continue(_) => {}
             FrameType::Ping => {
                 conn.send(FrameType::Pong, &[])?;
                 return Ok(());
@@ -405,7 +621,6 @@ pub fn start_http_server(
             send_ws_omi(conn, OmiResponse::payload_too_large("Message too large"))?;
             return Ok(());
         }
-        // Use stack buffer for small messages to avoid heap allocation
         let mut stack_buf = [0u8; 512];
         let mut heap_buf = Vec::new();
         let buf: &mut [u8] = if len <= stack_buf.len() {
@@ -415,8 +630,6 @@ pub fn start_http_server(
             &mut heap_buf
         };
         conn.recv(buf)?;
-        // ESP-IDF httpd may include trailing null(s) in the reported length;
-        // strip them so serde_json doesn't reject the payload.
         let end = buf.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
         let payload = &buf[..end];
         let text = match std::str::from_utf8(payload) {
@@ -433,8 +646,6 @@ pub fn start_http_server(
                 return Ok(());
             }
         };
-        // Reject state-modifying operations over WS — clients must use the
-        // authenticated HTTP endpoints for writes and deletes.
         if matches!(&msg.operation, Operation::Write(_) | Operation::Delete(_)) {
             send_ws_omi(conn, OmiResponse::unauthorized(
                 "Write/delete operations require the authenticated HTTP endpoint"
@@ -460,7 +671,12 @@ pub fn start_http_server(
 
     // GET /omi/* — REST discovery (wildcard)
     let eng = engine.clone();
+    let p = portal.clone();
     server.fn_handler::<Infallible, _>("/omi/*", Method::Get, move |req| {
+        if is_api_denied(&p) {
+            send_response(req, 503, "Service Unavailable", &[], b"API disabled during provisioning");
+            return Ok(());
+        }
         let full_uri = req.uri();
         let path_part = uri_path(full_uri);
         let (odf_path, _trailing) = omi_uri_to_odf_path(path_part);
@@ -547,10 +763,20 @@ pub fn start_http_server(
         Ok(())
     })?;
 
-    // GET /* — serve a stored page
+    // GET /* — mode-aware: portal redirect vs page serve
     let s = store.clone();
+    let p = portal.clone();
     server.fn_handler::<Infallible, _>("/*", Method::Get, move |req| {
         let path = uri_path(req.uri()).to_string();
+
+        // In portal mode, redirect non-portal/non-OMI paths to captive portal (FR-014)
+        if p.mode() == ServerMode::Portal && captive_portal::should_redirect_to_portal("GET", &path) {
+            let (status, headers, body) = captive_portal::redirect_to_form(wifi_ap::AP_IP);
+            let h = [(headers[0].0, headers[0].1.as_str())];
+            send_response(req, status, "Found", &h, body);
+            return Ok(());
+        }
+
         let store = lock_or_recover(&s, "page_store");
         match store.get(&path) {
             Some(html) => {

@@ -23,6 +23,7 @@ use crate::http::{
     now_secs, omi_uri_to_odf_path, render_landing_page, uri_path, uri_query,
     validate_content_length, BodyError, OmiReadParams,
 };
+use crate::log_util::RateLimiter;
 use crate::omi::{Engine, OmiMessage, OmiResponse, Operation, SessionId};
 use crate::omi::subscriptions::{Delivery, DeliveryTarget};
 use crate::pages::{PageError, PageStore};
@@ -145,6 +146,7 @@ pub fn dispatch_deliveries(
     deliveries: &[Delivery],
     ws_senders: &WsSenders,
     engine: &Arc<Mutex<Engine>>,
+    rate_limiter: &mut RateLimiter,
 ) {
     if deliveries.is_empty() {
         return;
@@ -169,7 +171,7 @@ pub fn dispatch_deliveries(
                                 }
                             }
                             Err(e) => {
-                                warn!("WS delivery serialization failed: {}", e);
+                                warn!("WS delivery serialization failed session={}: {}", session, e);
                             }
                         }
                     }

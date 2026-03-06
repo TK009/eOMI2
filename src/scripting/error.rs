@@ -9,6 +9,8 @@ pub enum ScriptError {
     Execution(String),
     /// Script exceeded the operation limit.
     OpLimitExceeded,
+    /// Script exceeded the wall-clock time limit.
+    TimeLimitExceeded(core::time::Duration),
 }
 
 impl std::fmt::Display for ScriptError {
@@ -20,6 +22,9 @@ impl std::fmt::Display for ScriptError {
             }
             Self::Execution(msg) => write!(f, "script error: {}", msg),
             Self::OpLimitExceeded => write!(f, "script exceeded operation limit"),
+            Self::TimeLimitExceeded(elapsed) => {
+                write!(f, "script exceeded time limit after {}ms", elapsed.as_millis())
+            }
         }
     }
 }

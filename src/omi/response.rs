@@ -101,6 +101,17 @@ impl OmiResponse {
         })
     }
 
+    /// Write succeeded but the onwrite script failed (FR-005).
+    /// Returns status 200 with a warning description.
+    pub fn write_ok_with_warning(desc: &str) -> OmiMessage {
+        Self::wrap(ResponseBody {
+            status: StatusCode::Ok.as_u16(),
+            rid: None,
+            desc: Some(desc.into()),
+            result: None,
+        })
+    }
+
     pub fn created() -> OmiMessage {
         Self::wrap(ResponseBody {
             status: StatusCode::Created.as_u16(),
@@ -362,6 +373,22 @@ mod tests {
                 Operation::Response(body) => {
                     assert_eq!(body.status, 501);
                     assert_eq!(body.desc.as_deref(), Some("subscriptions"));
+                }
+                _ => panic!("expected Response"),
+            }
+        }
+
+        #[test]
+        fn write_ok_with_warning_response() {
+            let msg = OmiResponse::write_ok_with_warning("script exceeded operation limit");
+            match &msg.operation {
+                Operation::Response(body) => {
+                    assert_eq!(body.status, 200);
+                    assert_eq!(
+                        body.desc.as_deref(),
+                        Some("script exceeded operation limit")
+                    );
+                    assert!(body.result.is_none());
                 }
                 _ => panic!("expected Response"),
             }

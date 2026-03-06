@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use log::warn;
 
+use crate::log_util::RateLimiter;
 use crate::odf::{Object, ObjectTree, PathTarget, PathTargetMut, TreeError, OmiValue};
 use super::cancel::CancelOp;
 use super::delete::DeleteOp;
@@ -22,6 +23,7 @@ pub struct Engine {
     pending_deliveries: Vec<Delivery>,
     #[cfg(feature = "scripting")]
     script_engine: Option<crate::scripting::ScriptEngine>,
+    script_rl: RateLimiter,
 }
 
 impl Engine {
@@ -34,6 +36,7 @@ impl Engine {
             script_engine: crate::scripting::ScriptEngine::new()
                 .map_err(|e| warn!("Script engine init failed: {}", e))
                 .ok(),
+            script_rl: RateLimiter::new(),
         }
     }
 
@@ -324,13 +327,15 @@ impl Engine {
                 }
 
                 #[cfg(feature = "scripting")]
-                let mut deliveries = self.run_onwrite_script(path, &saved_value, t, now, depth);
+                let (mut deliveries, script_err) = self.run_onwrite_script(path, &saved_value, t, now, depth);
                 #[cfg(not(feature = "scripting"))]
-                let mut deliveries = Vec::new();
+                let (mut deliveries, script_err): (Vec<Delivery>, Option<String>) = (Vec::new(), None);
 
                 deliveries.extend(self.notify_write_event(path, now));
 
-                let response = if created {
+                let response = if let Some(warning) = script_err {
+                    OmiResponse::write_ok_with_warning(&warning)
+                } else if created {
                     OmiResponse::created()
                 } else {
                     OmiResponse::ok(serde_json::json!(null))
@@ -386,21 +391,24 @@ impl Engine {
                 }
 
                 #[cfg(feature = "scripting")]
-                self.run_onwrite_script(&path, &saved_value, t, now, 0);
+                let (script_deliveries, script_err) = self.run_onwrite_script(&path, &saved_value, t, now, 0);
+                #[cfg(not(feature = "scripting"))]
+                let (script_deliveries, script_err): (Vec<Delivery>, Option<String>) = (Vec::new(), None);
 
-                let deliveries = self.notify_write_event(&path, now);
+                let mut deliveries = script_deliveries;
+                deliveries.extend(self.notify_write_event(&path, now));
 
                 let status = if created {
                     ItemStatus {
                         path,
                         status: StatusCode::Created.as_u16(),
-                        desc: None,
+                        desc: script_err,
                     }
                 } else {
                     ItemStatus {
                         path,
                         status: StatusCode::Ok.as_u16(),
-                        desc: None,
+                        desc: script_err,
                     }
                 };
                 (status, deliveries)
@@ -429,7 +437,7 @@ impl Engine {
         timestamp: Option<f64>,
         now: f64,
         depth: u8,
-    ) -> Vec<Delivery> {
+    ) -> (Vec<Delivery>, Option<String>) {
         use crate::scripting::bindings::{MAX_SCRIPT_DEPTH, PendingWrite, ScriptCallbackCtx,
                                           js_odf_write_item};
         use crate::scripting::ffi;
@@ -437,7 +445,7 @@ impl Engine {
         use crate::scripting::convert::omi_to_mjs;
 
         if depth >= MAX_SCRIPT_DEPTH {
-            return Vec::new();
+            return (Vec::new(), None);
         }
 
         // Look up the onwrite script from metadata
@@ -445,21 +453,22 @@ impl Engine {
             Ok(PathTarget::InfoItem(item)) => {
                 match item.meta.as_ref().and_then(|m| m.get("onwrite")) {
                     Some(OmiValue::Str(src)) => src.clone(),
-                    _ => return Vec::new(),
+                    _ => return (Vec::new(), None),
                 }
             }
-            _ => return Vec::new(),
+            _ => return (Vec::new(), None),
         };
 
         // Temporarily take the script engine out of self so we can use it
         // without borrowing self, then put it back before processing writes.
         let mut script_engine = match self.script_engine.take() {
             Some(se) => se,
-            None => return Vec::new(),
+            None => return (Vec::new(), None),
         };
         let mjs = script_engine.raw();
 
         let mut pending_writes: Vec<PendingWrite> = Vec::new();
+        let mut script_error: Option<String> = None;
 
         // Safety: mjs is valid for the duration of this block. The callback
         // only writes to `pending_writes` through the ctx pointer — it never
@@ -509,20 +518,50 @@ impl Engine {
                     let null_val = ffi::mjs_mk_null();
                     ffi::mjs_set(mjs, global, n, l, null_val);
                     self.script_engine = Some(script_engine);
-                    return Vec::new();
+                    return (Vec::new(), None);
                 }
             };
             let mut res: ffi::mjs_val_t = 0;
             ffi::mjs_reset_ops_count(mjs);
+            let deadline = std::time::Instant::now();
             let err = ffi::mjs_exec(mjs, c_src.as_ptr(), &mut res);
-            if err != ffi::MJS_OK {
+            let elapsed = deadline.elapsed();
+
+            // Detect resource-limit errors (FR-004)
+            let time_limit = std::time::Duration::from_millis(
+                crate::scripting::engine::MAX_SCRIPT_EXEC_MS,
+            );
+            if elapsed >= time_limit {
+                let log_msg = format!(
+                    "onwrite script at '{}' exceeded time limit ({}ms)",
+                    path, elapsed.as_millis(),
+                );
+                if self.script_rl.should_emit(&log_msg) {
+                    warn!("{}", log_msg);
+                }
+                script_error = Some(format!(
+                    "script exceeded time limit after {}ms", elapsed.as_millis(),
+                ));
+            } else if err == ffi::MJS_OP_LIMIT_ERROR {
+                let log_msg = format!(
+                    "onwrite script at '{}' exceeded operation limit ({}ms elapsed)",
+                    path, elapsed.as_millis(),
+                );
+                if self.script_rl.should_emit(&log_msg) {
+                    warn!("{}", log_msg);
+                }
+                script_error = Some("script exceeded operation limit".into());
+            } else if err != ffi::MJS_OK {
                 let err_ptr = ffi::mjs_strerror(mjs, err);
                 let msg = if err_ptr.is_null() {
                     "unknown error"
                 } else {
                     std::ffi::CStr::from_ptr(err_ptr).to_str().unwrap_or("unknown error")
                 };
-                warn!("onwrite script error at '{}': {}", path, msg);
+                let log_msg = format!("onwrite script error at '{}': {}", path, msg);
+                if self.script_rl.should_emit(&log_msg) {
+                    warn!("{}", log_msg);
+                }
             }
 
             // Clear context to prevent stale use
@@ -548,7 +587,7 @@ impl Engine {
                 se.gc();
             }
         }
-        deliveries
+        (deliveries, script_error)
     }
 
     // --- Delete ---

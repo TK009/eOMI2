@@ -91,6 +91,54 @@ def test_script_error_no_crash(base_url, token):
     assert omi_status(check) == 200
 
 
+def test_infinite_loop_device_stays_responsive(base_url, token):
+    """Infinite-loop onwrite script is terminated; device remains responsive."""
+    # 1. Tree write: create item with while(true){} script
+    objects = {
+        "Script": {
+            "id": "Script",
+            "items": {
+                "Loop": {
+                    "values": [],
+                    "meta": {
+                        "writable": True,
+                        "onwrite": "while(true){}",
+                    },
+                },
+            },
+        },
+    }
+    data = omi_write_tree(base_url, "/", objects, token=token, timeout=TREE_WRITE_TIMEOUT)
+    assert data["response"]["status"] in (200, 201)
+
+    # 2. Write to trigger the infinite-loop script — should return 200 with
+    #    a warning desc (partial-success: write OK, script failed)
+    data = omi_write(base_url, "/Script/Loop", 55, token=token)
+    assert data["response"]["status"] == 200
+    desc = data["response"].get("desc")
+    assert desc is not None, "expected warning desc for op-limit script"
+    assert "operation limit" in desc or "time limit" in desc, (
+        f"desc should mention limit, got: {desc}"
+    )
+
+    # 3. Value was written despite script failure
+    read = omi_read(base_url, "/Script/Loop", token=token, newest=1)
+    assert omi_status(read) == 200
+    assert omi_result(read)["values"][0]["v"] == 55
+
+    # 4. Subsequent writes still work normally (device not wedged)
+    data = omi_write(base_url, "/Script/Loop", 66, token=token)
+    assert data["response"]["status"] == 200
+
+    read = omi_read(base_url, "/Script/Loop", token=token, newest=1)
+    assert omi_status(read) == 200
+    assert omi_result(read)["values"][0]["v"] == 66
+
+    # 5. Device is responsive for unrelated operations
+    check = omi_read(base_url, "/")
+    assert omi_status(check) == 200
+
+
 def test_cascade_depth_limit(base_url, token):
     """Deep cascade chain is capped by MAX_SCRIPT_DEPTH; device stays alive."""
     # Build a chain: /Chain/L0 → L1 → ... → L6

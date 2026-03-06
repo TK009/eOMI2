@@ -51,28 +51,59 @@ fn main() {
         // Always track .env so Cargo re-runs build.rs when it appears or changes
         println!("cargo:rerun-if-changed=.env");
 
-        // Load .env and pass whitelisted keys as compile-time env vars
-        let contents = std::fs::read_to_string(".env")
-            .expect("Missing .env file. Copy .env.example to .env and set WIFI_SSID and WIFI_PASS");
-
-        for line in contents.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            if let Some((key, value)) = line.split_once('=') {
-                let key = key.trim();
-                if ALLOWED_ENV_KEYS.contains(&key) {
-                    let value = value.trim();
-                    // Strip surrounding quotes if present
-                    let value = value
-                        .strip_prefix('"')
-                        .and_then(|v| v.strip_suffix('"'))
-                        .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
-                        .unwrap_or(value);
-                    println!("cargo:rustc-env={}={}", key, value);
+        // Collect env vars from .env file (if it exists)
+        let mut env_map = std::collections::HashMap::new();
+        if let Ok(contents) = std::fs::read_to_string(".env") {
+            for line in contents.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if let Some((key, value)) = line.split_once('=') {
+                    let key = key.trim();
+                    if ALLOWED_ENV_KEYS.contains(&key) {
+                        let value = value.trim();
+                        // Strip surrounding quotes if present
+                        let value = value
+                            .strip_prefix('"')
+                            .and_then(|v| v.strip_suffix('"'))
+                            .or_else(|| {
+                                value.strip_prefix('\'').and_then(|v| v.strip_suffix('\''))
+                            })
+                            .unwrap_or(value);
+                        env_map.insert(key.to_string(), value.to_string());
+                    }
                 }
             }
         }
+
+        // Pass whitelisted keys as compile-time env vars (now optional)
+        for (key, value) in &env_map {
+            println!("cargo:rustc-env={}={}", key, value);
+        }
+
     }
+
+    // --- Build-configurable constants (available in all build profiles) ---
+    println!("cargo:rerun-if-env-changed=MAX_WIFI_APS");
+    println!("cargo:rerun-if-env-changed=EOMI_HOSTNAME");
+
+    // MAX_WIFI_APS: default 3
+    let max_wifi_aps: usize = std::env::var("MAX_WIFI_APS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3);
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+    std::fs::write(
+        std::path::Path::new(&out_dir).join("max_wifi_aps.const"),
+        format!("{}", max_wifi_aps),
+    )
+    .expect("Failed to write max_wifi_aps.const");
+
+    // HOSTNAME: default "eOMI"
+    let hostname = std::env::var("EOMI_HOSTNAME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "eOMI".to_string());
+    println!("cargo:rustc-env=EOMI_HOSTNAME={}", hostname);
 }

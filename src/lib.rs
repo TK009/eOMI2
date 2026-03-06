@@ -26,6 +26,8 @@ pub mod sync_util;
 pub mod log_util;
 #[cfg(feature = "esp")]
 pub mod nvs;
+#[cfg(feature = "json")]
+pub mod wifi_cfg;
 #[cfg(feature = "esp")]
 pub mod callback;
 #[cfg(feature = "esp")]

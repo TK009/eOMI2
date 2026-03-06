@@ -18,10 +18,9 @@ use reconfigurable_device::sync_util::lock_or_recover;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-const WIFI_SSID: &str = env!("WIFI_SSID");
-const WIFI_PASS: &str = env!("WIFI_PASS");
-const API_TOKEN: &str = env!("API_TOKEN");
-const _: () = assert!(API_TOKEN.len() > 0, "API_TOKEN must not be empty");
+const WIFI_SSID: Option<&str> = option_env!("WIFI_SSID");
+const WIFI_PASS: Option<&str> = option_env!("WIFI_PASS");
+const API_TOKEN: Option<&str> = option_env!("API_TOKEN");
 
 fn main() -> Result<()> {
     // Link ESP-IDF patches and initialize logging
@@ -72,12 +71,31 @@ fn main() -> Result<()> {
     // Clone NVS partition for OMI tree persistence (Wi-Fi consumes the other)
     let nvs_omi = nvs.clone();
 
+    // Resolve WiFi credentials: prefer build-time, fall back to NVS
+    let nvs_wifi = nvs.clone();
+    let wifi_cfg = reconfigurable_device::wifi_cfg::load_wifi_config_or_default(nvs_wifi);
+    let (ssid, pass) = if let (Some(s), Some(p)) = (WIFI_SSID, WIFI_PASS) {
+        (s.to_string(), p.to_string())
+    } else if let Some((s, p)) = wifi_cfg.ssids.first() {
+        (s.clone(), p.clone())
+    } else {
+        anyhow::bail!("No WiFi credentials: set WIFI_SSID/WIFI_PASS at build time or provision via captive portal");
+    };
+
+    // Resolve API token: prefer build-time, fall back to NVS-stored hash presence check
+    let api_token: &'static str = if let Some(t) = API_TOKEN {
+        t
+    } else {
+        // Leak a placeholder — the captive portal flow (future) will handle runtime tokens
+        anyhow::bail!("No API_TOKEN: set at build time or provision via captive portal");
+    };
+
     // Connect to Wi-Fi
     let mut wifi = BlockingWifi::wrap(
         EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs))?,
         sys_loop,
     )?;
-    connect_wifi(&mut wifi)?;
+    connect_wifi(&mut wifi, &ssid, &pass)?;
 
     let ip_info = wifi.wifi().sta_netif().get_ip_info()?;
     info!("Wi-Fi connected. IP: {}", ip_info.ip);
@@ -86,7 +104,7 @@ fn main() -> Result<()> {
     let nvs_dirty = Arc::new(AtomicBool::new(false));
 
     // Start HTTP server
-    let (_server, engine, ws_senders, pending_deliveries) = start_http_server(nvs_dirty.clone(), API_TOKEN)?;
+    let (_server, engine, ws_senders, pending_deliveries) = start_http_server(nvs_dirty.clone(), api_token)?;
     info!("HTTP server listening on port 80");
 
     // Populate sensor tree
@@ -148,7 +166,7 @@ fn main() -> Result<()> {
                 warn!("Wi-Fi disconnected, reconnecting... attempt={}", wifi_retry_count + 1);
             }
             wifi_retry_count = wifi_retry_count.saturating_add(1);
-            match connect_wifi(&mut wifi) {
+            match connect_wifi(&mut wifi, &ssid, &pass) {
                 Ok(()) => {
                     let label = if wifi_retry_count == 1 { "attempt" } else { "attempts" };
                     info!("Wi-Fi reconnected after {} {}", wifi_retry_count, label);
@@ -193,10 +211,10 @@ fn main() -> Result<()> {
     }
 }
 
-fn connect_wifi(wifi: &mut BlockingWifi<EspWifi<'static>>) -> Result<()> {
+fn connect_wifi(wifi: &mut BlockingWifi<EspWifi<'static>>, ssid: &str, pass: &str) -> Result<()> {
     wifi.set_configuration(&Configuration::Client(ClientConfiguration {
-        ssid: WIFI_SSID.try_into().map_err(|_| anyhow::anyhow!("SSID too long"))?,
-        password: WIFI_PASS.try_into().map_err(|_| anyhow::anyhow!("Password too long"))?,
+        ssid: ssid.try_into().map_err(|_| anyhow::anyhow!("SSID too long"))?,
+        password: pass.try_into().map_err(|_| anyhow::anyhow!("Password too long"))?,
         ..Default::default()
     }))?;
 

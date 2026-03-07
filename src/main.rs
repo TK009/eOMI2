@@ -265,6 +265,13 @@ fn main() -> Result<()> {
             }
         }
 
+        // Digital input polling: read all digital_in pins at 100ms cadence (FR-005, FR-007)
+        if gpio_manager.has_digital_pins() {
+            let now = now_secs();
+            let mut eng = lock_or_recover(&engine, "engine");
+            gpio_manager.poll_digital_inputs(&mut eng.tree, now);
+        }
+
         // Edge trigger ISR: drain fired edge events and update O-DF tree (FR-005a)
         if gpio_manager.has_edge_pins() {
             let edge_events = gpio_manager.drain_edge_events();
@@ -287,6 +294,12 @@ fn main() -> Result<()> {
         if gpio_manager.has_pwm_pins() {
             let eng = lock_or_recover(&engine, "engine");
             gpio_manager.sync_from_tree(&eng.tree);
+        }
+
+        // Digital output actuation: sync pin outputs from O-DF tree values (FR-004)
+        if gpio_manager.has_digital_pins() {
+            let eng = lock_or_recover(&engine, "engine");
+            gpio_manager.sync_digital_outputs(&eng.tree);
         }
 
         // Peripheral bus polling: UART RX + TX sync, SPI transfers (FR-008, FR-009)

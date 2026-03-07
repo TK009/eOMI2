@@ -35,6 +35,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 #[cfg(feature = "esp")]
+use crate::gpio::driver::{DigitalInputPin, DigitalOutputPin};
+#[cfg(feature = "esp")]
+use crate::gpio::driver::parse_digital;
+#[cfg(feature = "esp")]
 use crate::odf::{ObjectTree, OmiValue, PathTarget, PathTargetMut};
 #[cfg(all(feature = "std", not(feature = "esp")))]
 use crate::odf::OmiValue;
@@ -134,6 +138,8 @@ pub struct GpioManager {
     pwm_pins: Vec<PwmPin>,
     edge_pins: Vec<EdgePin>,
     adc_pins: Vec<AdcEntry>,
+    digital_inputs: Vec<DigitalInputPin>,
+    digital_outputs: Vec<DigitalOutputPin>,
 }
 
 #[cfg(feature = "esp")]
@@ -143,6 +149,8 @@ impl GpioManager {
             pwm_pins: Vec::new(),
             edge_pins: Vec::new(),
             adc_pins: Vec::new(),
+            digital_inputs: Vec::new(),
+            digital_outputs: Vec::new(),
         }
     }
 
@@ -268,6 +276,35 @@ impl GpioManager {
                 meta.insert("gpio_pin".into(), OmiValue::Number(entry.pin_num as f64));
             }
             info!("ADC InfoItem registered at {} (read-only, mode=analog_in)", entry.path);
+        }
+
+        for pin in &self.digital_inputs {
+            if let Err(e) = tree.write_value(&pin.path, OmiValue::Number(0.0), None) {
+                warn!("Failed to init digital input InfoItem at {}: {}", pin.path, e);
+                continue;
+            }
+            if let Ok(PathTargetMut::InfoItem(item)) = tree.resolve_mut(&pin.path) {
+                item.type_uri = Some("omi:gpio:digital_in".into());
+                let meta = item.meta.get_or_insert_with(BTreeMap::new);
+                meta.insert("mode".into(), OmiValue::Str("digital_in".into()));
+                meta.insert("gpio_pin".into(), OmiValue::Number(pin.pin_num as f64));
+            }
+            info!("Digital input InfoItem registered at {} (read-only, mode=digital_in)", pin.path);
+        }
+
+        for pin in &self.digital_outputs {
+            if let Err(e) = tree.write_value(&pin.path, OmiValue::Number(0.0), None) {
+                warn!("Failed to init digital output InfoItem at {}: {}", pin.path, e);
+                continue;
+            }
+            if let Ok(PathTargetMut::InfoItem(item)) = tree.resolve_mut(&pin.path) {
+                item.type_uri = Some("omi:gpio:digital_out".into());
+                let meta = item.meta.get_or_insert_with(BTreeMap::new);
+                meta.insert("mode".into(), OmiValue::Str("digital_out".into()));
+                meta.insert("writable".into(), OmiValue::Bool(true));
+                meta.insert("gpio_pin".into(), OmiValue::Number(pin.pin_num as f64));
+            }
+            info!("Digital output InfoItem registered at {} (writable, mode=digital_out)", pin.path);
         }
     }
 
@@ -399,6 +436,92 @@ impl GpioManager {
     /// Returns true if any ADC pins are registered.
     pub fn has_adc_pins(&self) -> bool {
         !self.adc_pins.is_empty()
+    }
+
+    /// Register a digital input pin for polling (FR-005).
+    pub fn add_digital_in(
+        &mut self,
+        path: String,
+        pin_num: u8,
+        pin: AnyIOPin,
+    ) -> Result<(), anyhow::Error> {
+        let input = DigitalInputPin::new(path.clone(), pin_num, pin)?;
+        info!("Digital input registered: {} (GPIO{})", path, pin_num);
+        self.digital_inputs.push(input);
+        Ok(())
+    }
+
+    /// Register a digital output pin (FR-004).
+    pub fn add_digital_out(
+        &mut self,
+        path: String,
+        pin_num: u8,
+        pin: AnyIOPin,
+    ) -> Result<(), anyhow::Error> {
+        let output = DigitalOutputPin::new(path.clone(), pin_num, pin)?;
+        info!("Digital output registered: {} (GPIO{})", path, pin_num);
+        self.digital_outputs.push(output);
+        Ok(())
+    }
+
+    /// Poll all digital input pins and write changed values to the O-DF tree.
+    ///
+    /// Only writes when a pin's level has changed since the last poll,
+    /// keeping tree writes minimal. Called from the main loop at 100ms
+    /// cadence (FR-005, FR-007).
+    pub fn poll_digital_inputs(&mut self, tree: &mut ObjectTree, now: f64) {
+        for pin in &mut self.digital_inputs {
+            if let Some(level) = pin.poll() {
+                let value = if level { 1.0 } else { 0.0 };
+                if let Err(e) = tree.write_value(
+                    &pin.path,
+                    OmiValue::Number(value),
+                    Some(now),
+                ) {
+                    warn!("Digital input write failed for {}: {}", pin.path, e);
+                }
+            }
+        }
+    }
+
+    /// Synchronize digital outputs from the O-DF tree (FR-004).
+    ///
+    /// Reads the latest value for each registered digital output path.
+    /// If the value changed since the last actuation, the physical pin
+    /// is updated. Called from the main loop after engine writes.
+    pub fn sync_digital_outputs(&mut self, tree: &ObjectTree) {
+        for pin in &mut self.digital_outputs {
+            let high = match tree.resolve(&pin.path) {
+                Ok(PathTarget::InfoItem(item)) => {
+                    let vals = item.query_values(Some(1), None, None, None);
+                    match vals.first() {
+                        Some(v) => parse_digital(&v.v),
+                        None => continue,
+                    }
+                }
+                _ => continue,
+            };
+            if let Err(e) = pin.write(high) {
+                warn!("Digital output write failed for {}: {}", pin.path, e);
+            }
+        }
+    }
+
+    /// Set a digital output pin by O-DF path.
+    pub fn write_digital(&mut self, path: &str, high: bool) -> Result<(), String> {
+        let pin = self
+            .digital_outputs
+            .iter_mut()
+            .find(|p| p.path == path)
+            .ok_or_else(|| format!("no digital output at path '{}'", path))?;
+        pin.write(high)
+            .map(|_| ())
+            .map_err(|e| format!("digital write failed: {}", e))
+    }
+
+    /// Returns true if any digital input or output pins are registered.
+    pub fn has_digital_pins(&self) -> bool {
+        !self.digital_inputs.is_empty() || !self.digital_outputs.is_empty()
     }
 }
 

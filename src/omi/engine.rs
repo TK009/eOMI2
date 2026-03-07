@@ -594,6 +594,157 @@ impl Engine {
         (deliveries, script_error)
     }
 
+    /// Run the onread script attached to an InfoItem, if any.
+    ///
+    /// Returns `Some(value)` when the script produces a non-null return value,
+    /// which replaces the stored value for this read. Returns `None` on error
+    /// or when no script is attached (FR-005).
+    ///
+    /// Only `odf.readItem()` is available to the script — `odf.writeItem` is
+    /// intentionally omitted (FR-006). Same resource limits as onwrite (FR-010).
+    #[cfg(feature = "scripting")]
+    fn run_onread_script(
+        &mut self,
+        path: &str,
+        value: &OmiValue,
+        timestamp: Option<f64>,
+    ) -> Option<OmiValue> {
+        use crate::scripting::bindings::{PendingWrite, ScriptCallbackCtx, js_odf_read_item};
+        use crate::scripting::ffi;
+        use crate::scripting::ffi::mjs_name;
+        use crate::scripting::convert::{omi_to_mjs, mjs_to_omi};
+
+        // Look up the onread script from metadata
+        let script_src = match self.tree.resolve(path) {
+            Ok(PathTarget::InfoItem(item)) => {
+                match item.get_onread_script() {
+                    Some(src) => src.to_string(),
+                    None => return None,
+                }
+            }
+            _ => return None,
+        };
+
+        // Temporarily take the script engine out of self
+        let mut script_engine = match self.script_engine.take() {
+            Some(se) => se,
+            None => return None,
+        };
+        let mjs = script_engine.raw();
+
+        let mut pending_writes: Vec<PendingWrite> = Vec::new();
+        let mut result_value: Option<OmiValue> = None;
+
+        // Safety: mjs is valid for the duration of this block. The read-only
+        // callback only reads from the tree — no aliasing concerns.
+        unsafe {
+            // Set up `event` object with { value, path, timestamp }
+            let event = ffi::mjs_mk_object(mjs);
+            let js_val = omi_to_mjs(mjs, value);
+            let (n, l) = mjs_name!("value");
+            ffi::mjs_set(mjs, event, n, l, js_val);
+            let js_path = ffi::mjs_mk_string(mjs, path.as_ptr() as *const _, path.len(), 1);
+            let (n, l) = mjs_name!("path");
+            ffi::mjs_set(mjs, event, n, l, js_path);
+            let js_ts = match timestamp {
+                Some(t) => ffi::mjs_mk_number(mjs, t),
+                None => ffi::mjs_mk_null(),
+            };
+            let (n, l) = mjs_name!("timestamp");
+            ffi::mjs_set(mjs, event, n, l, js_ts);
+
+            let global = ffi::mjs_get_global(mjs);
+            let (n, l) = mjs_name!("event");
+            ffi::mjs_set(mjs, global, n, l, event);
+
+            // Set up `odf` with readItem only — NO writeItem (FR-006)
+            let odf = ffi::mjs_mk_object(mjs);
+            let read_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_read_item));
+            let (n, l) = mjs_name!("readItem");
+            ffi::mjs_set(mjs, odf, n, l, read_fn);
+            let (n, l) = mjs_name!("odf");
+            ffi::mjs_set(mjs, global, n, l, odf);
+
+            // Set up callback context — pending_writes is empty but needed
+            // by js_odf_read_item for read-after-write consistency checks
+            let mut ctx = ScriptCallbackCtx {
+                pending_writes: &mut pending_writes,
+                depth: 0,
+                tree: &self.tree as *const _,
+            };
+            let ctx_foreign = ffi::mjs_mk_foreign(mjs, &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void);
+            let (n, l) = mjs_name!("__ctx");
+            ffi::mjs_set(mjs, global, n, l, ctx_foreign);
+
+            // Execute the script
+            let c_src = match std::ffi::CString::new(script_src.as_str()) {
+                Ok(c) => c,
+                Err(_) => {
+                    warn!("onread script at '{}' contains NUL byte", path);
+                    let null_val = ffi::mjs_mk_null();
+                    ffi::mjs_set(mjs, global, n, l, null_val);
+                    self.script_engine = Some(script_engine);
+                    return None;
+                }
+            };
+            let mut res: ffi::mjs_val_t = 0;
+            ffi::mjs_reset_ops_count(mjs);
+            let deadline = std::time::Instant::now();
+            let err = ffi::mjs_exec(mjs, c_src.as_ptr(), &mut res);
+            let elapsed = deadline.elapsed();
+
+            // Detect resource-limit errors (FR-010)
+            let time_limit = std::time::Duration::from_millis(
+                crate::scripting::engine::MAX_SCRIPT_EXEC_MS,
+            );
+            if elapsed >= time_limit {
+                let log_msg = format!(
+                    "onread script at '{}' exceeded time limit ({}ms)",
+                    path, elapsed.as_millis(),
+                );
+                if self.script_rl.should_emit(&log_msg) {
+                    warn!("{}", log_msg);
+                }
+            } else if err == ffi::MJS_OP_LIMIT_ERROR {
+                let log_msg = format!(
+                    "onread script at '{}' exceeded operation limit ({}ms elapsed)",
+                    path, elapsed.as_millis(),
+                );
+                if self.script_rl.should_emit(&log_msg) {
+                    warn!("{}", log_msg);
+                }
+            } else if err != ffi::MJS_OK {
+                let err_ptr = ffi::mjs_strerror(mjs, err);
+                let msg = if err_ptr.is_null() {
+                    "unknown error"
+                } else {
+                    std::ffi::CStr::from_ptr(err_ptr).to_str().unwrap_or("unknown error")
+                };
+                let log_msg = format!("onread script error at '{}': {}", path, msg);
+                if self.script_rl.should_emit(&log_msg) {
+                    warn!("{}", log_msg);
+                }
+            } else {
+                // Script succeeded — capture return value if non-null
+                if ffi::mjs_is_null(res) == 0 && ffi::mjs_is_undefined(res) == 0 {
+                    result_value = Some(mjs_to_omi(mjs, res));
+                }
+            }
+
+            // Clear context to prevent stale use
+            let null_val = ffi::mjs_mk_null();
+            ffi::mjs_set(mjs, global, n, l, null_val);
+        }
+
+        // Put the script engine back and run GC
+        self.script_engine = Some(script_engine);
+        if let Some(se) = self.script_engine.as_mut() {
+            se.gc();
+        }
+
+        result_value
+    }
+
     // --- Delete ---
 
     fn process_delete(&mut self, op: DeleteOp) -> OmiMessage {
@@ -1374,6 +1525,110 @@ mod tests {
             assert_eq!(newest_value(&mut e, "/Dev/A"), OmiValue::Number(5.0));
             assert_eq!(newest_value(&mut e, "/Dev/B"), OmiValue::Number(10.0));
             assert_eq!(newest_value(&mut e, "/Dev/C"), OmiValue::Number(20.0));
+        }
+
+        /// Set an onread script on an InfoItem.
+        fn set_onread(e: &mut Engine, path: &str, script: &str) {
+            if let Ok(PathTargetMut::InfoItem(item)) = e.tree.resolve_mut(path) {
+                let meta = item.meta.get_or_insert_with(BTreeMap::new);
+                meta.insert("onread".into(), OmiValue::Str(script.into()));
+            }
+        }
+
+        #[test]
+        fn onread_script_returns_transformed_value() {
+            let mut e = Engine::new();
+            // Create an item with a value
+            e.process(write_msg("/Dev/TempC", OmiValue::Number(25.0)), 0.0, None);
+            // Set onread script that converts C→F
+            set_onread(&mut e, "/Dev/TempC", "event.value * 9 / 5 + 32");
+            // Call run_onread_script directly
+            let result = e.run_onread_script(
+                "/Dev/TempC",
+                &OmiValue::Number(25.0),
+                Some(1000.0),
+            );
+            assert_eq!(result, Some(OmiValue::Number(77.0)));
+        }
+
+        #[test]
+        fn onread_script_no_script_returns_none() {
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/Plain", OmiValue::Number(42.0)), 0.0, None);
+            let result = e.run_onread_script(
+                "/Dev/Plain",
+                &OmiValue::Number(42.0),
+                None,
+            );
+            assert_eq!(result, None);
+        }
+
+        #[test]
+        fn onread_script_error_returns_none() {
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/Bad", OmiValue::Number(1.0)), 0.0, None);
+            set_onread(&mut e, "/Dev/Bad", "this is not valid javascript!!!");
+            let result = e.run_onread_script(
+                "/Dev/Bad",
+                &OmiValue::Number(1.0),
+                None,
+            );
+            assert_eq!(result, None);
+        }
+
+        #[test]
+        fn onread_script_null_return_yields_none() {
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/Nul", OmiValue::Number(1.0)), 0.0, None);
+            set_onread(&mut e, "/Dev/Nul", "null");
+            let result = e.run_onread_script(
+                "/Dev/Nul",
+                &OmiValue::Number(1.0),
+                None,
+            );
+            assert_eq!(result, None);
+        }
+
+        #[test]
+        fn onread_script_can_read_other_items() {
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/Offset", OmiValue::Number(10.0)), 0.0, None);
+            e.process(write_msg("/Dev/Raw", OmiValue::Number(5.0)), 0.0, None);
+            // onread reads the offset from another item
+            set_onread(&mut e, "/Dev/Raw",
+                "event.value + odf.readItem('/Dev/Offset/value')");
+            let result = e.run_onread_script(
+                "/Dev/Raw",
+                &OmiValue::Number(5.0),
+                Some(1000.0),
+            );
+            assert_eq!(result, Some(OmiValue::Number(15.0)));
+        }
+
+        #[test]
+        fn onread_script_has_event_fields() {
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/Ev", OmiValue::Number(99.0)), 0.0, None);
+            // Script that uses all event fields to verify they exist
+            set_onread(&mut e, "/Dev/Ev",
+                "event.path === '/Dev/Ev' && event.timestamp === 42.0 ? event.value : -1");
+            let result = e.run_onread_script(
+                "/Dev/Ev",
+                &OmiValue::Number(99.0),
+                Some(42.0),
+            );
+            assert_eq!(result, Some(OmiValue::Number(99.0)));
+        }
+
+        #[test]
+        fn onread_script_nonexistent_path_returns_none() {
+            let mut e = Engine::new();
+            let result = e.run_onread_script(
+                "/Dev/Nonexistent",
+                &OmiValue::Number(1.0),
+                None,
+            );
+            assert_eq!(result, None);
         }
 
         #[test]

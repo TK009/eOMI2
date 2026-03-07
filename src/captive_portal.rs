@@ -135,6 +135,7 @@ pub enum FormError {
     NoCredentials,
     EmptySsid,
     InvalidEncoding,
+    ApiKeyRequired,
 }
 
 /// URL-decode a percent-encoded string.
@@ -165,7 +166,7 @@ fn url_decode(s: &str) -> Result<String, FormError> {
 /// - `hostname` (optional)
 /// - `api_key_action` = "keep" | "generate" | "set"
 /// - `api_key` (when action is "set")
-pub fn parse_provision_form(body: &str, max_aps: usize) -> Result<ProvisionForm, FormError> {
+pub fn parse_provision_form(body: &str, max_aps: usize, is_first_setup: bool) -> Result<ProvisionForm, FormError> {
     let mut ssids: Vec<(usize, String)> = Vec::new();
     let mut passwords: Vec<(usize, String)> = Vec::new();
     let mut hostname = None;
@@ -236,6 +237,10 @@ pub fn parse_provision_form(body: &str, max_aps: usize) -> Result<ProvisionForm,
         },
         _ => ApiKeyAction::Keep,
     };
+
+    if is_first_setup && api_key_action == ApiKeyAction::Keep {
+        return Err(FormError::ApiKeyRequired);
+    }
 
     Ok(ProvisionForm {
         credentials,
@@ -643,7 +648,7 @@ mod tests {
     #[test]
     fn parse_basic_form() {
         let body = "ssid_0=MyNetwork&password_0=secret123&hostname=mydevice&api_key_action=generate";
-        let form = parse_provision_form(body, 3).unwrap();
+        let form = parse_provision_form(body, 3, false).unwrap();
         assert_eq!(form.credentials.len(), 1);
         assert_eq!(form.credentials[0].ssid, "MyNetwork");
         assert_eq!(form.credentials[0].password, "secret123");
@@ -654,7 +659,7 @@ mod tests {
     #[test]
     fn parse_multiple_aps() {
         let body = "ssid_0=Net1&password_0=pass1&ssid_1=Net2&password_1=pass2&api_key_action=keep";
-        let form = parse_provision_form(body, 3).unwrap();
+        let form = parse_provision_form(body, 3, false).unwrap();
         assert_eq!(form.credentials.len(), 2);
         assert_eq!(form.credentials[0].ssid, "Net1");
         assert_eq!(form.credentials[1].ssid, "Net2");
@@ -663,7 +668,7 @@ mod tests {
     #[test]
     fn parse_skips_empty_ssids() {
         let body = "ssid_0=Net1&password_0=pass1&ssid_1=&password_1=pass2&api_key_action=keep";
-        let form = parse_provision_form(body, 3).unwrap();
+        let form = parse_provision_form(body, 3, false).unwrap();
         assert_eq!(form.credentials.len(), 1);
         assert_eq!(form.credentials[0].ssid, "Net1");
     }
@@ -671,33 +676,33 @@ mod tests {
     #[test]
     fn parse_no_credentials_error() {
         let body = "hostname=test&api_key_action=keep";
-        assert_eq!(parse_provision_form(body, 3), Err(FormError::NoCredentials));
+        assert_eq!(parse_provision_form(body, 3, false), Err(FormError::NoCredentials));
     }
 
     #[test]
     fn parse_all_empty_ssids_error() {
         let body = "ssid_0=&ssid_1=&api_key_action=keep";
-        assert_eq!(parse_provision_form(body, 3), Err(FormError::NoCredentials));
+        assert_eq!(parse_provision_form(body, 3, false), Err(FormError::NoCredentials));
     }
 
     #[test]
     fn parse_set_api_key() {
         let body = "ssid_0=Net&password_0=pass&api_key_action=set&api_key=my-secret-key";
-        let form = parse_provision_form(body, 3).unwrap();
+        let form = parse_provision_form(body, 3, false).unwrap();
         assert_eq!(form.api_key_action, ApiKeyAction::Set("my-secret-key".into()));
     }
 
     #[test]
     fn parse_set_without_value_falls_back_to_keep() {
         let body = "ssid_0=Net&password_0=pass&api_key_action=set&api_key=";
-        let form = parse_provision_form(body, 3).unwrap();
+        let form = parse_provision_form(body, 3, false).unwrap();
         assert_eq!(form.api_key_action, ApiKeyAction::Keep);
     }
 
     #[test]
     fn parse_url_encoded_values() {
         let body = "ssid_0=My%20Network&password_0=p%26ss%3Dw0rd&api_key_action=keep";
-        let form = parse_provision_form(body, 3).unwrap();
+        let form = parse_provision_form(body, 3, false).unwrap();
         assert_eq!(form.credentials[0].ssid, "My Network");
         assert_eq!(form.credentials[0].password, "p&ss=w0rd");
     }
@@ -705,7 +710,7 @@ mod tests {
     #[test]
     fn parse_respects_max_aps() {
         let body = "ssid_0=A&password_0=a&ssid_1=B&password_1=b&ssid_2=C&password_2=c&api_key_action=keep";
-        let form = parse_provision_form(body, 2).unwrap();
+        let form = parse_provision_form(body, 2, false).unwrap();
         assert_eq!(form.credentials.len(), 2);
         // ssid_2 should be ignored
     }
@@ -713,15 +718,49 @@ mod tests {
     #[test]
     fn parse_missing_password_defaults_empty() {
         let body = "ssid_0=OpenNet&api_key_action=keep";
-        let form = parse_provision_form(body, 3).unwrap();
+        let form = parse_provision_form(body, 3, false).unwrap();
         assert_eq!(form.credentials[0].password, "");
     }
 
     #[test]
     fn parse_default_api_key_action() {
         let body = "ssid_0=Net&password_0=pass";
-        let form = parse_provision_form(body, 3).unwrap();
+        let form = parse_provision_form(body, 3, false).unwrap();
         assert_eq!(form.api_key_action, ApiKeyAction::Keep);
+    }
+
+    #[test]
+    fn parse_first_setup_rejects_keep() {
+        let body = "ssid_0=Net&password_0=pass&api_key_action=keep";
+        assert_eq!(parse_provision_form(body, 3, true), Err(FormError::ApiKeyRequired));
+    }
+
+    #[test]
+    fn parse_first_setup_rejects_default_keep() {
+        // No api_key_action field defaults to Keep, which must also be rejected
+        let body = "ssid_0=Net&password_0=pass";
+        assert_eq!(parse_provision_form(body, 3, true), Err(FormError::ApiKeyRequired));
+    }
+
+    #[test]
+    fn parse_first_setup_rejects_set_without_value() {
+        // "set" with empty value falls back to Keep, must be rejected on first setup
+        let body = "ssid_0=Net&password_0=pass&api_key_action=set&api_key=";
+        assert_eq!(parse_provision_form(body, 3, true), Err(FormError::ApiKeyRequired));
+    }
+
+    #[test]
+    fn parse_first_setup_allows_generate() {
+        let body = "ssid_0=Net&password_0=pass&api_key_action=generate";
+        let form = parse_provision_form(body, 3, true).unwrap();
+        assert_eq!(form.api_key_action, ApiKeyAction::Generate);
+    }
+
+    #[test]
+    fn parse_first_setup_allows_set_with_value() {
+        let body = "ssid_0=Net&password_0=pass&api_key_action=set&api_key=my-key";
+        let form = parse_provision_form(body, 3, true).unwrap();
+        assert_eq!(form.api_key_action, ApiKeyAction::Set("my-key".into()));
     }
 
     // --- render_provisioning_form ---

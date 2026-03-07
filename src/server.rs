@@ -401,8 +401,11 @@ pub fn start_http_server(
             }
         };
 
-        let max_aps = lock_or_recover(&p.form_config, "form_config").max_aps;
-        match captive_portal::parse_provision_form(&body, max_aps) {
+        let (max_aps, is_first_setup) = {
+            let cfg = lock_or_recover(&p.form_config, "form_config");
+            (cfg.max_aps, cfg.is_first_setup)
+        };
+        match captive_portal::parse_provision_form(&body, max_aps, is_first_setup) {
             Ok(form) => {
                 let ssid_count = form.credentials.len();
                 let hostname = form.hostname.clone().unwrap_or_else(|| {
@@ -444,6 +447,7 @@ pub fn start_http_server(
                     captive_portal::FormError::NoCredentials => "At least one WiFi network is required",
                     captive_portal::FormError::EmptySsid => "SSID cannot be empty",
                     captive_portal::FormError::InvalidEncoding => "Invalid form encoding",
+                    captive_portal::FormError::ApiKeyRequired => "API key is required on first setup",
                 };
                 let cfg = lock_or_recover(&p.form_config, "form_config");
                 let saved: Vec<&str> = cfg.saved_ssids.iter().map(|s| s.as_str()).collect();

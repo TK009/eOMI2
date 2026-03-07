@@ -28,7 +28,7 @@ fn test_sm_config() -> WifiSmConfig {
 #[test]
 fn provision_form_to_config_roundtrip() {
     let body = "ssid_0=HomeWiFi&password_0=secret123&ssid_1=Office&password_1=work456&hostname=mydevice&api_key_action=generate";
-    let form = parse_provision_form(body, MAX_WIFI_APS).unwrap();
+    let form = parse_provision_form(body, MAX_WIFI_APS, false).unwrap();
 
     // Build WifiConfig from parsed form (mirrors main loop logic)
     let mut cfg = WifiConfig::new();
@@ -57,7 +57,7 @@ fn provision_form_to_config_roundtrip() {
 #[test]
 fn provision_keep_api_key_preserves_existing_hash() {
     let body = "ssid_0=Net&password_0=pass&api_key_action=keep";
-    let form = parse_provision_form(body, MAX_WIFI_APS).unwrap();
+    let form = parse_provision_form(body, MAX_WIFI_APS, false).unwrap();
     assert_eq!(form.api_key_action, ApiKeyAction::Keep);
 
     // Existing config has a hash
@@ -75,7 +75,7 @@ fn provision_keep_api_key_preserves_existing_hash() {
 #[test]
 fn provision_set_api_key_replaces_hash() {
     let body = "ssid_0=Net&password_0=pass&api_key_action=set&api_key=my-custom-key";
-    let form = parse_provision_form(body, MAX_WIFI_APS).unwrap();
+    let form = parse_provision_form(body, MAX_WIFI_APS, false).unwrap();
     assert_eq!(
         form.api_key_action,
         ApiKeyAction::Set("my-custom-key".into())
@@ -90,7 +90,7 @@ fn provision_set_api_key_replaces_hash() {
 fn form_duplicate_ssid_indices_last_wins() {
     // Two ssid_0 entries: the parser uses the first one found
     let body = "ssid_0=First&password_0=p1&ssid_0=Second&password_0=p2&api_key_action=keep";
-    let form = parse_provision_form(body, 3).unwrap();
+    let form = parse_provision_form(body, 3, false).unwrap();
     // Both are collected (ssid_0 appears twice); implementation pushes both
     assert!(!form.credentials.is_empty());
     assert_eq!(form.credentials[0].ssid, "First");
@@ -99,7 +99,7 @@ fn form_duplicate_ssid_indices_last_wins() {
 #[test]
 fn form_ssid_indices_out_of_order() {
     let body = "ssid_2=Third&password_2=p3&ssid_0=First&password_0=p1&api_key_action=keep";
-    let form = parse_provision_form(body, 3).unwrap();
+    let form = parse_provision_form(body, 3, false).unwrap();
     assert_eq!(form.credentials.len(), 2);
     // Order follows the ssid appearance in body
     assert_eq!(form.credentials[0].ssid, "Third");
@@ -109,27 +109,27 @@ fn form_ssid_indices_out_of_order() {
 #[test]
 fn form_special_chars_in_password() {
     let body = "ssid_0=Net&password_0=%21%40%23%24%25%5E%26*()&api_key_action=keep";
-    let form = parse_provision_form(body, 3).unwrap();
+    let form = parse_provision_form(body, 3, false).unwrap();
     assert_eq!(form.credentials[0].password, "!@#$%^&*()");
 }
 
 #[test]
 fn form_plus_sign_in_ssid() {
     let body = "ssid_0=My+Network&password_0=pass&api_key_action=keep";
-    let form = parse_provision_form(body, 3).unwrap();
+    let form = parse_provision_form(body, 3, false).unwrap();
     assert_eq!(form.credentials[0].ssid, "My Network");
 }
 
 #[test]
 fn form_empty_body() {
-    assert_eq!(parse_provision_form("", 3), Err(FormError::NoCredentials));
+    assert_eq!(parse_provision_form("", 3, false), Err(FormError::NoCredentials));
 }
 
 #[test]
 fn form_only_unknown_fields() {
     let body = "foo=bar&baz=qux";
     assert_eq!(
-        parse_provision_form(body, 3),
+        parse_provision_form(body, 3, false),
         Err(FormError::NoCredentials)
     );
 }
@@ -137,14 +137,14 @@ fn form_only_unknown_fields() {
 #[test]
 fn form_hostname_with_special_chars() {
     let body = "ssid_0=Net&password_0=pass&hostname=my%2Ddevice%2D01&api_key_action=keep";
-    let form = parse_provision_form(body, 3).unwrap();
+    let form = parse_provision_form(body, 3, false).unwrap();
     assert_eq!(form.hostname, Some("my-device-01".into()));
 }
 
 #[test]
 fn form_empty_hostname_ignored() {
     let body = "ssid_0=Net&password_0=pass&hostname=&api_key_action=keep";
-    let form = parse_provision_form(body, 3).unwrap();
+    let form = parse_provision_form(body, 3, false).unwrap();
     assert_eq!(form.hostname, None);
 }
 
@@ -253,7 +253,7 @@ fn form_max_aps_matches_config_max() {
     }
     body.push_str("&api_key_action=keep");
 
-    let form = parse_provision_form(&body, MAX_WIFI_APS).unwrap();
+    let form = parse_provision_form(&body, MAX_WIFI_APS, false).unwrap();
     // Should only include up to MAX_WIFI_APS credentials
     assert_eq!(form.credentials.len(), MAX_WIFI_APS);
 }
@@ -265,14 +265,14 @@ fn form_max_aps_matches_config_max() {
 #[test]
 fn api_key_action_unknown_value_defaults_to_keep() {
     let body = "ssid_0=Net&password_0=pass&api_key_action=unknown_action";
-    let form = parse_provision_form(body, 3).unwrap();
+    let form = parse_provision_form(body, 3, false).unwrap();
     assert_eq!(form.api_key_action, ApiKeyAction::Keep);
 }
 
 #[test]
 fn api_key_set_with_special_chars() {
     let body = "ssid_0=Net&password_0=pass&api_key_action=set&api_key=abc%21%40%23def";
-    let form = parse_provision_form(body, 3).unwrap();
+    let form = parse_provision_form(body, 3, false).unwrap();
     assert_eq!(form.api_key_action, ApiKeyAction::Set("abc!@#def".into()));
 }
 

@@ -7,9 +7,11 @@
 use std::collections::BTreeMap;
 
 #[cfg(feature = "esp")]
-use esp_idf_svc::hal::adc::{AdcChannelDriver, AdcDriver};
-#[cfg(feature = "esp")]
 use esp_idf_svc::hal::adc::attenuation::DB_11;
+#[cfg(feature = "esp")]
+use esp_idf_svc::hal::adc::oneshot::config::AdcChannelConfig;
+#[cfg(feature = "esp")]
+use esp_idf_svc::hal::adc::oneshot::{AdcChannelDriver, AdcDriver};
 #[cfg(feature = "esp")]
 use esp_idf_svc::hal::gpio::{ADCPin, AnyIOPin, Input, InterruptType, OutputPin, PinDriver};
 #[cfg(feature = "esp")]
@@ -24,8 +26,6 @@ use esp_idf_svc::hal::units::Hertz;
 use esp_idf_svc::sys::EspError;
 #[cfg(feature = "esp")]
 use log::{info, warn};
-#[cfg(feature = "esp")]
-use std::cell::RefCell;
 #[cfg(feature = "esp")]
 use std::rc::Rc;
 
@@ -119,8 +119,8 @@ pub struct EdgeEvent {
 /// A type-erased ADC channel entry.
 ///
 /// Uses a boxed closure to sample the ADC, hiding the generic pin type.
-/// The closure captures both the shared `AdcDriver` (via `Rc<RefCell>`)
-/// and the pin's `AdcChannelDriver`.
+/// The closure captures an `AdcChannelDriver` (which internally holds an
+/// `Rc<AdcDriver>`) and calls `read_raw()` on each sample.
 #[cfg(feature = "esp")]
 struct AdcEntry {
     path: String,
@@ -406,7 +406,7 @@ impl GpioManager {
 
     /// Register an ADC input pin for periodic sampling.
     ///
-    /// The `adc_driver` is shared (via `Rc<RefCell>`) across all channels on
+    /// The `adc_driver` is shared (via `Rc`) across all channels on
     /// the same ADC unit. Create one `AdcDriver` per unit and pass a clone
     /// of the `Rc` for each pin.
     pub fn add_adc<P: ADCPin + 'static>(
@@ -414,21 +414,22 @@ impl GpioManager {
         path: String,
         pin_num: u8,
         pin: impl Peripheral<P = P> + 'static,
-        adc_driver: Rc<RefCell<AdcDriver<'static, P::Adc>>>,
+        adc_driver: Rc<AdcDriver<'static, P::Adc>>,
     ) -> Result<(), anyhow::Error> {
         self.pin_registry
             .register(pin_num, format!("analog_in ({})", path))
             .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-        let mut channel = AdcChannelDriver::<{ DB_11 }, P>::new(pin)?;
+        let config = AdcChannelConfig {
+            attenuation: DB_11,
+            ..Default::default()
+        };
+        let mut channel = AdcChannelDriver::new(adc_driver, pin, &config)?;
         info!("ADC pin registered: {} (GPIO{})", path, pin_num);
         self.adc_pins.push(AdcEntry {
             path,
             pin_num,
-            sampler: Box::new(move || {
-                let mut drv = adc_driver.borrow_mut();
-                drv.read(&mut channel)
-            }),
+            sampler: Box::new(move || channel.read_raw()),
         });
         Ok(())
     }

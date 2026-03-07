@@ -22,7 +22,7 @@ opt-level = "z"
 [features]
 default = ["std", "esp", "json", "scripting"]
 std = []
-esp = ["dep:esp-idf-svc", "dep:embuild", "json"]
+esp = ["dep:esp-idf-svc", "dep:embedded-svc", "dep:embuild", "json"]
 gpio = ["dep:toml", "dep:serde"]
 json = ["dep:serde", "dep:serde_json"]
 scripting = ["std", "dep:cc"]
@@ -35,6 +35,7 @@ experimental = ["esp-idf-svc/experimental"]
 [dependencies]
 log = "0.4"
 esp-idf-svc = { version = "0.51", features = ["critical-section"], optional = true }
+embedded-svc = { version = "0.28", default-features = false, optional = true }
 anyhow = "1"
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
@@ -47,3 +48,6 @@ serde = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
 object = { version = "0.36", default-features = false, features = ["read", "elf"] }
+
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/mdns", version = "1.4" }

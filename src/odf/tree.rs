@@ -128,6 +128,35 @@ impl ObjectTree {
         self.objects.contains_key(id)
     }
 
+    /// Collect all (path, onread_script) pairs from the tree.
+    ///
+    /// Used by the scripting engine to pre-compile onread functions before
+    /// execution, avoiding re-entrant mJS compilation.
+    #[cfg(feature = "scripting")]
+    pub fn collect_onread_scripts(&self) -> Vec<(String, String)> {
+        let mut result = Vec::new();
+        for (_, obj) in &self.objects {
+            Self::collect_onread_from_object(obj, &format!("/{}", obj.id), &mut result);
+        }
+        result
+    }
+
+    #[cfg(feature = "scripting")]
+    fn collect_onread_from_object(obj: &Object, prefix: &str, out: &mut Vec<(String, String)>) {
+        if let Some(items) = &obj.items {
+            for (name, item) in items {
+                if let Some(script) = item.get_onread_script() {
+                    out.push((format!("{}/{}", prefix, name), script.to_string()));
+                }
+            }
+        }
+        if let Some(children) = &obj.objects {
+            for (id, child) in children {
+                Self::collect_onread_from_object(child, &format!("{}/{}", prefix, id), out);
+            }
+        }
+    }
+
     /// Resolve an immutable reference from a path.
     pub fn resolve(&self, path: &str) -> Result<PathTarget<'_>, TreeError> {
         let segments = parse_path(path)?;

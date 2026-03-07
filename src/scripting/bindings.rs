@@ -48,6 +48,10 @@ pub(crate) struct ScriptCallbackCtx {
     /// infinite recursion. Null when not inside an onread script.
     pub onread_path_ptr: *const u8,
     pub onread_path_len: usize,
+    /// Pre-compiled onread functions keyed by item path (FR-007).
+    /// Compiled before script execution to avoid re-entrant mJS compilation.
+    /// Null when no onread functions are available (e.g. onwrite context).
+    pub onread_fns: *const std::collections::BTreeMap<String, ffi::mjs_val_t>,
 }
 
 /// C callback for `odf.writeItem(value, path)`.
@@ -218,6 +222,201 @@ unsafe fn info_item_to_mjs(mjs: *mut ffi::mjs, item: &InfoItem) -> ffi::mjs_val_
     obj
 }
 
+/// Build an mJS object representing an InfoItem element structure with
+/// the newest value overridden by a pre-transformed mJS value.
+///
+/// # Safety
+/// `mjs` must be a valid mJS instance pointer. `item` must be a valid reference.
+unsafe fn info_item_to_mjs_with_override(
+    mjs: *mut ffi::mjs,
+    item: &InfoItem,
+    newest_override: ffi::mjs_val_t,
+) -> ffi::mjs_val_t {
+    let obj = ffi::mjs_mk_object(mjs);
+
+    if let Some(ref type_uri) = item.type_uri {
+        let (name, len) = mjs_name!("type");
+        let val = ffi::mjs_mk_string(mjs, type_uri.as_ptr() as *const _, type_uri.len(), 1);
+        ffi::mjs_set(mjs, obj, name, len, val);
+    }
+
+    if let Some(ref desc) = item.desc {
+        let (name, len) = mjs_name!("desc");
+        let val = ffi::mjs_mk_string(mjs, desc.as_ptr() as *const _, desc.len(), 1);
+        ffi::mjs_set(mjs, obj, name, len, val);
+    }
+
+    let arr = ffi::mjs_mk_array(mjs);
+    let values = item.query_values(None, None, None, None);
+    for (i, entry) in values.iter().enumerate() {
+        let entry_obj = ffi::mjs_mk_object(mjs);
+        let (v_name, v_len) = mjs_name!("v");
+        let v_val = if i == 0 {
+            newest_override
+        } else {
+            convert::omi_to_mjs(mjs, &entry.v)
+        };
+        ffi::mjs_set(mjs, entry_obj, v_name, v_len, v_val);
+
+        if let Some(t) = entry.t {
+            let (t_name, t_len) = mjs_name!("t");
+            let t_val = ffi::mjs_mk_number(mjs, t);
+            ffi::mjs_set(mjs, entry_obj, t_name, t_len, t_val);
+        }
+
+        ffi::mjs_array_push(mjs, arr, entry_obj);
+    }
+
+    let (vals_name, vals_len) = mjs_name!("values");
+    ffi::mjs_set(mjs, obj, vals_name, vals_len, arr);
+
+    obj
+}
+
+/// Execute a nested onread script from within a `js_odf_read_item` callback.
+///
+/// Uses a pre-compiled function from the `onread_fns` cache to avoid
+/// re-entrant mJS compilation (which would corrupt the bytecode buffer).
+/// The function is called via `mjs_apply`. The nested script gets its own
+/// `event` object and a read-only `odf` binding (no `writeItem` per FR-006).
+/// The outer script's globals are saved and restored after execution.
+///
+/// Returns `Some(mjs_val_t)` if the script produced a non-null result.
+/// Returns `None` if depth exceeded, no pre-compiled function, or script failed.
+///
+/// # Safety
+/// `mjs` must be a valid mJS instance. `ctx` must point to a valid
+/// `ScriptCallbackCtx` with a valid `onread_fns` map.
+unsafe fn execute_nested_onread(
+    mjs: *mut ffi::mjs,
+    item: &crate::odf::InfoItem,
+    effective_path: &str,
+    ctx: &ScriptCallbackCtx,
+) -> Option<ffi::mjs_val_t> {
+    // Must have an onread script
+    let _ = item.get_onread_script()?;
+
+    let new_depth = ctx.depth + 1;
+    if new_depth >= MAX_SCRIPT_DEPTH {
+        log::warn!(
+            "Nested onread depth limit reached at path '{}'",
+            effective_path
+        );
+        return None;
+    }
+
+    // Look up pre-compiled function
+    if ctx.onread_fns.is_null() {
+        return None;
+    }
+    let onread_fns = &*ctx.onread_fns;
+    let func_val = *onread_fns.get(effective_path)?;
+    if ffi::mjs_is_function(func_val) == 0 {
+        return None;
+    }
+
+    // Get stored value for event.value
+    let newest = item.query_values(Some(1), None, None, None);
+    let (stored_omi, stored_ts) = if !newest.is_empty() {
+        (newest[0].v.clone(), newest[0].t)
+    } else {
+        (crate::odf::OmiValue::Null, None)
+    };
+
+    let global = ffi::mjs_get_global(mjs);
+
+    // Save current globals: event, __ctx, odf
+    let (ev_name, ev_len) = mjs_name!("event");
+    let old_event = ffi::mjs_get(mjs, global, ev_name, ev_len);
+    let (ctx_nm, ctx_ln) = mjs_name!("__ctx");
+    let old_ctx_val = ffi::mjs_get(mjs, global, ctx_nm, ctx_ln);
+    let (odf_nm, odf_ln) = mjs_name!("odf");
+    let old_odf = ffi::mjs_get(mjs, global, odf_nm, odf_ln);
+
+    // Set up new event: { value, path, timestamp }
+    let new_event = ffi::mjs_mk_object(mjs);
+    let js_val = convert::omi_to_mjs(mjs, &stored_omi);
+    let (n, l) = mjs_name!("value");
+    ffi::mjs_set(mjs, new_event, n, l, js_val);
+    let js_path = ffi::mjs_mk_string(
+        mjs,
+        effective_path.as_ptr() as *const _,
+        effective_path.len(),
+        1,
+    );
+    let (n, l) = mjs_name!("path");
+    ffi::mjs_set(mjs, new_event, n, l, js_path);
+    let js_ts = match stored_ts {
+        Some(t) => ffi::mjs_mk_number(mjs, t),
+        None => ffi::mjs_mk_null(),
+    };
+    let (n, l) = mjs_name!("timestamp");
+    ffi::mjs_set(mjs, new_event, n, l, js_ts);
+    ffi::mjs_set(mjs, global, ev_name, ev_len, new_event);
+
+    // Set up read-only odf (FR-006: no writeItem in onread scripts)
+    let nested_odf = ffi::mjs_mk_object(mjs);
+    let read_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_read_item));
+    let (n, l) = mjs_name!("readItem");
+    ffi::mjs_set(mjs, nested_odf, n, l, read_fn);
+    ffi::mjs_set(mjs, global, odf_nm, odf_ln, nested_odf);
+
+    // Set up nested context with incremented depth and self-read guard
+    let mut nested_ctx = ScriptCallbackCtx {
+        pending_writes: ctx.pending_writes,
+        depth: new_depth,
+        tree: ctx.tree,
+        onread_path_ptr: effective_path.as_ptr(),
+        onread_path_len: effective_path.len(),
+        onread_fns: ctx.onread_fns,
+    };
+    let nested_foreign = ffi::mjs_mk_foreign(
+        mjs,
+        &mut nested_ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void,
+    );
+    ffi::mjs_set(mjs, global, ctx_nm, ctx_ln, nested_foreign);
+
+    // Call the pre-compiled function via mjs_apply (no compilation needed)
+    let mut res: ffi::mjs_val_t = 0;
+    let err = ffi::mjs_apply(
+        mjs,
+        &mut res,
+        func_val,
+        ffi::mjs_mk_undefined(),
+        0,
+        std::ptr::null_mut(),
+    );
+
+    let result = if err == ffi::MJS_OK
+        && ffi::mjs_is_null(res) == 0
+        && ffi::mjs_is_undefined(res) == 0
+    {
+        Some(res)
+    } else {
+        if err != ffi::MJS_OK {
+            let err_ptr = ffi::mjs_strerror(mjs, err);
+            if !err_ptr.is_null() {
+                let msg = std::ffi::CStr::from_ptr(err_ptr)
+                    .to_str()
+                    .unwrap_or("unknown error");
+                log::warn!(
+                    "nested onread script error at '{}': {}",
+                    effective_path,
+                    msg
+                );
+            }
+        }
+        None
+    };
+
+    // Restore old globals
+    ffi::mjs_set(mjs, global, ev_name, ev_len, old_event);
+    ffi::mjs_set(mjs, global, ctx_nm, ctx_ln, old_ctx_val);
+    ffi::mjs_set(mjs, global, odf_nm, odf_ln, old_odf);
+
+    result
+}
+
 /// C callback for `odf.readItem(path)`.
 ///
 /// Resolves the path against the ObjectTree and returns:
@@ -225,6 +424,9 @@ unsafe fn info_item_to_mjs(mjs: *mut ffi::mjs, item: &InfoItem) -> ffi::mjs_val_
 /// - Without suffix: the full element structure `{ type, desc, values }`
 /// - `null` for: nonexistent path, Object (not InfoItem), non-readable item,
 ///   empty ring buffer, no args, invalid path
+///
+/// If the target item has an onread script and the current depth allows it
+/// (FR-007), the script is executed inline to transform the value.
 ///
 /// # Safety
 /// Called from mJS during script execution. The `__ctx` foreign pointer on the
@@ -355,6 +557,20 @@ pub(crate) unsafe extern "C" fn js_odf_read_item(mjs: *mut ffi::mjs) {
     if !item.is_readable() {
         ffi::mjs_return(mjs, ffi::mjs_mk_null());
         return;
+    }
+
+    // FR-007: Nested onread — if target item has an onread script,
+    // execute it to transform the read value (subject to depth limit).
+    if item.get_onread_script().is_some() {
+        if let Some(transformed) = execute_nested_onread(mjs, item, effective_path, ctx) {
+            if wants_raw {
+                ffi::mjs_return(mjs, transformed);
+            } else {
+                ffi::mjs_return(mjs, info_item_to_mjs_with_override(mjs, item, transformed));
+            }
+            return;
+        }
+        // Script failed or depth exceeded — fall through to stored value
     }
 
     // Empty ring buffer → null (unless pending writes exist for non-raw)

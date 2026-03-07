@@ -118,4 +118,17 @@ extern "C" {
     // --- Operation limit ---
     pub fn mjs_set_max_ops(mjs: *mut mjs, max_ops: std::os::raw::c_ulong);
     pub fn mjs_reset_ops_count(mjs: *mut mjs);
+
+    // --- Function calls ---
+    pub fn mjs_apply(
+        mjs: *mut mjs,
+        res: *mut mjs_val_t,
+        func: mjs_val_t,
+        this_val: mjs_val_t,
+        nargs: c_int,
+        args: *mut mjs_val_t,
+    ) -> mjs_err_t;
+
+    // --- Type checks (additional) ---
+    pub fn mjs_is_function(v: mjs_val_t) -> c_int;
 }

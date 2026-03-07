@@ -528,6 +528,7 @@ impl Engine {
                 tree: &self.tree as *const _,
                 onread_path_ptr: std::ptr::null(),
                 onread_path_len: 0,
+                onread_fns: std::ptr::null(),
             };
             let ctx_foreign = ffi::mjs_mk_foreign(mjs, &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void);
             let (n, l) = mjs_name!("__ctx");
@@ -654,6 +655,26 @@ impl Engine {
         let mut pending_writes: Vec<PendingWrite> = Vec::new();
         let mut result_value: Option<OmiValue> = None;
 
+        // FR-007: Pre-compile all onread scripts as functions before execution.
+        // This avoids re-entrant mjs_exec from within readItem callbacks,
+        // which would corrupt the bytecode buffer.
+        let mut onread_fns = std::collections::BTreeMap::new();
+        unsafe {
+            for (item_path, script) in self.tree.collect_onread_scripts() {
+                if item_path == path {
+                    continue; // Skip self — handled by self-read guard
+                }
+                let func_src = format!("(function() {{ return {}; }})", script);
+                if let Ok(c_src) = std::ffi::CString::new(func_src.as_str()) {
+                    let mut func_val: ffi::mjs_val_t = 0;
+                    let err = ffi::mjs_exec(mjs, c_src.as_ptr(), &mut func_val);
+                    if err == ffi::MJS_OK && ffi::mjs_is_function(func_val) != 0 {
+                        onread_fns.insert(item_path, func_val);
+                    }
+                }
+            }
+        }
+
         // Safety: mjs is valid for the duration of this block. The read-only
         // callback only reads from the tree — no aliasing concerns.
         unsafe {
@@ -692,6 +713,7 @@ impl Engine {
                 tree: &self.tree as *const _,
                 onread_path_ptr: path.as_ptr(),
                 onread_path_len: path.len(),
+                onread_fns: &onread_fns,
             };
             let ctx_foreign = ffi::mjs_mk_foreign(mjs, &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void);
             let (n, l) = mjs_name!("__ctx");
@@ -1701,6 +1723,104 @@ mod tests {
             );
             // 5 + 10 = 15 — cross-read works normally
             assert_eq!(result, Some(OmiValue::Number(15.0)));
+        }
+
+        #[test]
+        fn onread_nested_executes_target_onread() {
+            // FR-007: Reading an item with its own onread script from within
+            // another onread script triggers the nested script.
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/TempC", OmiValue::Number(100.0)), 0.0, None);
+            e.process(write_msg("/Dev/Display", OmiValue::Number(0.0)), 0.0, None);
+            // TempC onread converts C→F
+            set_onread(&mut e, "/Dev/TempC", "event.value * 9 / 5 + 32");
+            // Display onread reads TempC (which triggers TempC's onread)
+            set_onread(&mut e, "/Dev/Display",
+                "odf.readItem('/Dev/TempC/value')");
+            let result = e.run_onread_script(
+                "/Dev/Display",
+                &OmiValue::Number(0.0),
+                Some(1000.0),
+            );
+            // 100°C → 212°F via nested onread
+            assert_eq!(result, Some(OmiValue::Number(212.0)));
+        }
+
+        #[test]
+        fn onread_nested_depth_limit() {
+            // FR-007: Nested onread respects MAX_SCRIPT_DEPTH.
+            // Create a chain: A reads B reads C reads D reads E.
+            // With MAX_SCRIPT_DEPTH=4, the chain should be capped.
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/A", OmiValue::Number(1.0)), 0.0, None);
+            e.process(write_msg("/Dev/B", OmiValue::Number(2.0)), 0.0, None);
+            e.process(write_msg("/Dev/C", OmiValue::Number(3.0)), 0.0, None);
+            e.process(write_msg("/Dev/D", OmiValue::Number(4.0)), 0.0, None);
+            e.process(write_msg("/Dev/E", OmiValue::Number(5.0)), 0.0, None);
+            // Each item's onread reads the next item's value
+            set_onread(&mut e, "/Dev/A", "odf.readItem('/Dev/B/value')");
+            set_onread(&mut e, "/Dev/B", "odf.readItem('/Dev/C/value')");
+            set_onread(&mut e, "/Dev/C", "odf.readItem('/Dev/D/value')");
+            set_onread(&mut e, "/Dev/D", "odf.readItem('/Dev/E/value')");
+            set_onread(&mut e, "/Dev/E", "event.value * 10");
+            // A(depth=0) → B(depth=1) → C(depth=2) → D(depth=3) → E would be depth=4
+            // which equals MAX_SCRIPT_DEPTH, so E's onread is NOT executed.
+            // D falls through to stored value of E (5.0), then C returns that, etc.
+            let result = e.run_onread_script(
+                "/Dev/A",
+                &OmiValue::Number(1.0),
+                None,
+            );
+            // Depth limit prevents E's onread (5*10=50) from running,
+            // so D gets stored value 5.0, which propagates up the chain.
+            assert_eq!(result, Some(OmiValue::Number(5.0)));
+        }
+
+        #[test]
+        fn onread_nested_element_structure() {
+            // FR-007: Nested onread with element structure (no /value suffix)
+            // returns transformed value in the values array.
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/Src", OmiValue::Number(10.0)), 0.0, None);
+            set_onread(&mut e, "/Dev/Src", "event.value + 5");
+            e.process(write_msg("/Dev/Reader", OmiValue::Number(0.0)), 0.0, None);
+            // Read element structure of Src — nested onread transforms v
+            set_onread(&mut e, "/Dev/Reader",
+                "let item = odf.readItem('/Dev/Src'); item.values[0].v");
+            let result = e.run_onread_script(
+                "/Dev/Reader",
+                &OmiValue::Number(0.0),
+                Some(1000.0),
+            );
+            // Src stored=10, onread returns 10+5=15, element.values[0].v=15
+            assert_eq!(result, Some(OmiValue::Number(15.0)));
+        }
+
+        #[test]
+        fn onread_nested_no_writeitem() {
+            // FR-006: Nested onread scripts should not have odf.writeItem.
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/Src", OmiValue::Number(10.0)), 0.0, None);
+            e.process(write_msg("/Dev/Target", OmiValue::Number(0.0)), 0.0, None);
+            // Src's onread tries to write — should fail gracefully
+            set_onread(&mut e, "/Dev/Src",
+                "odf.writeItem(99, '/Dev/Target'); event.value + 1");
+            e.process(write_msg("/Dev/Reader", OmiValue::Number(0.0)), 0.0, None);
+            set_onread(&mut e, "/Dev/Reader",
+                "odf.readItem('/Dev/Src/value')");
+            let result = e.run_onread_script(
+                "/Dev/Reader",
+                &OmiValue::Number(0.0),
+                Some(1000.0),
+            );
+            // Src's onread tries writeItem which doesn't exist → script error
+            // or writeItem is undefined → falls through to stored value (10)
+            // The exact behavior depends on mJS — either the script errors
+            // (returning None, falling through to stored 10), or writeItem is
+            // undefined and the script continues to return 10+1=11.
+            // Either way, Target should NOT be modified.
+            let target_val = newest_value(&mut e, "/Dev/Target");
+            assert_eq!(target_val, OmiValue::Number(0.0), "writeItem must not modify Target");
         }
 
         #[test]

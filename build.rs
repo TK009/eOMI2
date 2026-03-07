@@ -87,6 +87,7 @@ fn main() {
     // --- Build-configurable constants (available in all build profiles) ---
     println!("cargo:rerun-if-env-changed=MAX_WIFI_APS");
     println!("cargo:rerun-if-env-changed=EOMI_HOSTNAME");
+    println!("cargo:rerun-if-env-changed=PERIPHERALS");
 
     // MAX_WIFI_APS: default 3
     let max_wifi_aps: usize = std::env::var("MAX_WIFI_APS")
@@ -99,6 +100,14 @@ fn main() {
         format!("{}", max_wifi_aps),
     )
     .expect("Failed to write max_wifi_aps.const");
+
+    // PERIPHERALS: comma-separated list of protocol:name pairs (e.g. "I2C:GPIO21,UART:GPIO16,SPI:GPIO18")
+    // Parsed at runtime by PeripheralConfig. Empty string means no peripherals configured.
+    let peripherals = std::env::var("PERIPHERALS")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default();
+    println!("cargo:rustc-env=PERIPHERALS={}", peripherals);
 
     // HOSTNAME: default "eOMI"
     let hostname = std::env::var("EOMI_HOSTNAME")

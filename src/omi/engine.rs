@@ -526,6 +526,8 @@ impl Engine {
                 pending_writes: &mut pending_writes,
                 depth,
                 tree: &self.tree as *const _,
+                onread_path_ptr: std::ptr::null(),
+                onread_path_len: 0,
             };
             let ctx_foreign = ffi::mjs_mk_foreign(mjs, &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void);
             let (n, l) = mjs_name!("__ctx");
@@ -688,6 +690,8 @@ impl Engine {
                 pending_writes: &mut pending_writes,
                 depth: 0,
                 tree: &self.tree as *const _,
+                onread_path_ptr: path.as_ptr(),
+                onread_path_len: path.len(),
             };
             let ctx_foreign = ffi::mjs_mk_foreign(mjs, &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void);
             let (n, l) = mjs_name!("__ctx");
@@ -1646,6 +1650,57 @@ mod tests {
                 None,
             );
             assert_eq!(result, None);
+        }
+
+        #[test]
+        fn onread_self_read_returns_stored_value() {
+            // FR-008: Self-read recursion guard — reading own path from within
+            // an onread script returns the stored value, not the transformed one.
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/Self", OmiValue::Number(42.0)), 0.0, None);
+            // Script reads its own path — should get stored value (42), not recurse
+            set_onread(&mut e, "/Dev/Self",
+                "odf.readItem('/Dev/Self/value') + 100");
+            let result = e.run_onread_script(
+                "/Dev/Self",
+                &OmiValue::Number(42.0),
+                Some(1000.0),
+            );
+            // 42 (stored, via guard) + 100 = 142
+            assert_eq!(result, Some(OmiValue::Number(142.0)));
+        }
+
+        #[test]
+        fn onread_self_read_element_structure() {
+            // FR-008: Self-read without /value suffix returns element structure
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/Elem", OmiValue::Number(7.0)), 0.0, None);
+            set_onread(&mut e, "/Dev/Elem",
+                "let item = odf.readItem('/Dev/Elem'); item.values[0].v * 2");
+            let result = e.run_onread_script(
+                "/Dev/Elem",
+                &OmiValue::Number(7.0),
+                Some(1000.0),
+            );
+            // 7 (stored, via guard) * 2 = 14
+            assert_eq!(result, Some(OmiValue::Number(14.0)));
+        }
+
+        #[test]
+        fn onread_cross_read_not_blocked() {
+            // FR-007: Reading a different item is NOT blocked by the self-read guard.
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/Other", OmiValue::Number(10.0)), 0.0, None);
+            e.process(write_msg("/Dev/Reader", OmiValue::Number(5.0)), 0.0, None);
+            set_onread(&mut e, "/Dev/Reader",
+                "event.value + odf.readItem('/Dev/Other/value')");
+            let result = e.run_onread_script(
+                "/Dev/Reader",
+                &OmiValue::Number(5.0),
+                Some(1000.0),
+            );
+            // 5 + 10 = 15 — cross-read works normally
+            assert_eq!(result, Some(OmiValue::Number(15.0)));
         }
 
         #[test]

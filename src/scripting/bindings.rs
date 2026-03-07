@@ -42,6 +42,12 @@ pub(crate) struct ScriptCallbackCtx {
     /// Immutable reference to the object tree for `odf.readItem()`.
     /// Must remain valid for the duration of script execution.
     pub tree: *const ObjectTree,
+    /// Path of the currently-executing onread script (FR-008).
+    /// When `odf.readItem()` is called on this path, the stored value is
+    /// returned directly without re-triggering the onread script, preventing
+    /// infinite recursion. Null when not inside an onread script.
+    pub onread_path_ptr: *const u8,
+    pub onread_path_len: usize,
 }
 
 /// C callback for `odf.writeItem(value, path)`.
@@ -272,6 +278,50 @@ pub(crate) unsafe extern "C" fn js_odf_read_item(mjs: *mut ffi::mjs) {
 
     // Detect /value suffix (InfoItem named "value" takes precedence)
     let (effective_path, wants_raw) = strip_value_suffix(path, tree);
+
+    // FR-008: Self-read recursion guard. If the requested path matches the
+    // currently-executing onread script path, return the stored value directly
+    // without re-triggering the onread script (prevents infinite recursion).
+    let is_self_read = if !ctx.onread_path_ptr.is_null() {
+        let onread_path = std::str::from_utf8_unchecked(
+            std::slice::from_raw_parts(ctx.onread_path_ptr, ctx.onread_path_len),
+        );
+        effective_path == onread_path
+    } else {
+        false
+    };
+    if is_self_read {
+        // Resolve and return stored value directly — no onread trigger
+        let target = match tree.resolve(effective_path) {
+            Ok(t) => t,
+            Err(_) => {
+                ffi::mjs_return(mjs, ffi::mjs_mk_null());
+                return;
+            }
+        };
+        let item = match target {
+            PathTarget::InfoItem(item) => item,
+            _ => {
+                ffi::mjs_return(mjs, ffi::mjs_mk_null());
+                return;
+            }
+        };
+        if !item.is_readable() || item.values.is_empty() {
+            ffi::mjs_return(mjs, ffi::mjs_mk_null());
+            return;
+        }
+        if wants_raw {
+            let newest = item.query_values(Some(1), None, None, None);
+            if newest.is_empty() {
+                ffi::mjs_return(mjs, ffi::mjs_mk_null());
+            } else {
+                ffi::mjs_return(mjs, convert::omi_to_mjs(mjs, &newest[0].v));
+            }
+        } else {
+            ffi::mjs_return(mjs, info_item_to_mjs(mjs, item));
+        }
+        return;
+    }
 
     // Read-after-write consistency: check pending writes from the same
     // script cycle first. The last write to this path wins.

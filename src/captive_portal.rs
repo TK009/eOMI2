@@ -453,6 +453,25 @@ if(!inp.value){\
 e.preventDefault();\
 alert('At least one WiFi network is required.');return;\
 }\
+var warns=[];\
+for(var i=0;i<selects.length;i++){\
+var sel=selects[i];\
+var idx=sel.getAttribute('data-idx');\
+var ssidInp=sel.parentNode.querySelector('input[type=hidden]');\
+var ssid=ssidInp?ssidInp.value:'';\
+if(!ssid)continue;\
+var pwInp=document.querySelector('input[name=password_'+idx+']');\
+if(pwInp&&!pwInp.value){\
+var selOpt=sel.options[sel.selectedIndex];\
+var optText=selOpt?selOpt.textContent:'';\
+if(optText.indexOf('Open')===-1){\
+warns.push(ssid);\
+}\
+}\
+}\
+if(warns.length>0&&!confirm('Empty password for: '+warns.join(', ')+'\\nOpen networks don\\x27t need a password. Continue without password?')){\
+e.preventDefault();return;\
+}\
 var s=document.getElementById('status');\
 s.style.display='block';s.style.background='#ffe';s.style.border='1px solid #cc0';\
 s.textContent='Saving and connecting...';\
@@ -867,6 +886,14 @@ mod tests {
         let html = render_provisioning_form(1, &[], "eOMI", true, None);
         // FR-015: JS validates at least one SSID before submit
         assert!(html.contains("At least one WiFi network is required"));
+    }
+
+    #[test]
+    fn form_has_empty_password_confirmation() {
+        let html = render_provisioning_form(1, &[], "eOMI", true, None);
+        // FR-015: JS confirms empty password for non-open networks
+        assert!(html.contains("Empty password for:"));
+        assert!(html.contains("Continue without password?"));
     }
 
     // --- render_provision_success ---

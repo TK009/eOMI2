@@ -84,9 +84,13 @@ fn main() -> Result<()> {
 
     let nvs_omi = nvs.clone();
     let nvs_wifi_cfg = nvs.clone();
+    let nvs_wifi_persist = nvs.clone();
 
     // Load WiFi configuration from NVS
     let wifi_cfg = wifi_cfg::load_wifi_config_or_default(nvs_wifi_cfg);
+
+    // Keep a writable NVS handle for persisting WiFi config after provisioning (SC-004)
+    let mut wifi_nvs = wifi_cfg::open_wifi_cfg_nvs(nvs_wifi_persist)?;
     let mut creds: Vec<(String, String)> = Vec::new();
 
     if let (Some(s), Some(p)) = (WIFI_SSID, WIFI_PASS) {
@@ -320,6 +324,7 @@ fn main() -> Result<()> {
                 &mut ap_active,
                 &mut dns_server,
                 &portal,
+                &mut wifi_nvs,
             );
         }
 
@@ -495,12 +500,16 @@ fn handle_provision(
     ap_active: &mut bool,
     dns_server: &mut Option<DnsServer>,
     portal: &Arc<PortalState>,
+    wifi_nvs: &mut esp_idf_svc::nvs::EspNvs<esp_idf_svc::nvs::NvsDefault>,
 ) {
     let form = &provision.form;
 
     // Add new credentials
     let start_index = creds.len();
     for cred in &form.credentials {
+        if cred.password.is_empty() {
+            warn!("Provisioning: empty password for SSID '{}' — may fail on non-open networks", cred.ssid);
+        }
         // Check for duplicates
         if !creds.iter().any(|(s, _)| s == &cred.ssid) {
             creds.push((cred.ssid.clone(), cred.password.clone()));
@@ -515,6 +524,16 @@ fn handle_provision(
     }
 
     info!("Provisioning: {} total credentials after update", creds.len());
+
+    // Persist updated credentials to NVS (FR-013, SC-004, SC-007)
+    {
+        let mut cfg = wifi_cfg::load_wifi_config(wifi_nvs).unwrap_or_default();
+        cfg.ssids = creds.clone();
+        cfg.hostname = ap_hostname.to_string();
+        if !wifi_cfg::save_wifi_config(wifi_nvs, &cfg) {
+            warn!("Provisioning: failed to persist WiFi config to NVS");
+        }
+    }
 
     // Notify state machine of new credentials
     let action = wifi_sm.credentials_updated(creds.len(), start_index);

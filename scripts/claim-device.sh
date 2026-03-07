@@ -20,10 +20,18 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 fi
 
 _claim_device() {
-    # Always resolve to the main repo root, even from a git worktree.
-    local project_root lock_dir
-    project_root="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)"
-    lock_dir="$project_root/.device-locks"
+    # Lock directory: override with DEVICE_LOCK_DIR, otherwise derive from
+    # the git common-dir.  A shared override is essential when the rig has
+    # multiple independent clones (crew) alongside worktrees (polecats) that
+    # would otherwise resolve to different directories.
+    local lock_dir
+    if [[ -n "${DEVICE_LOCK_DIR:-}" ]]; then
+        lock_dir="$DEVICE_LOCK_DIR"
+    else
+        local project_root
+        project_root="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)"
+        lock_dir="$project_root/.device-locks"
+    fi
     mkdir -p "$lock_dir"
 
     # Build device list

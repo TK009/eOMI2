@@ -15,6 +15,7 @@ pub mod odf;
 pub mod omi;
 #[cfg(feature = "std")]
 pub mod pages;
+pub mod crypto;
 pub mod psram;
 #[cfg(feature = "std")]
 pub mod http;

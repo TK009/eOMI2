@@ -40,6 +40,27 @@ impl WifiConfig {
         }
     }
 
+    /// Hash and store an API key (SHA-256). The plaintext is never stored.
+    pub fn set_api_key(&mut self, plaintext: &str) {
+        self.api_key_hash = crate::crypto::sha256(plaintext.as_bytes()).to_vec();
+    }
+
+    /// Check whether a plaintext API key matches the stored hash.
+    pub fn verify_api_key(&self, plaintext: &str) -> bool {
+        if self.api_key_hash.is_empty() {
+            return false;
+        }
+        let hash = crate::crypto::sha256(plaintext.as_bytes());
+        // Constant-time comparison to prevent timing attacks.
+        self.api_key_hash.len() == hash.len()
+            && self
+                .api_key_hash
+                .iter()
+                .zip(hash.iter())
+                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                == 0
+    }
+
     /// Add an SSID/password pair, respecting the MAX_WIFI_APS limit.
     /// Returns false if the limit is already reached.
     pub fn add_ssid(&mut self, ssid: String, password: String) -> bool {
@@ -322,6 +343,55 @@ mod tests {
         // JSON missing required fields should fail
         assert!(deserialize_wifi_config(b"{}").is_err());
         assert!(deserialize_wifi_config(b"{\"ssids\":[]}").is_err());
+    }
+
+    #[test]
+    fn set_api_key_produces_32_byte_hash() {
+        let mut cfg = WifiConfig::new();
+        cfg.set_api_key("my-secret-key");
+        assert_eq!(cfg.api_key_hash.len(), 32);
+        // Must not be the plaintext
+        assert_ne!(cfg.api_key_hash, b"my-secret-key");
+    }
+
+    #[test]
+    fn verify_api_key_correct() {
+        let mut cfg = WifiConfig::new();
+        cfg.set_api_key("test-token-123");
+        assert!(cfg.verify_api_key("test-token-123"));
+    }
+
+    #[test]
+    fn verify_api_key_wrong() {
+        let mut cfg = WifiConfig::new();
+        cfg.set_api_key("correct-key");
+        assert!(!cfg.verify_api_key("wrong-key"));
+    }
+
+    #[test]
+    fn verify_api_key_empty_hash_returns_false() {
+        let cfg = WifiConfig::new();
+        assert!(!cfg.verify_api_key("any-key"));
+    }
+
+    #[test]
+    fn set_api_key_deterministic() {
+        let mut a = WifiConfig::new();
+        let mut b = WifiConfig::new();
+        a.set_api_key("same-key");
+        b.set_api_key("same-key");
+        assert_eq!(a.api_key_hash, b.api_key_hash);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn set_api_key_survives_serialization() {
+        let mut cfg = WifiConfig::new();
+        cfg.set_api_key("roundtrip-key");
+        let blob = serialize_wifi_config(&cfg).unwrap();
+        let restored = deserialize_wifi_config(&blob).unwrap();
+        assert!(restored.verify_api_key("roundtrip-key"));
+        assert!(!restored.verify_api_key("other-key"));
     }
 
     #[cfg(feature = "json")]

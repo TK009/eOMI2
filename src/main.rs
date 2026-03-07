@@ -87,7 +87,7 @@ fn main() -> Result<()> {
     let nvs_wifi_persist = nvs.clone();
 
     // Load WiFi configuration from NVS
-    let wifi_cfg = wifi_cfg::load_wifi_config_or_default(nvs_wifi_cfg);
+    let mut wifi_cfg = wifi_cfg::load_wifi_config_or_default(nvs_wifi_cfg);
 
     // Keep a writable NVS handle for persisting WiFi config after provisioning (SC-004)
     let mut wifi_nvs = wifi_cfg::open_wifi_cfg_nvs(nvs_wifi_persist)?;
@@ -325,6 +325,7 @@ fn main() -> Result<()> {
                 &mut dns_server,
                 &portal,
                 &mut wifi_nvs,
+                &mut wifi_cfg,
             );
         }
 
@@ -501,8 +502,25 @@ fn handle_provision(
     dns_server: &mut Option<DnsServer>,
     portal: &Arc<PortalState>,
     wifi_nvs: &mut esp_idf_svc::nvs::EspNvs<esp_idf_svc::nvs::NvsDefault>,
+    wifi_cfg: &mut wifi_cfg::WifiConfig,
 ) {
     let form = &provision.form;
+
+    // Hash and store the API key (FR-005)
+    use reconfigurable_device::captive_portal::ApiKeyAction;
+    match &form.api_key_action {
+        ApiKeyAction::Generate => {
+            if let Some(ref key) = provision.generated_api_key {
+                wifi_cfg.set_api_key(key);
+                info!("Provisioning: API key generated and hashed");
+            }
+        }
+        ApiKeyAction::Set(key) => {
+            wifi_cfg.set_api_key(key);
+            info!("Provisioning: user-provided API key hashed");
+        }
+        ApiKeyAction::Keep => {}
+    }
 
     // Add new credentials
     let start_index = creds.len();
@@ -525,14 +543,11 @@ fn handle_provision(
 
     info!("Provisioning: {} total credentials after update", creds.len());
 
-    // Persist updated credentials to NVS (FR-013, SC-004, SC-007)
-    {
-        let mut cfg = wifi_cfg::load_wifi_config(wifi_nvs).unwrap_or_default();
-        cfg.ssids = creds.clone();
-        cfg.hostname = ap_hostname.to_string();
-        if !wifi_cfg::save_wifi_config(wifi_nvs, &cfg) {
-            warn!("Provisioning: failed to persist WiFi config to NVS");
-        }
+    // Persist updated config (credentials + API key hash) to NVS (FR-005, FR-013, SC-004, SC-007)
+    wifi_cfg.ssids = creds.clone();
+    wifi_cfg.hostname = ap_hostname.to_string();
+    if !wifi_cfg::save_wifi_config(wifi_nvs, wifi_cfg) {
+        warn!("Provisioning: failed to persist WiFi config to NVS");
     }
 
     // Notify state machine of new credentials

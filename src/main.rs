@@ -423,6 +423,13 @@ fn main() -> Result<()> {
             }
         }
 
+        // ADC sampling: read all analog_in pins at tick interval (FR-005, FR-007)
+        if gpio_manager.has_adc_pins() {
+            let now = now_secs();
+            let mut eng = lock_or_recover(&engine, "engine");
+            gpio_manager.sample_adc(&mut eng.tree, now);
+        }
+
         // Record free heap memory
         {
             let heap_free = unsafe { esp_idf_svc::sys::esp_get_free_heap_size() };

@@ -7,17 +7,27 @@
 use std::collections::BTreeMap;
 
 #[cfg(feature = "esp")]
+use esp_idf_svc::hal::adc::{AdcChannelDriver, AdcDriver};
+#[cfg(feature = "esp")]
+use esp_idf_svc::hal::adc::attenuation::DB_11;
+#[cfg(feature = "esp")]
+use esp_idf_svc::hal::gpio::{ADCPin, AnyIOPin, Input, InterruptType, OutputPin, PinDriver};
+#[cfg(feature = "esp")]
 use esp_idf_svc::hal::ledc::{
     config::TimerConfig, LedcChannel, LedcDriver, LedcTimer, LedcTimerDriver, Resolution,
 };
-#[cfg(feature = "esp")]
-use esp_idf_svc::hal::gpio::{AnyIOPin, Input, InterruptType, OutputPin, PinDriver};
 #[cfg(feature = "esp")]
 use esp_idf_svc::hal::peripheral::Peripheral;
 #[cfg(feature = "esp")]
 use esp_idf_svc::hal::units::Hertz;
 #[cfg(feature = "esp")]
+use esp_idf_svc::sys::EspError;
+#[cfg(feature = "esp")]
 use log::{info, warn};
+#[cfg(feature = "esp")]
+use std::cell::RefCell;
+#[cfg(feature = "esp")]
+use std::rc::Rc;
 
 #[cfg(feature = "esp")]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -100,16 +110,30 @@ pub struct EdgeEvent {
     pub edge_type: EdgeType,
 }
 
-/// Manages GPIO pins including PWM outputs and edge-triggered inputs.
+/// A type-erased ADC channel entry.
+///
+/// Uses a boxed closure to sample the ADC, hiding the generic pin type.
+/// The closure captures both the shared `AdcDriver` (via `Rc<RefCell>`)
+/// and the pin's `AdcChannelDriver`.
+#[cfg(feature = "esp")]
+struct AdcEntry {
+    path: String,
+    pin_num: u8,
+    sampler: Box<dyn FnMut() -> Result<u16, EspError>>,
+}
+
+/// Manages GPIO pins including PWM outputs, edge-triggered inputs, and ADC inputs.
 ///
 /// Provides [`write_pwm`](Self::write_pwm) for direct duty control,
 /// [`sync_from_tree`](Self::sync_from_tree) for polling-based actuation,
-/// and [`drain_edge_events`](Self::drain_edge_events) for interrupt-driven
-/// edge detection (FR-005a).
+/// [`drain_edge_events`](Self::drain_edge_events) for interrupt-driven
+/// edge detection (FR-005a), and [`sample_adc`](Self::sample_adc) for
+/// periodic analog reads (FR-005).
 #[cfg(feature = "esp")]
 pub struct GpioManager {
     pwm_pins: Vec<PwmPin>,
     edge_pins: Vec<EdgePin>,
+    adc_pins: Vec<AdcEntry>,
 }
 
 #[cfg(feature = "esp")]
@@ -118,6 +142,7 @@ impl GpioManager {
         Self {
             pwm_pins: Vec::new(),
             edge_pins: Vec::new(),
+            adc_pins: Vec::new(),
         }
     }
 
@@ -186,11 +211,12 @@ impl GpioManager {
         }
     }
 
-    /// Register GPIO InfoItems in the O-DF tree (PWM + edge triggers).
+    /// Register GPIO InfoItems in the O-DF tree (PWM, edge triggers, ADC).
     ///
     /// PWM pins get `mode=pwm` metadata and `writable=true`, initial value 0.
     /// Edge trigger pins get `mode=low_edge_trigger`/`high_edge_trigger`
-    /// metadata, read-only. Called once after tree initialisation.
+    /// metadata, read-only. ADC pins get `mode=analog_in` metadata, read-only.
+    /// Called once after tree initialisation (FR-003, FR-006).
     pub fn register_tree_items(&self, tree: &mut ObjectTree) {
         for pin in &self.pwm_pins {
             if let Err(e) = tree.write_value(&pin.path, OmiValue::Number(0.0), None) {
@@ -228,6 +254,20 @@ impl GpioManager {
                 meta.insert("gpio_pin".into(), OmiValue::Number(pin.pin_num as f64));
             }
             info!("Edge InfoItem registered at {} (read-only, mode={})", pin.path, mode_str);
+        }
+
+        for entry in &self.adc_pins {
+            if let Err(e) = tree.write_value(&entry.path, OmiValue::Number(0.0), None) {
+                warn!("Failed to init ADC InfoItem at {}: {}", entry.path, e);
+                continue;
+            }
+            if let Ok(PathTargetMut::InfoItem(item)) = tree.resolve_mut(&entry.path) {
+                item.type_uri = Some("omi:gpio:analog_in".into());
+                let meta = item.meta.get_or_insert_with(BTreeMap::new);
+                meta.insert("mode".into(), OmiValue::Str("analog_in".into()));
+                meta.insert("gpio_pin".into(), OmiValue::Number(entry.pin_num as f64));
+            }
+            info!("ADC InfoItem registered at {} (read-only, mode=analog_in)", entry.path);
         }
     }
 
@@ -308,6 +348,57 @@ impl GpioManager {
     /// Returns true if any edge-triggered pins are registered.
     pub fn has_edge_pins(&self) -> bool {
         !self.edge_pins.is_empty()
+    }
+
+    /// Register an ADC input pin for periodic sampling.
+    ///
+    /// The `adc_driver` is shared (via `Rc<RefCell>`) across all channels on
+    /// the same ADC unit. Create one `AdcDriver` per unit and pass a clone
+    /// of the `Rc` for each pin.
+    pub fn add_adc<P: ADCPin + 'static>(
+        &mut self,
+        path: String,
+        pin_num: u8,
+        pin: impl Peripheral<P = P> + 'static,
+        adc_driver: Rc<RefCell<AdcDriver<'static, P::Adc>>>,
+    ) -> Result<(), anyhow::Error> {
+        let mut channel = AdcChannelDriver::<{ DB_11 }, P>::new(pin)?;
+        info!("ADC pin registered: {} (GPIO{})", path, pin_num);
+        self.adc_pins.push(AdcEntry {
+            path,
+            pin_num,
+            sampler: Box::new(move || {
+                let mut drv = adc_driver.borrow_mut();
+                drv.read(&mut channel)
+            }),
+        });
+        Ok(())
+    }
+
+    /// Sample all registered ADC pins and write values to the O-DF tree.
+    ///
+    /// Each reading is stored as `OmiValue::Number(0..4095)` with a timestamp.
+    /// Called from the main loop at the tick interval (FR-005, FR-007).
+    pub fn sample_adc(&mut self, tree: &mut ObjectTree, now: f64) {
+        for entry in &mut self.adc_pins {
+            match (entry.sampler)() {
+                Ok(val) => {
+                    if let Err(e) = tree.write_value(
+                        &entry.path,
+                        OmiValue::Number(val as f64),
+                        Some(now),
+                    ) {
+                        warn!("ADC write failed for {}: {}", entry.path, e);
+                    }
+                }
+                Err(e) => warn!("ADC sample failed for {}: {}", entry.path, e),
+            }
+        }
+    }
+
+    /// Returns true if any ADC pins are registered.
+    pub fn has_adc_pins(&self) -> bool {
+        !self.adc_pins.is_empty()
     }
 }
 

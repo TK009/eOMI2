@@ -20,6 +20,7 @@ use reconfigurable_device::server::{
     dispatch_deliveries, start_http_server, PortalState, ServerMode,
 };
 use reconfigurable_device::sync_util::lock_or_recover;
+use reconfigurable_device::gpio::pwm::GpioManager;
 use reconfigurable_device::wifi_ap;
 use reconfigurable_device::wifi_cfg;
 use reconfigurable_device::wifi_sm::{WifiSm, WifiSmConfig, WifiEvent, WifiAction, WifiState};
@@ -67,6 +68,12 @@ fn main() -> Result<()> {
     let peripherals = Peripherals::take()?;
     let sys_loop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
+
+    // Initialize GPIO manager for PWM actuation (FR-004, FR-007).
+    // PWM pins are configured here; the board config system (future) will
+    // drive this from TOML. For now the manager starts empty and pins can
+    // be added via `gpio_manager.add_pwm(...)` before the main loop.
+    let mut gpio_manager = GpioManager::new();
 
     let nvs_omi = nvs.clone();
     let nvs_wifi_cfg = nvs.clone();
@@ -189,6 +196,9 @@ fn main() -> Result<()> {
         let mut eng = lock_or_recover(&engine, "engine");
         eng.tree.write_tree("/", build_sensor_tree()).unwrap();
         info!("Sensor tree populated: System/FreeHeap");
+
+        // Register PWM InfoItems as writable entries in the O-DF tree (FR-004)
+        gpio_manager.register_tree_items(&mut eng.tree);
     }
 
     // Load and replay NVS-persisted writable items
@@ -243,6 +253,12 @@ fn main() -> Result<()> {
             if !event_deliveries.is_empty() {
                 dispatch_deliveries(&event_deliveries, &ws_senders, &engine, &mut delivery_rl);
             }
+        }
+
+        // PWM write actuation: sync pin outputs from O-DF tree values (FR-004)
+        if gpio_manager.has_pwm_pins() {
+            let eng = lock_or_recover(&engine, "engine");
+            gpio_manager.sync_from_tree(&eng.tree);
         }
 
         // Check for pending provisioning request (FR-016)

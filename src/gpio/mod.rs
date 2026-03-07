@@ -5,6 +5,7 @@
 
 #[cfg(feature = "esp")]
 pub mod adc;
+pub mod pwm;
 
 use crate::odf::{InfoItem, OmiValue};
 use std::collections::BTreeMap;

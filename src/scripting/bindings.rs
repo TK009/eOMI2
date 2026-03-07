@@ -15,10 +15,22 @@ use crate::odf::{ObjectTree, PathTarget, InfoItem};
 /// Maximum script cascading depth.
 pub const MAX_SCRIPT_DEPTH: u8 = 4;
 
+/// Encoding hint for protocol TX writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WriteEncoding {
+    /// UTF-8 string (default).
+    String,
+    /// Hex-encoded binary data.
+    Hex,
+    /// Base64-encoded binary data.
+    Base64,
+}
+
 /// A write collected during script execution, to be processed afterwards.
 pub(crate) struct PendingWrite {
     pub path: String,
     pub value: crate::odf::OmiValue,
+    pub encoding: Option<WriteEncoding>,
 }
 
 /// Context passed to the JS callback via a foreign pointer.
@@ -96,9 +108,40 @@ pub(crate) unsafe extern "C" fn js_odf_write_item(mjs: *mut ffi::mjs) {
         return;
     }
 
+    // Parse optional 3rd arg: {type: 'hex'|'base64'|'string'}
+    let encoding = if nargs >= 3 {
+        let js_opts = ffi::mjs_arg(mjs, 2);
+        if ffi::mjs_is_object(js_opts) != 0 {
+            let (type_name, type_len) = mjs_name!("type");
+            let js_type = ffi::mjs_get(mjs, js_opts, type_name, type_len);
+            if ffi::mjs_is_string(js_type) != 0 {
+                let mut type_str_len: usize = 0;
+                let mut js_type_copy = js_type;
+                let type_ptr = ffi::mjs_get_string(mjs, &mut js_type_copy, &mut type_str_len);
+                if !type_ptr.is_null() {
+                    let type_bytes = std::slice::from_raw_parts(type_ptr as *const u8, type_str_len);
+                    match type_bytes {
+                        b"hex" => Some(WriteEncoding::Hex),
+                        b"base64" => Some(WriteEncoding::Base64),
+                        b"string" => Some(WriteEncoding::String),
+                        _ => None, // unknown type — ignore silently
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     // Collect the write for deferred processing
     let writes = &mut *ctx.pending_writes;
-    writes.push(PendingWrite { path, value: omi_value });
+    writes.push(PendingWrite { path, value: omi_value, encoding });
     ffi::mjs_return(mjs, ffi::mjs_mk_boolean(mjs, 1));
 }
 

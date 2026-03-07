@@ -425,7 +425,222 @@ fn cascading_timeout_preserves_earlier_writes() {
 }
 
 // ===========================================================================
-// 9.  Batch write: op-limit script produces per-item warning
+// 9.  writeItem with type encoding parameter (FR-009b)
+// ===========================================================================
+
+#[test]
+fn write_item_with_hex_encoding_succeeds() {
+    let mut e = engine();
+
+    // Create /Dev/Src and /Dev/TX
+    parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dev/Src","v":0}}"#,
+    );
+    parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dev/TX","v":""}}"#,
+    );
+
+    // Attach onwrite script that uses {type: 'hex'} encoding
+    set_onwrite(
+        &mut e,
+        "/Dev/Src",
+        "odf.writeItem('DEADBEEF', '/Dev/TX', {type: 'hex'});",
+    );
+
+    // Write to /Dev/Src — triggers script with encoding
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dev/Src","v":1}}"#,
+    );
+    assert_eq!(response_status(&resp), 200);
+
+    // Read /Dev/TX — should have the written value
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/TX","newest":1}}"#,
+    );
+    assert_eq!(response_status(&resp), 200);
+    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    assert_eq!(values[0]["v"], "DEADBEEF");
+}
+
+#[test]
+fn write_item_with_base64_encoding_succeeds() {
+    let mut e = engine();
+
+    parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dev/Src","v":0}}"#,
+    );
+    parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dev/TX","v":""}}"#,
+    );
+
+    set_onwrite(
+        &mut e,
+        "/Dev/Src",
+        "odf.writeItem('SGVsbG8=', '/Dev/TX', {type: 'base64'});",
+    );
+
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dev/Src","v":1}}"#,
+    );
+    assert_eq!(response_status(&resp), 200);
+
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/TX","newest":1}}"#,
+    );
+    assert_eq!(response_status(&resp), 200);
+    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    assert_eq!(values[0]["v"], "SGVsbG8=");
+}
+
+#[test]
+fn write_item_with_string_encoding_succeeds() {
+    let mut e = engine();
+
+    parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dev/Src","v":0}}"#,
+    );
+    parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dev/TX","v":""}}"#,
+    );
+
+    set_onwrite(
+        &mut e,
+        "/Dev/Src",
+        "odf.writeItem('hello', '/Dev/TX', {type: 'string'});",
+    );
+
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dev/Src","v":1}}"#,
+    );
+    assert_eq!(response_status(&resp), 200);
+
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/TX","newest":1}}"#,
+    );
+    assert_eq!(response_status(&resp), 200);
+    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    assert_eq!(values[0]["v"], "hello");
+}
+
+#[test]
+fn write_item_without_encoding_still_works() {
+    let mut e = engine();
+
+    parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dev/Src","v":0}}"#,
+    );
+    parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dev/Dst","v":0}}"#,
+    );
+
+    // No 3rd arg — backward compatible
+    set_onwrite(
+        &mut e,
+        "/Dev/Src",
+        "odf.writeItem(event.value, '/Dev/Dst');",
+    );
+
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dev/Src","v":99}}"#,
+    );
+    assert_eq!(response_status(&resp), 200);
+
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Dst","newest":1}}"#,
+    );
+    assert_eq!(response_status(&resp), 200);
+    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    assert_eq!(values[0]["v"], 99.0);
+}
+
+#[test]
+fn write_item_with_unknown_encoding_succeeds() {
+    let mut e = engine();
+
+    parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dev/Src","v":0}}"#,
+    );
+    parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dev/TX","v":""}}"#,
+    );
+
+    // Unknown type value — should succeed (encoding ignored)
+    set_onwrite(
+        &mut e,
+        "/Dev/Src",
+        "odf.writeItem('data', '/Dev/TX', {type: 'unknown'});",
+    );
+
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dev/Src","v":1}}"#,
+    );
+    assert_eq!(response_status(&resp), 200);
+
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/TX","newest":1}}"#,
+    );
+    assert_eq!(response_status(&resp), 200);
+    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    assert_eq!(values[0]["v"], "data");
+}
+
+#[test]
+fn write_item_with_non_object_third_arg_succeeds() {
+    let mut e = engine();
+
+    parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dev/Src","v":0}}"#,
+    );
+    parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dev/TX","v":""}}"#,
+    );
+
+    // 3rd arg is a number, not an object — should succeed (encoding ignored)
+    set_onwrite(
+        &mut e,
+        "/Dev/Src",
+        "odf.writeItem('data', '/Dev/TX', 42);",
+    );
+
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":10,"write":{"path":"/Dev/Src","v":1}}"#,
+    );
+    assert_eq!(response_status(&resp), 200);
+
+    let resp = parse_and_process(
+        &mut e,
+        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/TX","newest":1}}"#,
+    );
+    assert_eq!(response_status(&resp), 200);
+    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    assert_eq!(values[0]["v"], "data");
+}
+
+// ===========================================================================
+// 15.  Batch write: op-limit script produces per-item warning
 // ===========================================================================
 
 #[test]

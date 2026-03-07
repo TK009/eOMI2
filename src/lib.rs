@@ -8,6 +8,8 @@
 
 pub mod device;
 #[cfg(feature = "std")]
+pub mod gpio;
+#[cfg(feature = "std")]
 pub mod odf;
 #[cfg(feature = "std")]
 pub mod omi;

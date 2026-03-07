@@ -10,9 +10,15 @@
 
 set -euo pipefail
 
-# Resolve to main repo root, even from a git worktree.
-project_root="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)"
-lock_dir="$project_root/.device-locks"
+# Lock directory: honour DEVICE_LOCK_DIR, then try git-common-dir, then cwd.
+if [[ -n "${DEVICE_LOCK_DIR:-}" ]]; then
+    lock_dir="$DEVICE_LOCK_DIR"
+elif _gc="$(git rev-parse --git-common-dir 2>/dev/null)"; then
+    lock_dir="$(cd "$_gc/.." && pwd)/.device-locks"
+    unset _gc
+else
+    lock_dir="$(pwd)/.device-locks"
+fi
 mkdir -p "$lock_dir"
 
 # ── Collect devices ──────────────────────────────────────────────────────

@@ -5,6 +5,7 @@
 
 #[cfg(feature = "esp")]
 pub mod adc;
+pub mod encoding;
 pub mod peripheral;
 pub mod pwm;
 

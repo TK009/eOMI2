@@ -1,6 +1,7 @@
 //! Peripheral protocol bus drivers (UART, SPI) for GPIO pins.
 //!
-//! Platform-independent types (encoding, InfoItem builders) live here.
+//! Platform-independent types (InfoItem builders) live here.
+//! Encoding types are in [`super::encoding`].
 //! ESP-specific drivers are in submodules gated on `cfg(feature = "esp")`.
 
 #[cfg(feature = "esp")]
@@ -10,41 +11,13 @@ pub mod uart;
 #[cfg(feature = "esp")]
 pub mod spi;
 
+pub use super::encoding::DataEncoding;
+
 use crate::odf::{InfoItem, Object, OmiValue};
 use std::collections::BTreeMap;
 
 /// Ring buffer capacity for peripheral RX/TX InfoItems.
 const PERIPHERAL_CAPACITY: usize = 20;
-
-/// Data encoding for peripheral protocol TX/RX data (FR-009a).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DataEncoding {
-    /// UTF-8 string (default).
-    String,
-    /// Hex-encoded binary data.
-    Hex,
-    /// Base64-encoded binary data.
-    Base64,
-}
-
-impl DataEncoding {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::String => "string",
-            Self::Hex => "hex",
-            Self::Base64 => "base64",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "string" => Some(Self::String),
-            "hex" => Some(Self::Hex),
-            "base64" => Some(Self::Base64),
-            _ => None,
-        }
-    }
-}
 
 /// Decode a TX value to raw bytes using the given encoding (FR-009a).
 pub fn decode_tx_data(v: &OmiValue, encoding: DataEncoding) -> Result<Vec<u8>, String> {
@@ -54,93 +27,12 @@ pub fn decode_tx_data(v: &OmiValue, encoding: DataEncoding) -> Result<Vec<u8>, S
         OmiValue::Bool(b) => return Ok(if *b { b"1".to_vec() } else { b"0".to_vec() }),
         OmiValue::Null => return Ok(Vec::new()),
     };
-    match encoding {
-        DataEncoding::String => Ok(s.as_bytes().to_vec()),
-        DataEncoding::Hex => decode_hex(s),
-        DataEncoding::Base64 => decode_base64(s),
-    }
+    encoding.decode(s).map_err(|e| e.0)
 }
 
 /// Encode raw bytes to an OmiValue string using the given encoding.
 pub fn encode_rx_data(data: &[u8], encoding: DataEncoding) -> OmiValue {
-    match encoding {
-        DataEncoding::String => OmiValue::Str(String::from_utf8_lossy(data).into_owned()),
-        DataEncoding::Hex => OmiValue::Str(encode_hex(data)),
-        DataEncoding::Base64 => OmiValue::Str(encode_base64(data)),
-    }
-}
-
-fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
-        return Err("hex string must have even length".into());
-    }
-    let mut bytes = Vec::with_capacity(s.len() / 2);
-    for i in (0..s.len()).step_by(2) {
-        let byte = u8::from_str_radix(&s[i..i + 2], 16)
-            .map_err(|_| format!("invalid hex at position {}", i))?;
-        bytes.push(byte);
-    }
-    Ok(bytes)
-}
-
-fn encode_hex(data: &[u8]) -> String {
-    let mut s = std::string::String::with_capacity(data.len() * 2);
-    for b in data {
-        use std::fmt::Write;
-        let _ = write!(s, "{:02x}", b);
-    }
-    s
-}
-
-const B64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-fn decode_base64(s: &str) -> Result<Vec<u8>, String> {
-    let s = s.trim_end_matches('=');
-    let mut bytes = Vec::with_capacity(s.len() * 3 / 4);
-    let mut buf: u32 = 0;
-    let mut bits: u32 = 0;
-    for c in s.bytes() {
-        let val = match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            b'\n' | b'\r' | b' ' => continue,
-            _ => return Err(format!("invalid base64 character: {}", c as char)),
-        };
-        buf = (buf << 6) | val as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            bytes.push((buf >> bits) as u8);
-            buf &= (1 << bits) - 1;
-        }
-    }
-    Ok(bytes)
-}
-
-fn encode_base64(data: &[u8]) -> String {
-    let mut s = std::string::String::with_capacity((data.len() + 2) / 3 * 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
-        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-        s.push(B64_CHARS[((triple >> 18) & 0x3F) as usize] as char);
-        s.push(B64_CHARS[((triple >> 12) & 0x3F) as usize] as char);
-        if chunk.len() > 1 {
-            s.push(B64_CHARS[((triple >> 6) & 0x3F) as usize] as char);
-        } else {
-            s.push('=');
-        }
-        if chunk.len() > 2 {
-            s.push(B64_CHARS[(triple & 0x3F) as usize] as char);
-        } else {
-            s.push('=');
-        }
-    }
-    s
+    OmiValue::Str(encoding.encode(data))
 }
 
 /// Build RX and TX InfoItems for a peripheral bus (FR-009).
@@ -360,109 +252,9 @@ mod tests {
     use super::*;
     use crate::odf::OmiValue;
 
-    // --- DataEncoding ---
-
-    #[test]
-    fn encoding_as_str() {
-        assert_eq!(DataEncoding::String.as_str(), "string");
-        assert_eq!(DataEncoding::Hex.as_str(), "hex");
-        assert_eq!(DataEncoding::Base64.as_str(), "base64");
-    }
-
-    #[test]
-    fn encoding_parse() {
-        assert_eq!(DataEncoding::parse("string"), Some(DataEncoding::String));
-        assert_eq!(DataEncoding::parse("hex"), Some(DataEncoding::Hex));
-        assert_eq!(DataEncoding::parse("base64"), Some(DataEncoding::Base64));
-        assert_eq!(DataEncoding::parse("unknown"), None);
-    }
-
-    // --- Hex encoding ---
-
-    #[test]
-    fn decode_hex_hello() {
-        assert_eq!(decode_hex("48656C6C6F").unwrap(), b"Hello");
-    }
-
-    #[test]
-    fn decode_hex_lowercase() {
-        assert_eq!(decode_hex("48656c6c6f").unwrap(), b"Hello");
-    }
-
-    #[test]
-    fn decode_hex_empty() {
-        assert_eq!(decode_hex("").unwrap(), b"");
-    }
-
-    #[test]
-    fn decode_hex_odd_length() {
-        assert!(decode_hex("ABC").is_err());
-    }
-
-    #[test]
-    fn decode_hex_invalid_chars() {
-        assert!(decode_hex("ZZZZ").is_err());
-    }
-
-    #[test]
-    fn hex_roundtrip() {
-        let data = b"Hello, World!";
-        let hex = encode_hex(data);
-        assert_eq!(decode_hex(&hex).unwrap(), data);
-    }
-
-    // --- Base64 encoding ---
-
-    #[test]
-    fn decode_base64_hello() {
-        assert_eq!(decode_base64("SGVsbG8=").unwrap(), b"Hello");
-    }
-
-    #[test]
-    fn decode_base64_no_padding() {
-        assert_eq!(decode_base64("SGVsbG8").unwrap(), b"Hello");
-    }
-
-    #[test]
-    fn decode_base64_aqid() {
-        // AQID decodes to [0x01, 0x02, 0x03]
-        assert_eq!(decode_base64("AQID").unwrap(), vec![1, 2, 3]);
-    }
-
-    #[test]
-    fn decode_base64_empty() {
-        assert_eq!(decode_base64("").unwrap(), b"");
-    }
-
-    #[test]
-    fn decode_base64_invalid_char() {
-        assert!(decode_base64("@@@").is_err());
-    }
-
-    #[test]
-    fn base64_roundtrip() {
-        let data = b"Hello, World!";
-        let b64 = encode_base64(data);
-        assert_eq!(decode_base64(&b64).unwrap(), data);
-    }
-
-    #[test]
-    fn base64_single_byte() {
-        let data = b"\x01";
-        let b64 = encode_base64(data);
-        assert_eq!(decode_base64(&b64).unwrap(), data);
-    }
-
-    #[test]
-    fn base64_two_bytes() {
-        let data = b"\x01\x02";
-        let b64 = encode_base64(data);
-        assert_eq!(decode_base64(&b64).unwrap(), data);
-    }
-
     // --- decode_tx_data ---
 
-    #[test]
+#[test]
     fn tx_string_encoding() {
         let v = OmiValue::Str("Hello".into());
         assert_eq!(decode_tx_data(&v, DataEncoding::String).unwrap(), b"Hello");

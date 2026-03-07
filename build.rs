@@ -218,6 +218,9 @@ mod board_config {
 }
 
 fn main() {
+    // Declare the has_board_config cfg for check-cfg validation
+    println!("cargo::rustc-check-cfg=cfg(has_board_config)");
+
     #[cfg(feature = "scripting")]
     {
         println!("cargo:rerun-if-changed=vendor/mjs/mjs.c");

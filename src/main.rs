@@ -6,6 +6,7 @@ use esp_idf_svc::{
     wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi},
 };
 use log::{info, warn};
+use reconfigurable_device::board;
 use reconfigurable_device::captive_portal::{ConnectionState, ConnectionStatus};
 use reconfigurable_device::device::{
     build_sensor_tree, collect_writable_items, update_discovery_tree, PATH_FREE_HEAP,
@@ -70,17 +71,20 @@ fn main() -> Result<()> {
     let sys_loop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
 
-    // Initialize GPIO manager for PWM actuation (FR-004, FR-007).
-    // PWM pins are configured here; the board config system (future) will
-    // drive this from TOML. For now the manager starts empty and pins can
-    // be added via `gpio_manager.add_pwm(...)` before the main loop.
+    // Initialize GPIO manager (FR-001, FR-004, FR-007, FR-013).
     let mut gpio_manager = GpioManager::new();
 
-    // Initialize peripheral manager for UART/SPI buses (FR-008, FR-009).
-    // Buses are configured here; the board config system (future) will
-    // drive this from TOML. For now the manager starts empty and buses
-    // can be added via `peripheral_manager.add_uart(...)` / `.add_spi(...)`.
+    // Initialize peripheral manager (FR-008, FR-009).
     let mut peripheral_manager = PeripheralManager::new();
+
+    // Populate managers from board TOML config if loaded (FR-001, FR-013).
+    if board::has_board_config() {
+        info!("Board: {} ({})", board::board_name(), board::board_chip());
+        if let Err(e) = board::init_gpio(&mut gpio_manager, env!("EOMI_HOSTNAME")) {
+            warn!("Board GPIO init failed: {}", e);
+        }
+        board::log_peripheral_config();
+    }
 
     let nvs_omi = nvs.clone();
     let nvs_wifi_cfg = nvs.clone();

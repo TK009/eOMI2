@@ -6,6 +6,7 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+pub mod board;
 pub mod device;
 #[cfg(feature = "std")]
 pub mod gpio;

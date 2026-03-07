@@ -526,6 +526,8 @@ impl Engine {
                 pending_writes: &mut pending_writes,
                 depth,
                 tree: &self.tree as *const _,
+                onread_path_ptr: std::ptr::null(),
+                onread_path_len: 0,
             };
             let ctx_foreign = ffi::mjs_mk_foreign(mjs, &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void);
             let (n, l) = mjs_name!("__ctx");
@@ -683,11 +685,14 @@ impl Engine {
             ffi::mjs_set(mjs, global, n, l, odf);
 
             // Set up callback context — pending_writes is empty but needed
-            // by js_odf_read_item for read-after-write consistency checks
+            // by js_odf_read_item for read-after-write consistency checks.
+            // onread_path tracks the current path for self-read guard (FR-008).
             let mut ctx = ScriptCallbackCtx {
                 pending_writes: &mut pending_writes,
                 depth: 0,
                 tree: &self.tree as *const _,
+                onread_path_ptr: path.as_ptr(),
+                onread_path_len: path.len(),
             };
             let ctx_foreign = ffi::mjs_mk_foreign(mjs, &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void);
             let (n, l) = mjs_name!("__ctx");
@@ -1646,6 +1651,40 @@ mod tests {
                 None,
             );
             assert_eq!(result, None);
+        }
+
+        #[test]
+        fn onread_self_read_returns_stored_value() {
+            // FR-008: self-read returns stored value without recursion
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/Self", OmiValue::Number(100.0)), 0.0, None);
+            // Script reads its own path — should get stored value (100), add 1
+            set_onread(&mut e, "/Dev/Self",
+                "odf.readItem('/Dev/Self/value') + 1");
+            let result = e.run_onread_script(
+                "/Dev/Self",
+                &OmiValue::Number(100.0),
+                None,
+            );
+            // If recursion guard works: 100 (stored) + 1 = 101
+            // If infinite recursion: would hang or crash
+            assert_eq!(result, Some(OmiValue::Number(101.0)));
+        }
+
+        #[test]
+        fn onread_self_read_element_returns_stored() {
+            // FR-008: self-read without /value suffix also returns stored data
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/SelfE", OmiValue::Number(50.0)), 0.0, None);
+            // Script reads own element structure, extracts value from it
+            set_onread(&mut e, "/Dev/SelfE",
+                "let el = odf.readItem('/Dev/SelfE'); el.values[0].v * 2");
+            let result = e.run_onread_script(
+                "/Dev/SelfE",
+                &OmiValue::Number(50.0),
+                None,
+            );
+            assert_eq!(result, Some(OmiValue::Number(100.0)));
         }
 
         #[test]

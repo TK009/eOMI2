@@ -42,6 +42,27 @@ pub(crate) struct ScriptCallbackCtx {
     /// Immutable reference to the object tree for `odf.readItem()`.
     /// Must remain valid for the duration of script execution.
     pub tree: *const ObjectTree,
+    /// Path of the currently-executing onread script (FR-008).
+    /// When `js_odf_read_item` sees a read targeting this path, it returns
+    /// the stored value directly without triggering the onread script,
+    /// preventing infinite self-recursion. Null when not in an onread context.
+    pub onread_path_ptr: *const u8,
+    pub onread_path_len: usize,
+}
+
+impl ScriptCallbackCtx {
+    /// Check if the given path is the same as the currently-executing onread path.
+    ///
+    /// # Safety
+    /// Caller must ensure `onread_path_ptr` is valid for `onread_path_len` bytes
+    /// (guaranteed when the context is on the stack during script execution).
+    pub unsafe fn is_self_read(&self, path: &str) -> bool {
+        if self.onread_path_ptr.is_null() {
+            return false;
+        }
+        let onread_path = std::slice::from_raw_parts(self.onread_path_ptr, self.onread_path_len);
+        path.as_bytes() == onread_path
+    }
 }
 
 /// C callback for `odf.writeItem(value, path)`.
@@ -272,6 +293,16 @@ pub(crate) unsafe extern "C" fn js_odf_read_item(mjs: *mut ffi::mjs) {
 
     // Detect /value suffix (InfoItem named "value" takes precedence)
     let (effective_path, wants_raw) = strip_value_suffix(path, tree);
+
+    // Self-read guard (FR-008): if this read targets the currently-executing
+    // onread script's own path, return the stored value directly without
+    // triggering the onread script again, preventing infinite recursion.
+    let is_self = ctx.is_self_read(effective_path);
+    // `is_self` is available for downstream nested-onread logic (eo-5y1).
+    // Currently js_odf_read_item always returns stored values (no nested
+    // onread trigger yet), so this flag has no branching effect yet — but
+    // it will gate nested onread execution once that feature lands.
+    let _ = is_self;
 
     // Read-after-write consistency: check pending writes from the same
     // script cycle first. The last write to this path wins.

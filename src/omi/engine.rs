@@ -148,7 +148,7 @@ impl Engine {
         }
     }
 
-    fn process_read_one_time(&self, op: &ReadOp) -> OmiMessage {
+    fn process_read_one_time(&mut self, op: &ReadOp) -> OmiMessage {
         let path = op.path.as_deref().unwrap_or("/");
         match self.tree.resolve(path) {
             Ok(PathTarget::InfoItem(item)) => {
@@ -158,12 +158,29 @@ impl Engine {
                         path
                     ));
                 }
-                let values = item.query_values(
+                let _has_onread = item.get_onread_script().is_some();
+                let mut values = item.query_values(
                     op.newest.map(|n| n as usize),
                     op.oldest.map(|n| n as usize),
                     op.begin,
                     op.end,
                 );
+                // FR-004, FR-011, FR-012: If item has an onread script, run it
+                // on the newest value only (index 0, since values are newest-first).
+                // Replace only the delivered value; preserve original timestamp.
+                #[cfg(feature = "scripting")]
+                if _has_onread {
+                    let (event_value, event_ts) = if let Some(newest) = values.first() {
+                        (newest.v.clone(), newest.t)
+                    } else {
+                        (OmiValue::Null, None)
+                    };
+                    if let Some(transformed) = self.run_onread_script(path, &event_value, event_ts) {
+                        if let Some(newest) = values.first_mut() {
+                            newest.v = transformed;
+                        }
+                    }
+                }
                 match serde_json::to_value(&values) {
                     Ok(val) => OmiResponse::ok(serde_json::json!({
                         "path": path,

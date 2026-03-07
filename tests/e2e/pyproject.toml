@@ -10,4 +10,5 @@ addopts = "-x -v"
 markers = [
     "reboot: tests that perform a hardware reboot via espflash",
     "stress: long-running stress and stability tests",
+    "provisioning: WiFi provisioning flow tests (portal, form submit, reconnect)",
 ]

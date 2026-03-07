@@ -51,6 +51,17 @@ impl InfoItem {
             .map_or(true, |v| !matches!(v, OmiValue::Bool(false)))
     }
 
+    /// Get the onread script from metadata, if set.
+    pub fn get_onread_script(&self) -> Option<&str> {
+        self.meta
+            .as_ref()
+            .and_then(|m| m.get("onread"))
+            .and_then(|v| match v {
+                OmiValue::Str(s) => Some(s.as_str()),
+                _ => None,
+            })
+    }
+
     /// Add a new value to the ring buffer.
     pub fn add_value(&mut self, v: OmiValue, t: Option<f64>) {
         self.values.push(Value::new(v, t));
@@ -106,6 +117,30 @@ mod tests {
         meta.insert("writable".into(), OmiValue::Bool(false));
         item.meta = Some(meta);
         assert!(!item.is_writable());
+    }
+
+    #[test]
+    fn onread_script_none_by_default() {
+        let item = InfoItem::new(10);
+        assert_eq!(item.get_onread_script(), None);
+    }
+
+    #[test]
+    fn onread_script_from_meta() {
+        let mut item = InfoItem::new(10);
+        let mut meta = BTreeMap::new();
+        meta.insert("onread".into(), OmiValue::Str("print('hello')".into()));
+        item.meta = Some(meta);
+        assert_eq!(item.get_onread_script(), Some("print('hello')"));
+    }
+
+    #[test]
+    fn onread_script_non_string_returns_none() {
+        let mut item = InfoItem::new(10);
+        let mut meta = BTreeMap::new();
+        meta.insert("onread".into(), OmiValue::Bool(true));
+        item.meta = Some(meta);
+        assert_eq!(item.get_onread_script(), None);
     }
 
     #[test]

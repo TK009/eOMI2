@@ -38,10 +38,15 @@ fi
 # ── 4. Set the rustup override for this project dir ─────────────────────
 rustup override set esp
 
-# ── 5. Symlink .env from REPO_ROOT when running in a worktree ───────────
-if [[ "$PROJECT_ROOT" != "$REPO_ROOT" ]] && [[ -f "$REPO_ROOT/.env" ]] && [[ ! -e "$PROJECT_ROOT/.env" ]]; then
-    echo "── Symlinking .env from repo root ──"
-    ln -s "$REPO_ROOT/.env" "$PROJECT_ROOT/.env"
+# ── 5. Symlink .env from REPO_ROOT or RIG_ROOT when running in a worktree ─
+if [[ ! -e "$PROJECT_ROOT/.env" ]]; then
+    if [[ "$PROJECT_ROOT" != "$REPO_ROOT" ]] && [[ -f "$REPO_ROOT/.env" ]]; then
+        echo "── Symlinking .env from repo root ──"
+        ln -s "$REPO_ROOT/.env" "$PROJECT_ROOT/.env"
+    elif [[ -f "${RIG_ROOT:-}/.env" ]]; then
+        echo "── Symlinking .env from rig root ──"
+        ln -s "$RIG_ROOT/.env" "$PROJECT_ROOT/.env"
+    fi
 fi
 
 # Restore caller's shell options

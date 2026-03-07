@@ -13,11 +13,16 @@ PROJECT_ROOT="$(cd "$_COMMON_DIR/.." && pwd)"
 # so its parent is the rig container, not the project root. Fall back to
 # PROJECT_ROOT in that case since every worktree has a full working tree.
 _git_common="$(git -C "$PROJECT_ROOT" rev-parse --git-common-dir)"
-REPO_ROOT="$(cd "$_git_common/.." && pwd)"
+_rig_root="$(cd "$_git_common/.." && pwd)"
+REPO_ROOT="$_rig_root"
 if [[ ! -f "$REPO_ROOT/Cargo.toml" ]]; then
     REPO_ROOT="$PROJECT_ROOT"
 fi
-unset _git_common _COMMON_DIR
+# RIG_ROOT: the rig container directory (parent of .repo.git).
+# In a bare-repo worktree this differs from both PROJECT_ROOT and REPO_ROOT.
+# Useful for rig-level config like .env that lives outside the project tree.
+RIG_ROOT="$_rig_root"
+unset _git_common _rig_root _COMMON_DIR
 
 # Sanity check: REPO_ROOT must look like the project root.
 if [[ ! -f "$REPO_ROOT/Cargo.toml" ]]; then

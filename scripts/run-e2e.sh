@@ -142,27 +142,39 @@ echo "── Running e2e tests ──"
 export DEVICE_IP
 export DEVICE_PORT
 
-# Load API_TOKEN from .env if present and not already set.
-# Only accept lines matching KEY=VALUE with no shell metacharacters.
-if [[ -z "${API_TOKEN:-}" ]]; then
-    ENV_FILE=""
-    if [[ -f "$PROJECT_ROOT/.env" ]]; then
-        ENV_FILE="$PROJECT_ROOT/.env"
-    elif [[ -f "$REPO_ROOT/.env" ]]; then
-        ENV_FILE="$REPO_ROOT/.env"
-    fi
-    if [[ -n "$ENV_FILE" ]]; then
-        if RAW=$(grep -E '^API_TOKEN=' "$ENV_FILE" | head -1); then
-            API_TOKEN="${RAW#API_TOKEN=}"
-            # Strip matching surrounding quotes (single or double)
-            case "$API_TOKEN" in
-                \"*\") API_TOKEN="${API_TOKEN#\"}"; API_TOKEN="${API_TOKEN%\"}" ;;
-                \'*\') API_TOKEN="${API_TOKEN#\'}"; API_TOKEN="${API_TOKEN%\'}" ;;
-            esac
-            export API_TOKEN
+# Locate .env: project root > repo root > rig root (Gas Town worktrees).
+ENV_FILE=""
+if [[ -f "$PROJECT_ROOT/.env" ]]; then
+    ENV_FILE="$PROJECT_ROOT/.env"
+elif [[ -f "$REPO_ROOT/.env" ]]; then
+    ENV_FILE="$REPO_ROOT/.env"
+elif [[ -f "${RIG_ROOT:-}/.env" ]]; then
+    ENV_FILE="$RIG_ROOT/.env"
+fi
+
+# Helper: read a KEY=VALUE from ENV_FILE, strip surrounding quotes.
+_env_val() {
+    local key="$1"
+    if [[ -z "$ENV_FILE" ]]; then return 1; fi
+    local raw
+    raw=$(grep -E "^${key}=" "$ENV_FILE" | head -1) || return 1
+    local val="${raw#*=}"
+    case "$val" in
+        \"*\") val="${val#\"}"; val="${val%\"}" ;;
+        \'*\') val="${val#\'}"; val="${val%\'}" ;;
+    esac
+    printf '%s' "$val"
+}
+
+# Export WIFI_SSID, WIFI_PASS, API_TOKEN from .env if not already set.
+for _key in WIFI_SSID WIFI_PASS API_TOKEN; do
+    if [[ -z "${!_key:-}" ]]; then
+        if _val=$(_env_val "$_key"); then
+            export "$_key=$_val"
         fi
     fi
-fi
+done
+unset _key _val
 
 cd "$PROJECT_ROOT/tests/e2e"
 uv sync --quiet

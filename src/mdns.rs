@@ -119,6 +119,11 @@ mod esp_impl {
             // Drop triggers esp-idf mdns_free() which sends goodbye packets.
             drop(self);
         }
+
+        /// Borrow the underlying EspMdns handle for queries.
+        pub(crate) fn inner(&self) -> &EspMdns {
+            &self._mdns
+        }
     }
 
     // FR-006: Drop sends goodbye automatically via EspMdns destructor.

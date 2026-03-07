@@ -11,7 +11,7 @@ pub mod peripheral;
 pub mod pwm;
 
 use crate::odf::{InfoItem, OmiValue};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// GPIO pin mode.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -93,6 +93,35 @@ pub fn build_gpio_items(configs: &[GpioPinConfig]) -> Vec<(String, InfoItem)> {
         .iter()
         .map(|c| (c.name.clone(), build_gpio_info_item(c)))
         .collect()
+}
+
+/// Runtime pin conflict registry (FR-011).
+///
+/// Tracks which GPIO pins have been assigned and to what purpose.
+/// Returns a clear error when the same pin is registered twice.
+pub struct PinRegistry {
+    owners: HashMap<u8, String>,
+}
+
+impl PinRegistry {
+    pub fn new() -> Self {
+        Self {
+            owners: HashMap::new(),
+        }
+    }
+
+    /// Register a pin for a given purpose. Returns `Err` with a descriptive
+    /// message if the pin is already assigned to something else.
+    pub fn register(&mut self, pin: u8, purpose: String) -> Result<(), String> {
+        if let Some(existing) = self.owners.get(&pin) {
+            return Err(format!(
+                "GPIO pin conflict: pin {} already assigned to {}, cannot assign to {}",
+                pin, existing, purpose
+            ));
+        }
+        self.owners.insert(pin, purpose);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -241,6 +270,37 @@ mod tests {
     fn build_empty_configs() {
         let items = build_gpio_items(&[]);
         assert!(items.is_empty());
+    }
+
+    // --- PinRegistry (FR-011) ---
+
+    #[test]
+    fn pin_registry_allows_distinct_pins() {
+        let mut reg = PinRegistry::new();
+        assert!(reg.register(2, "digital_out LED".into()).is_ok());
+        assert!(reg.register(4, "pwm Motor".into()).is_ok());
+        assert!(reg.register(34, "analog_in Sensor".into()).is_ok());
+    }
+
+    #[test]
+    fn pin_registry_detects_conflict() {
+        let mut reg = PinRegistry::new();
+        reg.register(5, "digital_out LED".into()).unwrap();
+        let err = reg.register(5, "pwm Buzzer".into()).unwrap_err();
+        assert!(err.contains("pin 5"), "error should mention pin number: {}", err);
+        assert!(err.contains("digital_out LED"), "error should mention existing owner: {}", err);
+        assert!(err.contains("pwm Buzzer"), "error should mention new purpose: {}", err);
+    }
+
+    #[test]
+    fn pin_registry_conflict_message_format() {
+        let mut reg = PinRegistry::new();
+        reg.register(21, "I2C sda".into()).unwrap();
+        let err = reg.register(21, "digital_in Button".into()).unwrap_err();
+        assert_eq!(
+            err,
+            "GPIO pin conflict: pin 21 already assigned to I2C sda, cannot assign to digital_in Button"
+        );
     }
 
     // --- Integration with ObjectTree ---

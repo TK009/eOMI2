@@ -39,6 +39,8 @@ use crate::gpio::driver::{DigitalInputPin, DigitalOutputPin};
 #[cfg(feature = "esp")]
 use crate::gpio::driver::parse_digital;
 #[cfg(feature = "esp")]
+use crate::gpio::PinRegistry;
+#[cfg(feature = "esp")]
 use crate::odf::{ObjectTree, OmiValue, PathTarget, PathTargetMut};
 #[cfg(all(feature = "std", not(feature = "esp")))]
 use crate::odf::OmiValue;
@@ -140,6 +142,7 @@ pub struct GpioManager {
     adc_pins: Vec<AdcEntry>,
     digital_inputs: Vec<DigitalInputPin>,
     digital_outputs: Vec<DigitalOutputPin>,
+    pin_registry: PinRegistry,
 }
 
 #[cfg(feature = "esp")]
@@ -151,6 +154,7 @@ impl GpioManager {
             adc_pins: Vec::new(),
             digital_inputs: Vec::new(),
             digital_outputs: Vec::new(),
+            pin_registry: PinRegistry::new(),
         }
     }
 
@@ -160,6 +164,7 @@ impl GpioManager {
     pub fn add_pwm<C, T, P>(
         &mut self,
         path: String,
+        pin_num: u8,
         channel: impl Peripheral<P = C> + 'static,
         timer: impl Peripheral<P = T> + 'static,
         pin: impl Peripheral<P = P> + 'static,
@@ -169,6 +174,10 @@ impl GpioManager {
         T: LedcTimer + 'static,
         P: OutputPin,
     {
+        self.pin_registry
+            .register(pin_num, format!("PWM ({})", path))
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+
         let timer_config = TimerConfig::new()
             .frequency(Hertz(DEFAULT_FREQ_HZ))
             .resolution(Resolution::Bits8);
@@ -325,6 +334,14 @@ impl GpioManager {
         pin: AnyIOPin,
         edge_type: EdgeType,
     ) -> Result<(), anyhow::Error> {
+        let mode_label = match edge_type {
+            EdgeType::Low => "low_edge_trigger",
+            EdgeType::High => "high_edge_trigger",
+        };
+        self.pin_registry
+            .register(pin_num, format!("{} ({})", mode_label, path))
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+
         let interrupt_type = match edge_type {
             EdgeType::Low => InterruptType::NegEdge,
             EdgeType::High => InterruptType::PosEdge,
@@ -399,6 +416,10 @@ impl GpioManager {
         pin: impl Peripheral<P = P> + 'static,
         adc_driver: Rc<RefCell<AdcDriver<'static, P::Adc>>>,
     ) -> Result<(), anyhow::Error> {
+        self.pin_registry
+            .register(pin_num, format!("analog_in ({})", path))
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+
         let mut channel = AdcChannelDriver::<{ DB_11 }, P>::new(pin)?;
         info!("ADC pin registered: {} (GPIO{})", path, pin_num);
         self.adc_pins.push(AdcEntry {
@@ -445,6 +466,10 @@ impl GpioManager {
         pin_num: u8,
         pin: AnyIOPin,
     ) -> Result<(), anyhow::Error> {
+        self.pin_registry
+            .register(pin_num, format!("digital_in ({})", path))
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+
         let input = DigitalInputPin::new(path.clone(), pin_num, pin)?;
         info!("Digital input registered: {} (GPIO{})", path, pin_num);
         self.digital_inputs.push(input);
@@ -458,6 +483,10 @@ impl GpioManager {
         pin_num: u8,
         pin: AnyIOPin,
     ) -> Result<(), anyhow::Error> {
+        self.pin_registry
+            .register(pin_num, format!("digital_out ({})", path))
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+
         let output = DigitalOutputPin::new(path.clone(), pin_num, pin)?;
         info!("Digital output registered: {} (GPIO{})", path, pin_num);
         self.digital_outputs.push(output);

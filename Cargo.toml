@@ -23,6 +23,7 @@ opt-level = "z"
 default = ["std", "esp", "json", "scripting"]
 std = []
 esp = ["dep:esp-idf-svc", "dep:embuild", "json"]
+gpio = ["dep:toml", "dep:serde"]
 json = ["dep:serde", "dep:serde_json"]
 scripting = ["std", "dep:cc"]
 psram = []
@@ -41,6 +42,8 @@ serde_json = { version = "1", optional = true }
 [build-dependencies]
 embuild = { version = "0.33", features = ["espidf"], optional = true }
 cc = { version = "1", optional = true }
+toml = { version = "0.8", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
 object = { version = "0.36", default-features = false, features = ["read", "elf"] }

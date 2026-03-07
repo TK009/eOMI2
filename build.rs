@@ -1,3 +1,222 @@
+// --- Board TOML config parsing (FR-001, FR-011, FR-012, FR-013) ---
+
+#[cfg(feature = "gpio")]
+mod board_config {
+    use serde::Deserialize;
+    use std::collections::{HashMap, HashSet};
+    use std::path::Path;
+
+    const VALID_MODES: &[&str] = &[
+        "digital_in",
+        "digital_out",
+        "analog_in",
+        "pwm",
+        "low_edge_trigger",
+        "high_edge_trigger",
+    ];
+
+    const VALID_PROTOCOLS: &[&str] = &["I2C", "SPI", "UART"];
+
+    #[derive(Deserialize)]
+    pub struct BoardFile {
+        pub board: BoardMeta,
+        #[serde(default)]
+        pub gpio: Vec<GpioEntry>,
+        #[serde(default)]
+        pub peripheral: Vec<PeripheralEntry>,
+    }
+
+    #[derive(Deserialize)]
+    pub struct BoardMeta {
+        pub name: String,
+        pub chip: String,
+    }
+
+    #[derive(Deserialize)]
+    pub struct GpioEntry {
+        pub pin: u8,
+        pub mode: String,
+        pub name: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    pub struct PeripheralEntry {
+        pub protocol: String,
+        pub sda: Option<u8>,
+        pub scl: Option<u8>,
+        pub rx: Option<u8>,
+        pub tx: Option<u8>,
+        pub mosi: Option<u8>,
+        pub miso: Option<u8>,
+        pub sck: Option<u8>,
+        pub cs: Option<u8>,
+    }
+
+    impl PeripheralEntry {
+        /// Collect all pin assignments as (pin, role) pairs.
+        fn pins(&self) -> Vec<(u8, &'static str)> {
+            let mut out = Vec::new();
+            if let Some(p) = self.sda { out.push((p, "sda")); }
+            if let Some(p) = self.scl { out.push((p, "scl")); }
+            if let Some(p) = self.rx { out.push((p, "rx")); }
+            if let Some(p) = self.tx { out.push((p, "tx")); }
+            if let Some(p) = self.mosi { out.push((p, "mosi")); }
+            if let Some(p) = self.miso { out.push((p, "miso")); }
+            if let Some(p) = self.sck { out.push((p, "sck")); }
+            if let Some(p) = self.cs { out.push((p, "cs")); }
+            out
+        }
+    }
+
+    /// Parse a board TOML file and return the deserialized config.
+    pub fn parse(path: &Path) -> BoardFile {
+        let contents = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("failed to read board config {}: {}", path.display(), e));
+        toml::from_str(&contents)
+            .unwrap_or_else(|e| panic!("failed to parse board config {}: {}", path.display(), e))
+    }
+
+    /// Validate modes, protocols, and detect pin conflicts (FR-011).
+    /// Panics with a descriptive message on any conflict.
+    pub fn validate(board: &BoardFile) {
+        // Validate GPIO modes
+        for entry in &board.gpio {
+            if !VALID_MODES.contains(&entry.mode.as_str()) {
+                panic!(
+                    "board config: GPIO pin {} has invalid mode '{}'. Valid modes: {:?}",
+                    entry.pin, entry.mode, VALID_MODES
+                );
+            }
+        }
+
+        // Validate peripheral protocols
+        for entry in &board.peripheral {
+            if !VALID_PROTOCOLS.contains(&entry.protocol.as_str()) {
+                panic!(
+                    "board config: peripheral has invalid protocol '{}'. Valid: {:?}",
+                    entry.protocol, VALID_PROTOCOLS
+                );
+            }
+        }
+
+        // FR-011: Detect conflicting GPIO pin assignments
+        let mut pin_owners: HashMap<u8, String> = HashMap::new();
+
+        for entry in &board.gpio {
+            let label = entry
+                .name
+                .as_deref()
+                .map(|n| format!("gpio '{}' (pin {})", n, entry.pin))
+                .unwrap_or_else(|| format!("gpio pin {}", entry.pin));
+            if let Some(prev) = pin_owners.insert(entry.pin, label.clone()) {
+                panic!(
+                    "board config: pin conflict on GPIO {}: used by both {} and {}",
+                    entry.pin, prev, label
+                );
+            }
+        }
+
+        for entry in &board.peripheral {
+            for (pin, role) in entry.pins() {
+                let label = format!("{} {} (pin {})", entry.protocol, role, pin);
+                if let Some(prev) = pin_owners.insert(pin, label.clone()) {
+                    panic!(
+                        "board config: pin conflict on GPIO {}: used by both {} and {}",
+                        pin, prev, label
+                    );
+                }
+            }
+        }
+
+        // Validate unique InfoItem names
+        let mut names = HashSet::new();
+        for entry in &board.gpio {
+            let name = entry
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("GPIO{}", entry.pin));
+            if !names.insert(name.clone()) {
+                panic!(
+                    "board config: duplicate InfoItem name '{}' (pin {})",
+                    name, entry.pin
+                );
+            }
+        }
+    }
+
+    /// Generate gpio_config.rs const arrays into OUT_DIR.
+    pub fn generate(board: &BoardFile, out_dir: &Path) {
+        let mut code = String::new();
+
+        code.push_str("// Auto-generated by build.rs from board TOML config.\n");
+        code.push_str("// Do not edit manually.\n\n");
+
+        // Board metadata
+        code.push_str(&format!(
+            "pub const BOARD_NAME: &str = {:?};\n",
+            board.board.name
+        ));
+        code.push_str(&format!(
+            "pub const BOARD_CHIP: &str = {:?};\n\n",
+            board.board.chip
+        ));
+
+        // GPIO config: &[(pin, mode, name)]
+        code.push_str("/// Build-time GPIO pin configurations.\n");
+        code.push_str("/// Each entry: (pin_number, mode_str, infoitem_name).\n");
+        code.push_str(
+            "pub const GPIO_CONFIGS: &[(u8, &str, &str)] = &[\n",
+        );
+        for entry in &board.gpio {
+            let name = entry
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("GPIO{}", entry.pin));
+            code.push_str(&format!(
+                "    ({}, {:?}, {:?}),\n",
+                entry.pin, entry.mode, name
+            ));
+        }
+        code.push_str("];\n\n");
+
+        // Peripheral config: &[(protocol, &[(pin, role)])]
+        // Since nested slices aren't trivial in const, generate per-peripheral
+        // pin arrays and a summary array.
+        code.push_str("/// Build-time peripheral protocol configurations.\n");
+        code.push_str(
+            "/// Each entry: (protocol, pin_pairs) where pin_pairs is &[(pin, role)].\n",
+        );
+
+        for (i, entry) in board.peripheral.iter().enumerate() {
+            let pins = entry.pins();
+            code.push_str(&format!(
+                "const PERIPH_{}_PINS: &[(u8, &str)] = &[",
+                i
+            ));
+            for (pin, role) in &pins {
+                code.push_str(&format!("({}, {:?}), ", pin, role));
+            }
+            code.push_str("];\n");
+        }
+
+        code.push_str(
+            "\npub const PERIPHERAL_CONFIGS: &[(&str, &[(u8, &str)])] = &[\n",
+        );
+        for (i, entry) in board.peripheral.iter().enumerate() {
+            code.push_str(&format!(
+                "    ({:?}, PERIPH_{}_PINS),\n",
+                entry.protocol, i
+            ));
+        }
+        code.push_str("];\n");
+
+        let out_file = out_dir.join("gpio_config.rs");
+        std::fs::write(&out_file, code).unwrap_or_else(|e| {
+            panic!("failed to write {}: {}", out_file.display(), e)
+        });
+    }
+}
+
 fn main() {
     #[cfg(feature = "scripting")]
     {
@@ -115,4 +334,30 @@ fn main() {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "eOMI".to_string());
     println!("cargo:rustc-env=EOMI_HOSTNAME={}", hostname);
+
+    // --- Board TOML config → gpio_config.rs (FR-001, FR-011, FR-012, FR-013) ---
+    #[cfg(feature = "gpio")]
+    {
+        println!("cargo:rerun-if-env-changed=EOMI_BOARD");
+
+        if let Ok(board_name) = std::env::var("EOMI_BOARD") {
+            if !board_name.is_empty() {
+                let board_path =
+                    std::path::Path::new("boards").join(format!("{}.toml", board_name));
+                println!(
+                    "cargo:rerun-if-changed={}",
+                    board_path.display()
+                );
+
+                let board = board_config::parse(&board_path);
+                board_config::validate(&board);
+
+                let out_dir = std::path::Path::new(&out_dir);
+                board_config::generate(&board, out_dir);
+
+                // Tell downstream code that a board config was loaded
+                println!("cargo:rustc-cfg=has_board_config");
+            }
+        }
+    }
 }

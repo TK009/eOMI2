@@ -1,0 +1,42 @@
+# Board configuration: ESP32-S2-WROVER
+#
+# Selected at build time via: EOMI_BOARD=esp32-s2-wrover
+# Parsed by build.rs → generates gpio_config.rs const arrays in OUT_DIR.
+
+[board]
+name = "ESP32-S2-WROVER"
+chip = "esp32s2"
+
+# GPIO pin definitions.
+# Each entry: pin number, mode, optional custom name.
+# Modes: digital_in, digital_out, analog_in, pwm, low_edge_trigger, high_edge_trigger
+
+[[gpio]]
+pin = 2
+mode = "digital_out"
+name = "LED"
+
+[[gpio]]
+pin = 5
+mode = "digital_in"
+
+[[gpio]]
+pin = 34
+mode = "analog_in"
+
+[[gpio]]
+pin = 25
+mode = "pwm"
+
+# Peripheral protocol buses.
+# Each entry defines a protocol and its pin assignments.
+
+[[peripheral]]
+protocol = "I2C"
+sda = 21
+scl = 22
+
+[[peripheral]]
+protocol = "UART"
+rx = 16
+tx = 17

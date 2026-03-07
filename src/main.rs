@@ -8,7 +8,7 @@ use esp_idf_svc::{
 use log::{info, warn};
 use reconfigurable_device::captive_portal::{ConnectionState, ConnectionStatus};
 use reconfigurable_device::device::{
-    build_sensor_tree, collect_writable_items, PATH_FREE_HEAP,
+    build_sensor_tree, collect_writable_items, update_discovery_tree, PATH_FREE_HEAP,
 };
 use reconfigurable_device::dns::DnsServer;
 use reconfigurable_device::mdns::{MdnsConfig, MdnsResponder};
@@ -223,8 +223,10 @@ fn main() -> Result<()> {
     const TICK_INTERVAL_MS: u64 = 5000;
     const POLL_INTERVAL_MS: u64 = 100;
     const SCAN_INTERVAL_MS: u64 = 15_000; // WiFi scan every 15s in portal mode
+    const DISCOVERY_INTERVAL_MS: u64 = 30_000; // mDNS peer discovery every 30s
     let mut elapsed_ms: u64 = TICK_INTERVAL_MS;
     let mut scan_elapsed_ms: u64 = 0;
+    let mut discovery_elapsed_ms: u64 = DISCOVERY_INTERVAL_MS; // trigger on first tick
     let mut backoff_deadline: Option<Instant> = None;
     let mut wifi_rl = RateLimiter::new();
     let mut delivery_rl = RateLimiter::new();
@@ -351,6 +353,21 @@ fn main() -> Result<()> {
                     info!("Stopping mDNS responder (state: {:?})", wifi_sm.state());
                     resp.stop();
                     last_sta_ip = None;
+                }
+            }
+        }
+
+        // FR-009: Periodic mDNS peer discovery (every 30s when connected)
+        discovery_elapsed_ms += TICK_INTERVAL_MS;
+        if discovery_elapsed_ms >= DISCOVERY_INTERVAL_MS {
+            discovery_elapsed_ms = 0;
+            if let Some(ref resp) = mdns_responder {
+                let peers = reconfigurable_device::mdns_discovery::discover_peers(resp);
+                let now = now_secs();
+                let mut eng = lock_or_recover(&engine, "engine");
+                let removed = update_discovery_tree(&mut eng.tree, &peers, Some(now));
+                if !peers.is_empty() || removed > 0 {
+                    info!("Discovery: {} peers, {} stale removed", peers.len(), removed);
                 }
             }
         }

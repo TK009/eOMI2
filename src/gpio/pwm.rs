@@ -11,13 +11,18 @@ use esp_idf_svc::hal::ledc::{
     config::TimerConfig, LedcChannel, LedcDriver, LedcTimer, LedcTimerDriver, Resolution,
 };
 #[cfg(feature = "esp")]
-use esp_idf_svc::hal::gpio::OutputPin;
+use esp_idf_svc::hal::gpio::{AnyIOPin, Input, InterruptType, OutputPin, PinDriver};
 #[cfg(feature = "esp")]
 use esp_idf_svc::hal::peripheral::Peripheral;
 #[cfg(feature = "esp")]
 use esp_idf_svc::hal::units::Hertz;
 #[cfg(feature = "esp")]
 use log::{info, warn};
+
+#[cfg(feature = "esp")]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "esp")]
+use std::sync::Arc;
 
 #[cfg(feature = "esp")]
 use crate::odf::{ObjectTree, OmiValue, PathTarget, PathTargetMut};
@@ -67,14 +72,44 @@ impl PwmPin {
     }
 }
 
-/// Manages GPIO pins including PWM outputs.
+/// Edge type for interrupt-driven GPIO pins.
+#[cfg(feature = "esp")]
+#[derive(Debug, Clone, Copy)]
+pub enum EdgeType {
+    /// Falling edge (high → low).
+    Low,
+    /// Rising edge (low → high).
+    High,
+}
+
+/// A single edge-triggered input pin with an ISR-driven flag.
+#[cfg(feature = "esp")]
+struct EdgePin {
+    path: String,
+    pin_num: u8,
+    edge_type: EdgeType,
+    fired: Arc<AtomicBool>,
+    _driver: PinDriver<'static, AnyIOPin, Input>,
+}
+
+/// An edge event drained from the ISR flags.
+#[cfg(feature = "esp")]
+pub struct EdgeEvent {
+    pub path: String,
+    pub pin_num: u8,
+    pub edge_type: EdgeType,
+}
+
+/// Manages GPIO pins including PWM outputs and edge-triggered inputs.
 ///
-/// Provides [`write_pwm`](Self::write_pwm) for direct duty control and
-/// [`sync_from_tree`](Self::sync_from_tree) for polling-based actuation
-/// driven by the main loop.
+/// Provides [`write_pwm`](Self::write_pwm) for direct duty control,
+/// [`sync_from_tree`](Self::sync_from_tree) for polling-based actuation,
+/// and [`drain_edge_events`](Self::drain_edge_events) for interrupt-driven
+/// edge detection (FR-005a).
 #[cfg(feature = "esp")]
 pub struct GpioManager {
     pwm_pins: Vec<PwmPin>,
+    edge_pins: Vec<EdgePin>,
 }
 
 #[cfg(feature = "esp")]
@@ -82,6 +117,7 @@ impl GpioManager {
     pub fn new() -> Self {
         Self {
             pwm_pins: Vec::new(),
+            edge_pins: Vec::new(),
         }
     }
 
@@ -150,11 +186,11 @@ impl GpioManager {
         }
     }
 
-    /// Register writable PWM InfoItems in the O-DF tree.
+    /// Register GPIO InfoItems in the O-DF tree (PWM + edge triggers).
     ///
-    /// Creates an InfoItem at each PWM pin's path with `mode=pwm` metadata
-    /// and `writable=true`. Initial value is 0 (off). Called once after tree
-    /// initialisation.
+    /// PWM pins get `mode=pwm` metadata and `writable=true`, initial value 0.
+    /// Edge trigger pins get `mode=low_edge_trigger`/`high_edge_trigger`
+    /// metadata, read-only. Called once after tree initialisation.
     pub fn register_tree_items(&self, tree: &mut ObjectTree) {
         for pin in &self.pwm_pins {
             if let Err(e) = tree.write_value(&pin.path, OmiValue::Number(0.0), None) {
@@ -174,11 +210,104 @@ impl GpioManager {
             }
             info!("PWM InfoItem registered at {} (writable, mode=pwm)", pin.path);
         }
+
+        for pin in &self.edge_pins {
+            let mode_str = match pin.edge_type {
+                EdgeType::Low => "low_edge_trigger",
+                EdgeType::High => "high_edge_trigger",
+            };
+            // Initialize with no value; first edge event will populate it
+            if let Err(e) = tree.write_value(&pin.path, OmiValue::Number(0.0), None) {
+                warn!("Failed to init edge InfoItem at {}: {}", pin.path, e);
+                continue;
+            }
+            if let Ok(PathTargetMut::InfoItem(item)) = tree.resolve_mut(&pin.path) {
+                item.type_uri = Some("omi:gpio:edge".into());
+                let meta = item.meta.get_or_insert_with(BTreeMap::new);
+                meta.insert("mode".into(), OmiValue::Str(mode_str.into()));
+                meta.insert("gpio_pin".into(), OmiValue::Number(pin.pin_num as f64));
+            }
+            info!("Edge InfoItem registered at {} (read-only, mode={})", pin.path, mode_str);
+        }
     }
 
     /// Returns true if any PWM pins are registered.
     pub fn has_pwm_pins(&self) -> bool {
         !self.pwm_pins.is_empty()
+    }
+
+    /// Register an edge-triggered input pin with ISR subscription (FR-005a).
+    ///
+    /// The ISR sets an `AtomicBool` flag when the configured edge transition
+    /// occurs. Call [`drain_edge_events`](Self::drain_edge_events) from the
+    /// main loop to collect fired events.
+    pub fn add_edge_pin(
+        &mut self,
+        path: String,
+        pin_num: u8,
+        pin: AnyIOPin,
+        edge_type: EdgeType,
+    ) -> Result<(), anyhow::Error> {
+        let interrupt_type = match edge_type {
+            EdgeType::Low => InterruptType::NegEdge,
+            EdgeType::High => InterruptType::PosEdge,
+        };
+
+        let mut driver = PinDriver::input(pin)?;
+        driver.set_interrupt_type(interrupt_type)?;
+
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_isr = fired.clone();
+
+        unsafe {
+            driver.subscribe(move || {
+                fired_isr.store(true, Ordering::Release);
+            })?;
+        }
+        driver.enable_interrupt()?;
+
+        let mode_str = match edge_type {
+            EdgeType::Low => "low_edge_trigger",
+            EdgeType::High => "high_edge_trigger",
+        };
+        info!("Edge pin registered: {} (GPIO{}, {})", path, pin_num, mode_str);
+
+        self.edge_pins.push(EdgePin {
+            path,
+            pin_num,
+            edge_type,
+            fired,
+            _driver: driver,
+        });
+        Ok(())
+    }
+
+    /// Drain all fired edge events since the last call (FR-005a).
+    ///
+    /// Atomically swaps each pin's flag and returns events for pins that
+    /// fired. Re-enables the interrupt for each drained pin so the next
+    /// edge is captured.
+    pub fn drain_edge_events(&mut self) -> Vec<EdgeEvent> {
+        let mut events = Vec::new();
+        for pin in &mut self.edge_pins {
+            if pin.fired.swap(false, Ordering::Acquire) {
+                events.push(EdgeEvent {
+                    path: pin.path.clone(),
+                    pin_num: pin.pin_num,
+                    edge_type: pin.edge_type,
+                });
+                // Re-enable interrupt after servicing (ESP-IDF disables on trigger)
+                if let Err(e) = pin._driver.enable_interrupt() {
+                    warn!("Failed to re-enable interrupt for {}: {}", pin.path, e);
+                }
+            }
+        }
+        events
+    }
+
+    /// Returns true if any edge-triggered pins are registered.
+    pub fn has_edge_pins(&self) -> bool {
+        !self.edge_pins.is_empty()
     }
 }
 

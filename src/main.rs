@@ -21,7 +21,7 @@ use reconfigurable_device::server::{
 };
 use reconfigurable_device::sync_util::lock_or_recover;
 use reconfigurable_device::gpio::peripheral::PeripheralManager;
-use reconfigurable_device::gpio::pwm::GpioManager;
+use reconfigurable_device::gpio::pwm::{EdgeType, GpioManager};
 use reconfigurable_device::wifi_ap;
 use reconfigurable_device::wifi_cfg;
 use reconfigurable_device::wifi_sm::{WifiSm, WifiSmConfig, WifiEvent, WifiAction, WifiState};
@@ -262,6 +262,24 @@ fn main() -> Result<()> {
                 .collect();
             if !event_deliveries.is_empty() {
                 dispatch_deliveries(&event_deliveries, &ws_senders, &engine, &mut delivery_rl);
+            }
+        }
+
+        // Edge trigger ISR: drain fired edge events and update O-DF tree (FR-005a)
+        if gpio_manager.has_edge_pins() {
+            let edge_events = gpio_manager.drain_edge_events();
+            if !edge_events.is_empty() {
+                let now = now_secs();
+                let mut eng = lock_or_recover(&engine, "engine");
+                for event in &edge_events {
+                    let value = match event.edge_type {
+                        EdgeType::Low => OmiValue::Number(0.0),
+                        EdgeType::High => OmiValue::Number(1.0),
+                    };
+                    if let Err(e) = eng.tree.write_value(&event.path, value, Some(now)) {
+                        warn!("Edge event write failed for {}: {}", event.path, e);
+                    }
+                }
             }
         }
 

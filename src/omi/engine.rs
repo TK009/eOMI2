@@ -81,7 +81,7 @@ impl Engine {
         let tree = &self.tree;
         // next_trigger_time intentionally discarded: the main loop ticks on a
         // fixed interval rather than scheduling the next wake-up dynamically.
-        let (deliveries, _next_trigger) = self.subscriptions.tick_intervals(now, &|path| {
+        let (mut deliveries, _next_trigger) = self.subscriptions.tick_intervals(now, &|path| {
             match tree.resolve(path) {
                 Ok(PathTarget::InfoItem(item)) => {
                     Some(item.query_values(Some(1), None, None, None))
@@ -89,6 +89,26 @@ impl Engine {
                 _ => None,
             }
         });
+        // FR-002: Run onread scripts on interval subscription values before delivery.
+        // Event-based subscriptions (notify_write_event) deliver the written value as-is.
+        #[cfg(feature = "scripting")]
+        for delivery in &mut deliveries {
+            if let Some(newest) = delivery.values.first() {
+                let has_onread = matches!(
+                    self.tree.resolve(&delivery.path),
+                    Ok(PathTarget::InfoItem(item)) if item.get_onread_script().is_some()
+                );
+                if has_onread {
+                    let event_value = newest.v.clone();
+                    let event_ts = newest.t;
+                    if let Some(transformed) = self.run_onread_script(&delivery.path, &event_value, event_ts) {
+                        if let Some(newest_mut) = delivery.values.first_mut() {
+                            newest_mut.v = transformed;
+                        }
+                    }
+                }
+            }
+        }
         deliveries
     }
 
@@ -1841,6 +1861,48 @@ mod tests {
             // Write 5 → total=15
             e.process(write_msg("/Dev/Counter", OmiValue::Number(5.0)), 0.0, None);
             assert_eq!(newest_value(&mut e, "/Dev/Total"), OmiValue::Number(15.0));
+        }
+
+        #[test]
+        fn tick_runs_onread_for_interval_subscriptions() {
+            // FR-002: interval subscription deliveries run onread before delivery
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/TempC", OmiValue::Number(100.0)), 0.0, None);
+            // onread converts C→F
+            set_onread(&mut e, "/Dev/TempC", "event.value * 9 / 5 + 32");
+            // Create interval callback subscription (interval=10s, ttl=60s)
+            e.process(sub_msg("/Dev/TempC", 10.0, 60), 1000.0, None);
+            // Tick past the interval
+            let deliveries = e.tick(1011.0);
+            assert_eq!(deliveries.len(), 1);
+            // Delivered value should be transformed: 100°C → 212°F
+            assert_eq!(deliveries[0].values[0].v, OmiValue::Number(212.0));
+        }
+
+        #[test]
+        fn tick_no_onread_delivers_raw_value() {
+            // Items without onread deliver stored value as-is
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/Raw", OmiValue::Number(42.0)), 0.0, None);
+            e.process(sub_msg("/Dev/Raw", 10.0, 60), 1000.0, None);
+            let deliveries = e.tick(1011.0);
+            assert_eq!(deliveries.len(), 1);
+            assert_eq!(deliveries[0].values[0].v, OmiValue::Number(42.0));
+        }
+
+        #[test]
+        fn notify_write_event_does_not_run_onread() {
+            // FR-002: event-based subscriptions deliver written value as-is
+            let mut e = Engine::new();
+            e.process(write_msg("/Dev/TempC", OmiValue::Number(100.0)), 0.0, None);
+            set_onread(&mut e, "/Dev/TempC", "event.value * 9 / 5 + 32");
+            // Create event subscription (interval=-1 means event-based)
+            e.process(sub_msg("/Dev/TempC", -1.0, 60), 1000.0, None);
+            // Write a new value — triggers event notification
+            let (_resp, deliveries) = e.process(write_msg("/Dev/TempC", OmiValue::Number(50.0)), 1002.0, None);
+            // Event delivery should have the raw written value, NOT transformed
+            assert_eq!(deliveries.len(), 1);
+            assert_eq!(deliveries[0].values[0].v, OmiValue::Number(50.0));
         }
     }
 }

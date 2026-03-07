@@ -20,6 +20,7 @@ use reconfigurable_device::server::{
     dispatch_deliveries, start_http_server, PortalState, ServerMode,
 };
 use reconfigurable_device::sync_util::lock_or_recover;
+use reconfigurable_device::gpio::peripheral::PeripheralManager;
 use reconfigurable_device::gpio::pwm::GpioManager;
 use reconfigurable_device::wifi_ap;
 use reconfigurable_device::wifi_cfg;
@@ -74,6 +75,12 @@ fn main() -> Result<()> {
     // drive this from TOML. For now the manager starts empty and pins can
     // be added via `gpio_manager.add_pwm(...)` before the main loop.
     let mut gpio_manager = GpioManager::new();
+
+    // Initialize peripheral manager for UART/SPI buses (FR-008, FR-009).
+    // Buses are configured here; the board config system (future) will
+    // drive this from TOML. For now the manager starts empty and buses
+    // can be added via `peripheral_manager.add_uart(...)` / `.add_spi(...)`.
+    let mut peripheral_manager = PeripheralManager::new();
 
     let nvs_omi = nvs.clone();
     let nvs_wifi_cfg = nvs.clone();
@@ -199,6 +206,9 @@ fn main() -> Result<()> {
 
         // Register PWM InfoItems as writable entries in the O-DF tree (FR-004)
         gpio_manager.register_tree_items(&mut eng.tree);
+
+        // Register UART/SPI RX/TX InfoItems in the O-DF tree (FR-008, FR-009)
+        peripheral_manager.register_tree_items(&mut eng.tree);
     }
 
     // Load and replay NVS-persisted writable items
@@ -259,6 +269,13 @@ fn main() -> Result<()> {
         if gpio_manager.has_pwm_pins() {
             let eng = lock_or_recover(&engine, "engine");
             gpio_manager.sync_from_tree(&eng.tree);
+        }
+
+        // Peripheral bus polling: UART RX + TX sync, SPI transfers (FR-008, FR-009)
+        if peripheral_manager.has_buses() {
+            let now = now_secs();
+            let mut eng = lock_or_recover(&engine, "engine");
+            peripheral_manager.poll(&mut eng.tree, now);
         }
 
         // Check for pending provisioning request (FR-016)

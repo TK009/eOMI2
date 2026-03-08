@@ -9,8 +9,13 @@ use log::{info, warn};
 use reconfigurable_device::board;
 use reconfigurable_device::captive_portal::{ConnectionState, ConnectionStatus};
 use reconfigurable_device::device::{
-    build_sensor_tree, collect_writable_items, update_discovery_tree, PATH_FREE_HEAP,
+    build_sensor_tree, collect_writable_items, update_discovery_tree,
+    PATH_FREE_HEAP, PATH_TEMPERATURE,
 };
+#[cfg(feature = "mem-stats")]
+use reconfigurable_device::device::{PATH_FREE_FLASH, PATH_FREE_ODF_STORAGE};
+#[cfg(all(feature = "mem-stats", feature = "psram"))]
+use reconfigurable_device::device::PATH_FREE_PSRAM;
 use reconfigurable_device::dns::DnsServer;
 use reconfigurable_device::mdns::{MdnsConfig, MdnsResponder};
 use reconfigurable_device::nvs::{load_writable_items, open_nvs, save_writable_items};
@@ -26,6 +31,7 @@ use reconfigurable_device::gpio::pwm::{EdgeType, GpioManager};
 use reconfigurable_device::wifi_ap;
 use reconfigurable_device::wifi_cfg;
 use reconfigurable_device::wifi_sm::{WifiSm, WifiSmConfig, WifiEvent, WifiAction, WifiState};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -210,7 +216,7 @@ fn main() -> Result<()> {
     {
         let mut eng = lock_or_recover(&engine, "engine");
         eng.tree.write_tree("/", build_sensor_tree()).unwrap();
-        info!("Sensor tree populated: System/FreeHeap");
+        info!("Sensor tree populated: System/{{FreeHeap,FreeFlash,FreePsram,FreeOdfStorage,Temperature}}");
 
         // Register PWM InfoItems as writable entries in the O-DF tree (FR-004)
         gpio_manager.register_tree_items(&mut eng.tree);
@@ -247,14 +253,66 @@ fn main() -> Result<()> {
         }
     }
 
+    // Initialize temperature sensor if supported by this board
+    let temp_sensor = reconfigurable_device::temp_sensor::TempSensor::new();
+    if temp_sensor.is_some() {
+        info!("Temperature sensor initialised");
+    }
+
+    // Query memory totals at boot and set meta.total on each memory InfoItem
+    {
+        use reconfigurable_device::odf::PathTargetMut;
+        let mut eng = lock_or_recover(&engine, "engine");
+
+        // FreeHeap total (always available)
+        if let Some(stat) = reconfigurable_device::mem_stats::heap() {
+            if let Ok(PathTargetMut::InfoItem(item)) = eng.tree.resolve_mut(PATH_FREE_HEAP) {
+                let meta = item.meta.get_or_insert_with(BTreeMap::new);
+                meta.insert("total".into(), OmiValue::Number(stat.total as f64));
+            }
+        }
+
+        #[cfg(feature = "mem-stats")]
+        {
+            if let Some(stat) = reconfigurable_device::mem_stats::flash() {
+                if let Ok(PathTargetMut::InfoItem(item)) = eng.tree.resolve_mut(PATH_FREE_FLASH) {
+                    let meta = item.meta.get_or_insert_with(BTreeMap::new);
+                    meta.insert("total".into(), OmiValue::Number(stat.total as f64));
+                }
+            }
+            if let Some(stat) = reconfigurable_device::mem_stats::nvs() {
+                if let Ok(PathTargetMut::InfoItem(item)) = eng.tree.resolve_mut(PATH_FREE_ODF_STORAGE) {
+                    let meta = item.meta.get_or_insert_with(BTreeMap::new);
+                    meta.insert("total".into(), OmiValue::Number(stat.total as f64));
+                }
+            }
+        }
+
+        #[cfg(all(feature = "mem-stats", feature = "psram"))]
+        {
+            if let Some(stat) = reconfigurable_device::mem_stats::psram() {
+                if let Ok(PathTargetMut::InfoItem(item)) = eng.tree.resolve_mut(PATH_FREE_PSRAM) {
+                    let meta = item.meta.get_or_insert_with(BTreeMap::new);
+                    meta.insert("total".into(), OmiValue::Number(stat.total as f64));
+                }
+            }
+        }
+    }
+
     // Main loop
     const TICK_INTERVAL_MS: u64 = 5000;
     const POLL_INTERVAL_MS: u64 = 100;
     const SCAN_INTERVAL_MS: u64 = 15_000; // WiFi scan every 15s in portal mode
     const DISCOVERY_INTERVAL_MS: u64 = 30_000; // mDNS peer discovery every 30s
+    #[cfg(feature = "mem-stats")]
+    const MEMORY_INTERVAL_MS: u64 = 30_000; // Memory stats every 30s
+    const TEMP_INTERVAL_MS: u64 = 300_000; // Temperature every 5min
     let mut elapsed_ms: u64 = TICK_INTERVAL_MS;
     let mut scan_elapsed_ms: u64 = 0;
     let mut discovery_elapsed_ms: u64 = DISCOVERY_INTERVAL_MS; // trigger on first tick
+    #[cfg(feature = "mem-stats")]
+    let mut memory_elapsed_ms: u64 = MEMORY_INTERVAL_MS; // trigger on first tick
+    let mut temp_elapsed_ms: u64 = TEMP_INTERVAL_MS; // trigger on first tick
     let mut backoff_deadline: Option<Instant> = None;
     let mut wifi_rl = RateLimiter::new();
     let mut delivery_rl = RateLimiter::new();
@@ -453,13 +511,54 @@ fn main() -> Result<()> {
             gpio_manager.sample_adc(&mut eng.tree, now);
         }
 
-        // Record free heap memory
-        {
-            let heap_free = unsafe { esp_idf_svc::sys::esp_get_free_heap_size() };
+        // Record free heap memory (5s tick)
+        if let Some(stat) = reconfigurable_device::mem_stats::heap() {
             let now = now_secs();
             let mut eng = lock_or_recover(&engine, "engine");
-            if let Err(e) = eng.tree.write_value(PATH_FREE_HEAP, OmiValue::Number(heap_free as f64), Some(now)) {
+            if let Err(e) = eng.tree.write_value(PATH_FREE_HEAP, OmiValue::Number(stat.free as f64), Some(now)) {
                 warn!("Failed to write {}: {}", PATH_FREE_HEAP, e);
+            }
+        }
+
+        // Record memory stats (30s interval): FreeFlash, FreePsram, FreeOdfStorage
+        #[cfg(feature = "mem-stats")]
+        {
+            memory_elapsed_ms += TICK_INTERVAL_MS;
+            if memory_elapsed_ms >= MEMORY_INTERVAL_MS {
+                memory_elapsed_ms = 0;
+                let now = now_secs();
+                let mut eng = lock_or_recover(&engine, "engine");
+                if let Some(stat) = reconfigurable_device::mem_stats::flash() {
+                    if let Err(e) = eng.tree.write_value(PATH_FREE_FLASH, OmiValue::Number(stat.free as f64), Some(now)) {
+                        warn!("Failed to write {}: {}", PATH_FREE_FLASH, e);
+                    }
+                }
+                #[cfg(feature = "psram")]
+                if let Some(stat) = reconfigurable_device::mem_stats::psram() {
+                    if let Err(e) = eng.tree.write_value(PATH_FREE_PSRAM, OmiValue::Number(stat.free as f64), Some(now)) {
+                        warn!("Failed to write {}: {}", PATH_FREE_PSRAM, e);
+                    }
+                }
+                if let Some(stat) = reconfigurable_device::mem_stats::nvs() {
+                    if let Err(e) = eng.tree.write_value(PATH_FREE_ODF_STORAGE, OmiValue::Number(stat.free as f64), Some(now)) {
+                        warn!("Failed to write {}: {}", PATH_FREE_ODF_STORAGE, e);
+                    }
+                }
+            }
+        }
+
+        // Record temperature (5min interval)
+        temp_elapsed_ms += TICK_INTERVAL_MS;
+        if temp_elapsed_ms >= TEMP_INTERVAL_MS {
+            temp_elapsed_ms = 0;
+            if let Some(ref ts) = temp_sensor {
+                if let Some(celsius) = ts.read_celsius() {
+                    let now = now_secs();
+                    let mut eng = lock_or_recover(&engine, "engine");
+                    if let Err(e) = eng.tree.write_value(PATH_TEMPERATURE, OmiValue::Number(celsius), Some(now)) {
+                        warn!("Failed to write {}: {}", PATH_TEMPERATURE, e);
+                    }
+                }
             }
         }
 

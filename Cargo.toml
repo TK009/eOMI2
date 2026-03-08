@@ -14,6 +14,8 @@ required-features = ["esp"]
 [profile.release]
 opt-level = "s"
 panic = "abort"
+lto = true
+codegen-units = 1
 
 [profile.dev]
 debug = true    # Symbols are nice, and they don't increase the size on Flash

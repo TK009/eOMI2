@@ -6,6 +6,7 @@
 [board]
 name = "ESP32-S2-WROVER"
 chip = "esp32s2"
+has_temp_sensor = true
 
 # GPIO pin definitions.
 # Each entry: pin number, mode, optional custom name.

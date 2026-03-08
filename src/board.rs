@@ -38,6 +38,15 @@ pub fn has_board_config() -> bool {
     cfg!(has_board_config)
 }
 
+/// Whether the board has a temperature sensor, from TOML config.
+/// Returns false if no board config was loaded.
+pub fn has_temp_sensor() -> bool {
+    #[cfg(has_board_config)]
+    { generated::HAS_TEMP_SENSOR }
+    #[cfg(not(has_board_config))]
+    { false }
+}
+
 #[cfg(any(has_board_config, test))]
 fn parse_mode(s: &str) -> Option<GpioMode> {
     match s {
@@ -232,6 +241,15 @@ mod tests {
             for cfg in &configs {
                 assert!(!cfg.name.is_empty());
             }
+        }
+    }
+
+    #[test]
+    fn has_temp_sensor_returns_bool() {
+        // Should not panic; returns generated value or false
+        let val = has_temp_sensor();
+        if !has_board_config() {
+            assert!(!val, "has_temp_sensor should be false without board config");
         }
     }
 

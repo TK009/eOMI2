@@ -30,6 +30,8 @@ mod board_config {
     pub struct BoardMeta {
         pub name: String,
         pub chip: String,
+        #[serde(default)]
+        pub has_temp_sensor: bool,
     }
 
     #[derive(Deserialize)]
@@ -157,8 +159,12 @@ mod board_config {
             board.board.name
         ));
         code.push_str(&format!(
-            "pub const BOARD_CHIP: &str = {:?};\n\n",
+            "pub const BOARD_CHIP: &str = {:?};\n",
             board.board.chip
+        ));
+        code.push_str(&format!(
+            "pub const HAS_TEMP_SENSOR: bool = {};\n\n",
+            board.board.has_temp_sensor
         ));
 
         // GPIO config: &[(pin, mode, name)]

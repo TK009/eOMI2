@@ -27,6 +27,7 @@ std = []
 esp = ["dep:esp-idf-svc", "dep:embedded-svc", "dep:embuild", "json"]
 gpio = ["dep:toml", "dep:serde"]
 json = ["dep:serde", "dep:serde_json"]
+lite-json = []
 scripting = ["std", "dep:cc"]
 psram = []
 

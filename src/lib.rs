@@ -6,21 +6,26 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+#[cfg(all(feature = "json", feature = "lite-json"))]
+compile_error!(
+    "Features `json` and `lite-json` are mutually exclusive. Enable only one."
+);
+
 pub mod board;
 pub mod device;
 #[cfg(feature = "std")]
 pub mod gpio;
 #[cfg(feature = "std")]
 pub mod odf;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "json"))]
 pub mod omi;
 #[cfg(feature = "std")]
 pub mod pages;
 pub mod crypto;
 pub mod psram;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "json"))]
 pub mod http;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "json"))]
 pub mod captive_portal;
 #[cfg(feature = "scripting")]
 pub mod scripting;
@@ -30,6 +35,8 @@ pub mod sync_util;
 pub mod log_util;
 #[cfg(feature = "esp")]
 pub mod nvs;
+#[cfg(feature = "lite-json")]
+pub mod json;
 #[cfg(feature = "json")]
 pub mod wifi_cfg;
 pub mod wifi_sm;

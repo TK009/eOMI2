@@ -12,7 +12,7 @@ use log::{info, warn};
 
 use crate::odf::{ObjectTree, OmiValue, PathTarget};
 
-use super::{decode_tx_data, encode_rx_data, DataEncoding};
+use super::{decode_tx_data, encode_rx_data, tx_encoding_from_meta, DataEncoding};
 
 /// Default SPI clock frequency in Hz (1 MHz).
 pub const DEFAULT_FREQ_HZ: u32 = 1_000_000;
@@ -89,11 +89,12 @@ impl SpiBus {
     /// clocked out on MOSI while simultaneously reading from MISO.
     /// The received bytes are written to the RX InfoItem.
     pub fn poll(&mut self, tree: &mut ObjectTree, now: f64) {
-        let (value, timestamp) = match tree.resolve(&self.tx_path) {
+        let (value, timestamp, encoding) = match tree.resolve(&self.tx_path) {
             Ok(PathTarget::InfoItem(item)) => {
+                let enc = tx_encoding_from_meta(item);
                 let vals = item.query_values(Some(1), None, None, None);
                 match vals.first() {
-                    Some(v) => (v.v.clone(), v.t),
+                    Some(v) => (v.v.clone(), v.t, enc),
                     None => return,
                 }
             }
@@ -105,7 +106,7 @@ impl SpiBus {
             return; // already processed this value
         }
 
-        let tx_bytes = match decode_tx_data(&current.0, DataEncoding::String) {
+        let tx_bytes = match decode_tx_data(&current.0, encoding) {
             Ok(bytes) if !bytes.is_empty() => bytes,
             Ok(_) => {
                 self.last_tx = Some(current);
@@ -122,7 +123,7 @@ impl SpiBus {
         let mut rx_buf = vec![0u8; tx_bytes.len()];
         match self.device.transfer(&mut rx_buf, &tx_bytes) {
             Ok(()) => {
-                let rx_value = encode_rx_data(&rx_buf, DataEncoding::String);
+                let rx_value = encode_rx_data(&rx_buf, encoding);
                 if let Err(e) = tree.write_value(&self.rx_path, rx_value, Some(now)) {
                     warn!("SPI RX write to {} failed: {}", self.rx_path, e);
                 }

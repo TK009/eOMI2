@@ -623,6 +623,18 @@ impl Engine {
         for pw in pending_writes {
             let (_resp, d) = self.write_single_inner(&pw.path, pw.value, timestamp, now, depth + 1);
             deliveries.extend(d);
+
+            // FR-009a: persist encoding hint in InfoItem metadata so peripheral
+            // drivers apply the correct encoding when transmitting.
+            if let Some(enc) = pw.encoding {
+                if let Ok(PathTargetMut::InfoItem(item)) = self.tree.resolve_mut(&pw.path) {
+                    let meta = item.meta.get_or_insert_with(BTreeMap::new);
+                    meta.insert(
+                        "tx_encoding".into(),
+                        OmiValue::Str(enc.to_data_encoding().as_str().into()),
+                    );
+                }
+            }
         }
 
         // Run GC at the top level after the entire cascade completes

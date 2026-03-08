@@ -13,7 +13,7 @@ use log::{info, warn};
 
 use crate::odf::{Object, ObjectTree, OmiValue, PathTarget};
 
-use super::{decode_tx_data, encode_rx_data, DataEncoding};
+use super::{decode_tx_data, encode_rx_data, tx_encoding_from_meta, DataEncoding};
 
 /// Default I2C clock frequency (100 kHz standard mode).
 pub const DEFAULT_FREQ_HZ: u32 = 100_000;
@@ -159,11 +159,12 @@ impl I2cBus {
     /// TX writes target the first discovered device by default.
     /// The value is decoded according to the current encoding.
     pub fn sync_tx(&mut self, tree: &ObjectTree) {
-        let (value, timestamp) = match tree.resolve(&self.tx_path) {
+        let (value, timestamp, encoding) = match tree.resolve(&self.tx_path) {
             Ok(PathTarget::InfoItem(item)) => {
+                let enc = tx_encoding_from_meta(item);
                 let vals = item.query_values(Some(1), None, None, None);
                 match vals.first() {
-                    Some(v) => (v.v.clone(), v.t),
+                    Some(v) => (v.v.clone(), v.t, enc),
                     None => return,
                 }
             }
@@ -175,7 +176,7 @@ impl I2cBus {
             return;
         }
 
-        let tx_bytes = match decode_tx_data(&current.0, DataEncoding::String) {
+        let tx_bytes = match decode_tx_data(&current.0, encoding) {
             Ok(bytes) if !bytes.is_empty() => bytes,
             Ok(_) => {
                 self.last_tx = Some(current);

@@ -12,7 +12,7 @@ use log::{info, warn};
 
 use crate::odf::{ObjectTree, OmiValue, PathTarget};
 
-use super::{decode_tx_data, encode_rx_data, DataEncoding};
+use super::{decode_tx_data, encode_rx_data, tx_encoding_from_meta, DataEncoding};
 
 /// Default UART baud rate.
 pub const DEFAULT_BAUD: u32 = 115_200;
@@ -112,11 +112,12 @@ impl UartBus {
 
     /// Check the TX InfoItem for new values and transmit them.
     pub fn sync_tx(&mut self, tree: &ObjectTree) {
-        let (value, timestamp) = match tree.resolve(&self.tx_path) {
+        let (value, timestamp, encoding) = match tree.resolve(&self.tx_path) {
             Ok(PathTarget::InfoItem(item)) => {
+                let enc = tx_encoding_from_meta(item);
                 let vals = item.query_values(Some(1), None, None, None);
                 match vals.first() {
-                    Some(v) => (v.v.clone(), v.t),
+                    Some(v) => (v.v.clone(), v.t, enc),
                     None => return,
                 }
             }
@@ -128,7 +129,7 @@ impl UartBus {
             return; // already transmitted this value
         }
 
-        match decode_tx_data(&current.0, DataEncoding::String) {
+        match decode_tx_data(&current.0, encoding) {
             Ok(bytes) if !bytes.is_empty() => {
                 match self.driver.write(&bytes) {
                     Ok(n) => {

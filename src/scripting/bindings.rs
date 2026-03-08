@@ -26,6 +26,17 @@ pub(crate) enum WriteEncoding {
     Base64,
 }
 
+impl WriteEncoding {
+    /// Convert to the GPIO-layer [`DataEncoding`](crate::gpio::encoding::DataEncoding).
+    pub(crate) fn to_data_encoding(self) -> crate::gpio::encoding::DataEncoding {
+        match self {
+            Self::String => crate::gpio::encoding::DataEncoding::String,
+            Self::Hex => crate::gpio::encoding::DataEncoding::Hex,
+            Self::Base64 => crate::gpio::encoding::DataEncoding::Base64,
+        }
+    }
+}
+
 /// A write collected during script execution, to be processed afterwards.
 pub(crate) struct PendingWrite {
     pub path: String,

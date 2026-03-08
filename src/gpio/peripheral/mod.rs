@@ -35,6 +35,21 @@ pub fn encode_rx_data(data: &[u8], encoding: DataEncoding) -> OmiValue {
     OmiValue::Str(encoding.encode(data))
 }
 
+/// Read the TX encoding from an InfoItem's metadata (FR-009a).
+///
+/// Returns the encoding stored in the `tx_encoding` metadata key, or
+/// [`DataEncoding::String`] if no encoding is set.
+pub fn tx_encoding_from_meta(item: &InfoItem) -> DataEncoding {
+    item.meta
+        .as_ref()
+        .and_then(|m| m.get("tx_encoding"))
+        .and_then(|v| match v {
+            OmiValue::Str(s) => s.parse::<DataEncoding>().ok(),
+            _ => None,
+        })
+        .unwrap_or(DataEncoding::String)
+}
+
 /// Build RX and TX InfoItems for a peripheral bus (FR-009).
 ///
 /// Returns `[(rx_name, rx_item), (tx_name, tx_item)]`.
@@ -252,9 +267,71 @@ mod tests {
     use super::*;
     use crate::odf::OmiValue;
 
+    // --- tx_encoding_from_meta ---
+
+    #[test]
+    fn tx_encoding_default_when_no_meta() {
+        let item = InfoItem::new(10);
+        assert_eq!(tx_encoding_from_meta(&item), DataEncoding::String);
+    }
+
+    #[test]
+    fn tx_encoding_default_when_no_key() {
+        let mut item = InfoItem::new(10);
+        let mut meta = BTreeMap::new();
+        meta.insert("protocol".into(), OmiValue::Str("UART".into()));
+        item.meta = Some(meta);
+        assert_eq!(tx_encoding_from_meta(&item), DataEncoding::String);
+    }
+
+    #[test]
+    fn tx_encoding_hex_from_meta() {
+        let mut item = InfoItem::new(10);
+        let mut meta = BTreeMap::new();
+        meta.insert("tx_encoding".into(), OmiValue::Str("hex".into()));
+        item.meta = Some(meta);
+        assert_eq!(tx_encoding_from_meta(&item), DataEncoding::Hex);
+    }
+
+    #[test]
+    fn tx_encoding_base64_from_meta() {
+        let mut item = InfoItem::new(10);
+        let mut meta = BTreeMap::new();
+        meta.insert("tx_encoding".into(), OmiValue::Str("base64".into()));
+        item.meta = Some(meta);
+        assert_eq!(tx_encoding_from_meta(&item), DataEncoding::Base64);
+    }
+
+    #[test]
+    fn tx_encoding_string_from_meta() {
+        let mut item = InfoItem::new(10);
+        let mut meta = BTreeMap::new();
+        meta.insert("tx_encoding".into(), OmiValue::Str("string".into()));
+        item.meta = Some(meta);
+        assert_eq!(tx_encoding_from_meta(&item), DataEncoding::String);
+    }
+
+    #[test]
+    fn tx_encoding_invalid_falls_back_to_string() {
+        let mut item = InfoItem::new(10);
+        let mut meta = BTreeMap::new();
+        meta.insert("tx_encoding".into(), OmiValue::Str("unknown".into()));
+        item.meta = Some(meta);
+        assert_eq!(tx_encoding_from_meta(&item), DataEncoding::String);
+    }
+
+    #[test]
+    fn tx_encoding_non_string_value_falls_back() {
+        let mut item = InfoItem::new(10);
+        let mut meta = BTreeMap::new();
+        meta.insert("tx_encoding".into(), OmiValue::Number(42.0));
+        item.meta = Some(meta);
+        assert_eq!(tx_encoding_from_meta(&item), DataEncoding::String);
+    }
+
     // --- decode_tx_data ---
 
-#[test]
+    #[test]
     fn tx_string_encoding() {
         let v = OmiValue::Str("Hello".into());
         assert_eq!(decode_tx_data(&v, DataEncoding::String).unwrap(), b"Hello");

@@ -30,6 +30,7 @@ json = ["dep:serde", "dep:serde_json"]
 lite-json = []
 scripting = ["std", "dep:cc"]
 psram = []
+mem-stats = []
 
 deny_api_during_provisioning = []
 

@@ -12,6 +12,21 @@ use crate::odf::{InfoItem, Object, ObjectTree, OmiValue, PathTarget};
 /// O-DF path for the free-heap reading.
 pub const PATH_FREE_HEAP: &str = "/System/FreeHeap";
 
+/// O-DF path for free flash memory reading.
+#[cfg(feature = "mem-stats")]
+pub const PATH_FREE_FLASH: &str = "/System/FreeFlash";
+
+/// O-DF path for free ODF storage reading.
+#[cfg(feature = "mem-stats")]
+pub const PATH_FREE_ODF_STORAGE: &str = "/System/FreeOdfStorage";
+
+/// O-DF path for free PSRAM reading.
+#[cfg(all(feature = "mem-stats", feature = "psram"))]
+pub const PATH_FREE_PSRAM: &str = "/System/FreePsram";
+
+/// O-DF path for the temperature sensor reading.
+pub const PATH_TEMPERATURE: &str = "/System/Temperature";
+
 /// O-DF path prefix for the discovery subtree.
 pub const PATH_DISCOVERY: &str = "/System/discovery";
 
@@ -32,9 +47,48 @@ pub fn build_sensor_tree() -> BTreeMap<String, Object> {
     heap.type_uri = Some("omi:memory:freeheap".into());
     let mut heap_meta = BTreeMap::new();
     heap_meta.insert("unit".into(), OmiValue::Str("B".into()));
+    heap_meta.insert("total".into(), OmiValue::Number(0.0));
     heap.meta = Some(heap_meta);
-
     sys.add_item("FreeHeap".into(), heap);
+
+    #[cfg(feature = "mem-stats")]
+    {
+        let mut flash = InfoItem::new(SENSOR_CAPACITY);
+        flash.type_uri = Some("omi:memory:freeflash".into());
+        let mut flash_meta = BTreeMap::new();
+        flash_meta.insert("unit".into(), OmiValue::Str("B".into()));
+        flash_meta.insert("total".into(), OmiValue::Number(0.0));
+        flash.meta = Some(flash_meta);
+        sys.add_item("FreeFlash".into(), flash);
+
+        let mut odf = InfoItem::new(SENSOR_CAPACITY);
+        odf.type_uri = Some("omi:memory:freeodf".into());
+        let mut odf_meta = BTreeMap::new();
+        odf_meta.insert("unit".into(), OmiValue::Str("B".into()));
+        odf_meta.insert("total".into(), OmiValue::Number(0.0));
+        odf.meta = Some(odf_meta);
+        sys.add_item("FreeOdfStorage".into(), odf);
+    }
+
+    #[cfg(all(feature = "mem-stats", feature = "psram"))]
+    {
+        let mut psram = InfoItem::new(SENSOR_CAPACITY);
+        psram.type_uri = Some("omi:memory:freepsram".into());
+        let mut psram_meta = BTreeMap::new();
+        psram_meta.insert("unit".into(), OmiValue::Str("B".into()));
+        psram_meta.insert("total".into(), OmiValue::Number(0.0));
+        psram.meta = Some(psram_meta);
+        sys.add_item("FreePsram".into(), psram);
+    }
+
+    if crate::board::has_temp_sensor() {
+        let mut temp = InfoItem::new(SENSOR_CAPACITY);
+        temp.type_uri = Some("omi:sensor:temperature".into());
+        let mut temp_meta = BTreeMap::new();
+        temp_meta.insert("unit".into(), OmiValue::Str("°C".into()));
+        temp.meta = Some(temp_meta);
+        sys.add_item("Temperature".into(), temp);
+    }
 
     let mut map = BTreeMap::new();
     map.insert("System".into(), sys);
@@ -212,6 +266,64 @@ mod tests {
 
         let heap_meta = sys.get_item("FreeHeap").unwrap().meta.as_ref().unwrap();
         assert_eq!(heap_meta.get("unit"), Some(&OmiValue::Str("B".into())));
+        assert_eq!(heap_meta.get("total"), Some(&OmiValue::Number(0.0)));
+    }
+
+    #[cfg(feature = "mem-stats")]
+    #[test]
+    fn sensor_tree_has_free_flash() {
+        let tree = build_sensor_tree();
+        let sys = &tree["System"];
+        let item = sys.get_item("FreeFlash").expect("FreeFlash missing");
+        assert_eq!(item.type_uri.as_deref(), Some("omi:memory:freeflash"));
+        let meta = item.meta.as_ref().unwrap();
+        assert_eq!(meta.get("unit"), Some(&OmiValue::Str("B".into())));
+        assert_eq!(meta.get("total"), Some(&OmiValue::Number(0.0)));
+    }
+
+    #[cfg(feature = "mem-stats")]
+    #[test]
+    fn sensor_tree_has_free_odf_storage() {
+        let tree = build_sensor_tree();
+        let sys = &tree["System"];
+        let item = sys.get_item("FreeOdfStorage").expect("FreeOdfStorage missing");
+        assert_eq!(item.type_uri.as_deref(), Some("omi:memory:freeodf"));
+        let meta = item.meta.as_ref().unwrap();
+        assert_eq!(meta.get("unit"), Some(&OmiValue::Str("B".into())));
+        assert_eq!(meta.get("total"), Some(&OmiValue::Number(0.0)));
+    }
+
+    #[cfg(all(feature = "mem-stats", feature = "psram"))]
+    #[test]
+    fn sensor_tree_has_free_psram() {
+        let tree = build_sensor_tree();
+        let sys = &tree["System"];
+        let item = sys.get_item("FreePsram").expect("FreePsram missing");
+        assert_eq!(item.type_uri.as_deref(), Some("omi:memory:freepsram"));
+        let meta = item.meta.as_ref().unwrap();
+        assert_eq!(meta.get("unit"), Some(&OmiValue::Str("B".into())));
+        assert_eq!(meta.get("total"), Some(&OmiValue::Number(0.0)));
+    }
+
+    #[cfg(feature = "mem-stats")]
+    #[test]
+    fn mem_stats_path_constants_match_tree() {
+        let tree = build_sensor_tree();
+        let mut ot = ObjectTree::new();
+        ot.write_tree("/", tree).unwrap();
+
+        assert!(matches!(ot.resolve(PATH_FREE_FLASH), Ok(PathTarget::InfoItem(_))));
+        assert!(matches!(ot.resolve(PATH_FREE_ODF_STORAGE), Ok(PathTarget::InfoItem(_))));
+    }
+
+    #[cfg(all(feature = "mem-stats", feature = "psram"))]
+    #[test]
+    fn psram_path_constant_matches_tree() {
+        let tree = build_sensor_tree();
+        let mut ot = ObjectTree::new();
+        ot.write_tree("/", tree).unwrap();
+
+        assert!(matches!(ot.resolve(PATH_FREE_PSRAM), Ok(PathTarget::InfoItem(_))));
     }
 
     #[test]

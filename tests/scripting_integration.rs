@@ -443,10 +443,11 @@ fn write_item_with_hex_encoding_succeeds() {
     );
 
     // Attach onwrite script that uses {type: 'hex'} encoding
+    // 48656C6C6F is "Hello" in hex
     set_onwrite(
         &mut e,
         "/Dev/Src",
-        "odf.writeItem('DEADBEEF', '/Dev/TX', {type: 'hex'});",
+        "odf.writeItem('48656C6C6F', '/Dev/TX', {type: 'hex'});",
     );
 
     // Write to /Dev/Src — triggers script with encoding
@@ -456,14 +457,14 @@ fn write_item_with_hex_encoding_succeeds() {
     );
     assert_eq!(response_status(&resp), 200);
 
-    // Read /Dev/TX — should have the written value
+    // Read /Dev/TX — hex should be decoded to raw bytes ("Hello")
     let resp = parse_and_process(
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/TX","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
     let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], "DEADBEEF");
+    assert_eq!(values[0]["v"], "Hello");
 }
 
 #[test]
@@ -497,7 +498,7 @@ fn write_item_with_base64_encoding_succeeds() {
     );
     assert_eq!(response_status(&resp), 200);
     let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], "SGVsbG8=");
+    assert_eq!(values[0]["v"], "Hello");
 }
 
 #[test]

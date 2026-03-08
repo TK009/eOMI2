@@ -621,7 +621,33 @@ impl Engine {
         // at depth + 1, using normal &mut self calls with no aliasing.
         let mut deliveries = Vec::new();
         for pw in pending_writes {
-            let (_resp, d) = self.write_single_inner(&pw.path, pw.value, timestamp, now, depth + 1);
+            // Apply encoding: decode hex/base64 string values into raw bytes (FR-009b).
+            let value = match pw.encoding {
+                Some(enc) => {
+                    let data_enc = enc.to_data_encoding();
+                    match &pw.value {
+                        OmiValue::Str(s) => match data_enc.decode(s) {
+                            Ok(bytes) => OmiValue::Str(
+                                std::string::String::from_utf8(bytes)
+                                    .unwrap_or_else(|e| {
+                                        // Binary data that isn't valid UTF-8: use lossy conversion.
+                                        std::string::String::from_utf8_lossy(e.as_bytes()).into_owned()
+                                    }),
+                            ),
+                            Err(e) => {
+                                log::warn!(
+                                    "encoding decode error for '{}' ({:?}): {}",
+                                    pw.path, enc, e
+                                );
+                                pw.value
+                            }
+                        },
+                        _ => pw.value, // Non-string values: encoding not applicable
+                    }
+                }
+                None => pw.value,
+            };
+            let (_resp, d) = self.write_single_inner(&pw.path, value, timestamp, now, depth + 1);
             deliveries.extend(d);
 
             // FR-009a: persist encoding hint in InfoItem metadata so peripheral

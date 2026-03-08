@@ -274,104 +274,102 @@ mod tests {
         assert!(matches!(ot.resolve(PATH_FREE_HEAP), Ok(PathTarget::InfoItem(_))));
     }
 
-    // --- serialize_saved_items ---
+    // --- serialize/deserialize_saved_items (requires json feature) ---
 
-    #[test]
-    fn serialize_empty() {
-        let blob = serialize_saved_items(&[]).unwrap();
-        assert_eq!(blob, b"[]");
-    }
+    #[cfg(feature = "json")]
+    mod json_persistence {
+        use super::*;
 
-    #[test]
-    fn serialize_single_item() {
-        let items = vec![SavedItem {
-            path: "/A/B".into(),
-            v: OmiValue::Number(42.0),
-            t: Some(1000.0),
-        }];
-        let blob = serialize_saved_items(&items).unwrap();
-        let text = std::str::from_utf8(&blob).unwrap();
-        assert!(text.contains("\"path\":\"/A/B\""));
-        assert!(text.contains("42"));
-    }
-
-    #[test]
-    fn serialize_too_large() {
-        // Create items whose serialized form exceeds MAX_NVS_BLOB
-        let items: Vec<SavedItem> = (0..500)
-            .map(|i| SavedItem {
-                path: format!("/Object{}/LongItemName{}", i, i),
-                v: OmiValue::Str("x".repeat(20)),
-                t: Some(i as f64),
-            })
-            .collect();
-        let err = serialize_saved_items(&items).unwrap_err();
-        match err {
-            NvsSaveError::TooLarge(size) => assert!(size > MAX_NVS_BLOB),
-            other => panic!("expected TooLarge, got {:?}", other),
+        #[test]
+        fn serialize_empty() {
+            let blob = serialize_saved_items(&[]).unwrap();
+            assert_eq!(blob, b"[]");
         }
-    }
 
-    #[test]
-    fn serialize_under_limit() {
-        let items = vec![
-            SavedItem { path: "/A/X".into(), v: OmiValue::Number(1.0), t: None },
-            SavedItem { path: "/A/Y".into(), v: OmiValue::Bool(true), t: Some(99.0) },
-        ];
-        let blob = serialize_saved_items(&items).unwrap();
-        assert!(blob.len() <= MAX_NVS_BLOB);
-    }
+        #[test]
+        fn serialize_single_item() {
+            let items = vec![SavedItem {
+                path: "/A/B".into(),
+                v: OmiValue::Number(42.0),
+                t: Some(1000.0),
+            }];
+            let blob = serialize_saved_items(&items).unwrap();
+            let text = std::str::from_utf8(&blob).unwrap();
+            assert!(text.contains("\"path\":\"/A/B\""));
+            assert!(text.contains("42"));
+        }
 
-    // --- deserialize_saved_items ---
+        #[test]
+        fn serialize_too_large() {
+            let items: Vec<SavedItem> = (0..500)
+                .map(|i| SavedItem {
+                    path: format!("/Object{}/LongItemName{}", i, i),
+                    v: OmiValue::Str("x".repeat(20)),
+                    t: Some(i as f64),
+                })
+                .collect();
+            let err = serialize_saved_items(&items).unwrap_err();
+            match err {
+                NvsSaveError::TooLarge(size) => assert!(size > MAX_NVS_BLOB),
+                other => panic!("expected TooLarge, got {:?}", other),
+            }
+        }
 
-    #[test]
-    fn deserialize_empty_array() {
-        let items = deserialize_saved_items(b"[]").unwrap();
-        assert!(items.is_empty());
-    }
+        #[test]
+        fn serialize_under_limit() {
+            let items = vec![
+                SavedItem { path: "/A/X".into(), v: OmiValue::Number(1.0), t: None },
+                SavedItem { path: "/A/Y".into(), v: OmiValue::Bool(true), t: Some(99.0) },
+            ];
+            let blob = serialize_saved_items(&items).unwrap();
+            assert!(blob.len() <= MAX_NVS_BLOB);
+        }
 
-    #[test]
-    fn deserialize_single_item() {
-        // OmiValue is serde(untagged), so strings serialize as bare JSON strings
-        let json = r#"[{"path":"/A/B","v":"hello","t":1000.0}]"#;
-        let items = deserialize_saved_items(json.as_bytes()).unwrap();
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].path, "/A/B");
-        assert_eq!(items[0].v, OmiValue::Str("hello".into()));
-        assert_eq!(items[0].t, Some(1000.0));
-    }
+        #[test]
+        fn deserialize_empty_array() {
+            let items = deserialize_saved_items(b"[]").unwrap();
+            assert!(items.is_empty());
+        }
 
-    #[test]
-    fn deserialize_no_timestamp() {
-        let json = r#"[{"path":"/X","v":3.14}]"#;
-        let items = deserialize_saved_items(json.as_bytes()).unwrap();
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].t, None);
-    }
+        #[test]
+        fn deserialize_single_item() {
+            let json = r#"[{"path":"/A/B","v":"hello","t":1000.0}]"#;
+            let items = deserialize_saved_items(json.as_bytes()).unwrap();
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].path, "/A/B");
+            assert_eq!(items[0].v, OmiValue::Str("hello".into()));
+            assert_eq!(items[0].t, Some(1000.0));
+        }
 
-    #[test]
-    fn deserialize_invalid_json() {
-        assert!(deserialize_saved_items(b"not json").is_err());
-    }
+        #[test]
+        fn deserialize_no_timestamp() {
+            let json = r#"[{"path":"/X","v":3.14}]"#;
+            let items = deserialize_saved_items(json.as_bytes()).unwrap();
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].t, None);
+        }
 
-    #[test]
-    fn deserialize_wrong_structure() {
-        // Valid JSON but not an array of SavedItem
-        assert!(deserialize_saved_items(b"{}").is_err());
-    }
+        #[test]
+        fn deserialize_invalid_json() {
+            assert!(deserialize_saved_items(b"not json").is_err());
+        }
 
-    // --- roundtrip ---
+        #[test]
+        fn deserialize_wrong_structure() {
+            assert!(deserialize_saved_items(b"{}").is_err());
+        }
 
-    #[test]
-    fn serialize_deserialize_roundtrip() {
-        let items = vec![
-            SavedItem { path: "/A/B".into(), v: OmiValue::Number(42.0), t: Some(1000.0) },
-            SavedItem { path: "/C/D".into(), v: OmiValue::Str("hello".into()), t: None },
-            SavedItem { path: "/E/F".into(), v: OmiValue::Bool(true), t: Some(2000.0) },
-        ];
-        let blob = serialize_saved_items(&items).unwrap();
-        let restored = deserialize_saved_items(&blob).unwrap();
-        assert_eq!(items, restored);
+        #[test]
+        fn serialize_deserialize_roundtrip() {
+            let items = vec![
+                SavedItem { path: "/A/B".into(), v: OmiValue::Number(42.0), t: Some(1000.0) },
+                SavedItem { path: "/C/D".into(), v: OmiValue::Str("hello".into()), t: None },
+                SavedItem { path: "/E/F".into(), v: OmiValue::Bool(true), t: Some(2000.0) },
+            ];
+            let blob = serialize_saved_items(&items).unwrap();
+            let restored = deserialize_saved_items(&blob).unwrap();
+            assert_eq!(items, restored);
+        }
     }
 
     // --- update_discovery_tree ---

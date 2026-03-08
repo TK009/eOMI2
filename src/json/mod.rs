@@ -7,3 +7,5 @@ pub mod error;
 pub mod lexer;
 pub mod parser;
 pub mod serializer;
+
+pub use serializer::{JsonWriter, ToJson};

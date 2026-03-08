@@ -327,6 +327,83 @@ mod tests {
     }
 
     #[test]
+    fn system_object_has_type_uri() {
+        let tree = build_sensor_tree();
+        let sys = &tree["System"];
+        assert_eq!(sys.type_uri.as_deref(), Some("omi:device:system"));
+    }
+
+    #[test]
+    fn heap_item_has_total_meta() {
+        let tree = build_sensor_tree();
+        let sys = &tree["System"];
+        let meta = sys.get_item("FreeHeap").unwrap().meta.as_ref().unwrap();
+        assert!(meta.contains_key("total"), "FreeHeap must have meta.total");
+    }
+
+    #[cfg(feature = "mem-stats")]
+    #[test]
+    fn mem_stats_items_not_writable() {
+        let tree = build_sensor_tree();
+        let sys = &tree["System"];
+        let flash = sys.get_item("FreeFlash").unwrap();
+        assert!(!flash.is_writable(), "FreeFlash should not be writable");
+        let odf = sys.get_item("FreeOdfStorage").unwrap();
+        assert!(!odf.is_writable(), "FreeOdfStorage should not be writable");
+    }
+
+    #[cfg(feature = "mem-stats")]
+    #[test]
+    fn mem_stats_items_all_have_total_meta() {
+        let tree = build_sensor_tree();
+        let sys = &tree["System"];
+        for name in &["FreeHeap", "FreeFlash", "FreeOdfStorage"] {
+            let item = sys.get_item(name).unwrap_or_else(|| panic!("{} missing", name));
+            let meta = item.meta.as_ref().unwrap_or_else(|| panic!("{} has no meta", name));
+            assert!(meta.contains_key("total"), "{} missing meta.total", name);
+        }
+    }
+
+    #[cfg(not(feature = "mem-stats"))]
+    #[test]
+    fn without_mem_stats_no_flash_or_odf_items() {
+        let tree = build_sensor_tree();
+        let sys = &tree["System"];
+        assert!(sys.get_item("FreeFlash").is_none(), "FreeFlash should not exist without mem-stats");
+        assert!(sys.get_item("FreeOdfStorage").is_none(), "FreeOdfStorage should not exist without mem-stats");
+    }
+
+    #[test]
+    fn temperature_gated_by_board_config() {
+        let tree = build_sensor_tree();
+        let sys = &tree["System"];
+        if crate::board::has_temp_sensor() {
+            let temp = sys.get_item("Temperature").expect("Temperature missing with temp sensor");
+            assert_eq!(temp.type_uri.as_deref(), Some("omi:sensor:temperature"));
+            assert!(!temp.is_writable(), "Temperature should not be writable");
+            let meta = temp.meta.as_ref().expect("Temperature has no meta");
+            assert_eq!(meta.get("unit"), Some(&OmiValue::Str("°C".into())));
+
+            // PATH_TEMPERATURE should resolve
+            let mut ot = ObjectTree::new();
+            ot.write_tree("/", build_sensor_tree()).unwrap();
+            assert!(matches!(ot.resolve(PATH_TEMPERATURE), Ok(PathTarget::InfoItem(_))));
+        } else {
+            assert!(sys.get_item("Temperature").is_none(),
+                "Temperature should not exist when board has no temp sensor");
+        }
+    }
+
+    #[cfg(all(feature = "mem-stats", feature = "psram"))]
+    #[test]
+    fn psram_item_not_writable() {
+        let tree = build_sensor_tree();
+        let sys = &tree["System"];
+        let psram = sys.get_item("FreePsram").unwrap();
+        assert!(!psram.is_writable(), "FreePsram should not be writable");
+    }
+
+    #[test]
     fn collect_returns_empty_for_sensor_only_tree() {
         let mut ot = ObjectTree::new();
         ot.write_tree("/", build_sensor_tree()).unwrap();

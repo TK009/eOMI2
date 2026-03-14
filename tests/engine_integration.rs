@@ -1,3 +1,4 @@
+#![cfg(feature = "json")]
 //! Integration tests for the OMI engine.
 //!
 //! Unlike the unit tests in `src/omi/engine.rs`, these exercise the full

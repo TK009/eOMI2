@@ -1,3 +1,4 @@
+#![cfg(feature = "json")]
 //! Independence tests for onwrite + onread scripts on the same InfoItem.
 //!
 //! Verifies that write triggers onwrite only, read triggers onread only,

@@ -1299,7 +1299,9 @@ mod tests {
 
     // -- Serde parity tests --
     // Verify ToJson output matches serde_json output for the same structures.
+    // These require serde Serialize impls, so they only run under the json feature.
 
+    #[cfg(feature = "json")]
     #[test]
     fn parity_omi_value() {
         for val in &[
@@ -1318,6 +1320,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn parity_value_with_timestamp() {
         let v = Value::new(OmiValue::Number(22.5), Some(1000.0));
@@ -1326,6 +1329,7 @@ mod tests {
         assert_eq!(parse(&serde_out), parse(&lite_out));
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn parity_value_without_timestamp() {
         let v = Value::new(OmiValue::Str("test".into()), None);
@@ -1334,6 +1338,7 @@ mod tests {
         assert_eq!(parse(&serde_out), parse(&lite_out));
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn parity_ring_buffer() {
         let mut rb = RingBuffer::new(5);
@@ -1346,6 +1351,7 @@ mod tests {
         assert_eq!(parse(&serde_out), parse(&lite_out));
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn parity_ring_buffer_after_overflow() {
         let mut rb = RingBuffer::new(3);
@@ -1358,6 +1364,7 @@ mod tests {
         assert_eq!(parse(&serde_out), parse(&lite_out));
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn parity_info_item_empty() {
         let item = InfoItem::new(10);
@@ -1366,6 +1373,7 @@ mod tests {
         assert_eq!(parse(&serde_out), parse(&lite_out));
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn parity_info_item_full() {
         let mut item = InfoItem::new(10);
@@ -1383,6 +1391,7 @@ mod tests {
         assert_eq!(parse(&serde_out), parse(&lite_out));
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn parity_object_minimal() {
         let obj = Object::new("DeviceA");
@@ -1391,6 +1400,7 @@ mod tests {
         assert_eq!(parse(&serde_out), parse(&lite_out));
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn parity_object_nested() {
         let mut root = Object::new("Root");
@@ -1417,6 +1427,7 @@ mod tests {
         assert_eq!(parse(&serde_out), parse(&lite_out));
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn parity_depth_limited() {
         let mut root = Object::new("Root");

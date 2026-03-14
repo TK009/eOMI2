@@ -6,6 +6,7 @@ pub mod write;
 pub mod delete;
 pub mod cancel;
 pub mod response;
+#[cfg(feature = "json")]
 pub mod subscriptions;
 
 #[cfg(feature = "json")]
@@ -24,6 +25,7 @@ use self::cancel::CancelOp;
 use self::response::ResponseBody;
 pub use self::write::WriteItem;
 pub use self::response::{StatusCode, ResponseResult, ResultPayload, ItemStatus, OmiResponse};
+#[cfg(feature = "json")]
 pub use self::subscriptions::{Delivery, SessionId};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -138,7 +140,7 @@ impl Serialize for OmiMessage {
 mod tests {
     use super::*;
 
-    #[cfg(feature = "json")]
+    #[cfg(any(feature = "json", feature = "lite-json"))]
     mod json {
         use super::*;
 
@@ -293,6 +295,7 @@ mod tests {
 
         // --- Serialization ---
 
+        #[cfg(feature = "json")]
         #[test]
         fn serialize_read_message() {
             let msg = OmiMessage {
@@ -317,6 +320,7 @@ mod tests {
             assert_eq!(json["read"]["newest"], 5);
         }
 
+        #[cfg(feature = "json")]
         #[test]
         fn serialize_write_message() {
             let msg = OmiMessage {
@@ -335,6 +339,7 @@ mod tests {
             assert_eq!(json["write"]["v"], 42.0);
         }
 
+        #[cfg(feature = "json")]
         #[test]
         fn serialize_delete_message() {
             let msg = OmiMessage {
@@ -348,6 +353,7 @@ mod tests {
             assert_eq!(json["delete"]["path"], "/DeviceA");
         }
 
+        #[cfg(feature = "json")]
         #[test]
         fn serialize_cancel_message() {
             let msg = OmiMessage {
@@ -363,6 +369,7 @@ mod tests {
 
         // --- Round-trip tests ---
 
+        #[cfg(feature = "json")]
         #[test]
         fn roundtrip_read() {
             let msg = OmiMessage {
@@ -385,6 +392,7 @@ mod tests {
             assert_eq!(msg, msg2);
         }
 
+        #[cfg(feature = "json")]
         #[test]
         fn roundtrip_write_single() {
             let msg = OmiMessage {
@@ -401,6 +409,7 @@ mod tests {
             assert_eq!(msg, msg2);
         }
 
+        #[cfg(feature = "json")]
         #[test]
         fn roundtrip_delete() {
             let msg = OmiMessage {
@@ -415,6 +424,7 @@ mod tests {
             assert_eq!(msg, msg2);
         }
 
+        #[cfg(feature = "json")]
         #[test]
         fn roundtrip_cancel() {
             let msg = OmiMessage {
@@ -429,6 +439,7 @@ mod tests {
             assert_eq!(msg, msg2);
         }
 
+        #[cfg(feature = "json")]
         #[test]
         fn roundtrip_response() {
             let msg = OmiResponse::ok(serde_json::json!({"x": 1}));

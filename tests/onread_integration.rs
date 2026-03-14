@@ -1,3 +1,4 @@
+#![cfg(feature = "json")]
 //! Comprehensive integration tests for the `onread` script trigger (spec-006).
 //!
 //! Covers all functional requirements:

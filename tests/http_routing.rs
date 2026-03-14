@@ -1,3 +1,4 @@
+#![cfg(feature = "json")]
 //! Integration tests for HTTP helpers + Engine wiring.
 //!
 //! These tests verify the cross-module chain:

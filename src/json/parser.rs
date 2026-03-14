@@ -14,7 +14,7 @@ use crate::omi::cancel::CancelOp;
 use crate::omi::delete::DeleteOp;
 use crate::omi::error::ParseError;
 use crate::omi::read::ReadOp;
-use crate::omi::response::ResponseBody;
+use crate::omi::response::{ResponseBody, ResponseResult, ResultPayload, ItemStatus};
 use crate::omi::write::{WriteItem, WriteOp};
 
 use super::error::{LiteParseError, Pos};
@@ -868,6 +868,7 @@ fn parse_response_body(p: &mut JsonParser) -> Result<ResponseBody, ParseError> {
     let mut status: Option<u16> = None;
     let mut rid: Option<String> = None;
     let mut desc: Option<String> = None;
+    let mut result: Option<ResponseResult> = None;
 
     parse_op_fields(p, |p, key| {
         match key {
@@ -881,8 +882,7 @@ fn parse_response_body(p: &mut JsonParser) -> Result<ResponseBody, ParseError> {
             "rid" => rid = Some(p.expect_string()?),
             "desc" => desc = Some(p.expect_string()?),
             "result" => {
-                // Result parsing deferred to downstream task (eo-4z9)
-                p.skip_value()?;
+                result = Some(parse_response_result(p)?);
             }
             _ => p.skip_value()?,
         }
@@ -893,7 +893,81 @@ fn parse_response_body(p: &mut JsonParser) -> Result<ResponseBody, ParseError> {
         status: status.ok_or(ParseError::MissingField("status"))?,
         rid,
         desc,
-        result: None,
+        result,
+    })
+}
+
+fn parse_response_result(p: &mut JsonParser) -> Result<ResponseResult, LiteParseError> {
+    if p.peek_is(&Token::ArrayStart)? {
+        // Batch: array of ItemStatus
+        p.lexer().expect_token(&Token::ArrayStart)?;
+        let mut items = Vec::new();
+        if !p.peek_is(&Token::ArrayEnd)? {
+            loop {
+                items.push(parse_item_status(p)?);
+                if p.peek_is(&Token::Comma)? {
+                    p.lexer().next_token()?;
+                } else if p.peek_is(&Token::ArrayEnd)? {
+                    break;
+                } else {
+                    return Err(LiteParseError::ExpectedToken {
+                        expected: "',' or ']'",
+                        pos: Pos::new(p.position()),
+                    });
+                }
+            }
+        }
+        p.lexer().expect_token(&Token::ArrayEnd)?;
+        Ok(ResponseResult::Batch(items))
+    } else {
+        // Single result — skip the value, store as Null payload
+        p.skip_value()?;
+        Ok(ResponseResult::Single(ResultPayload::Null))
+    }
+}
+
+fn parse_item_status(p: &mut JsonParser) -> Result<ItemStatus, LiteParseError> {
+    p.lexer().expect_token(&Token::ObjectStart)?;
+
+    let mut path: Option<String> = None;
+    let mut status: Option<u16> = None;
+    let mut desc: Option<String> = None;
+    let obj_pos = Pos::new(p.position());
+
+    if !p.peek_is(&Token::ObjectEnd)? {
+        loop {
+            let key = p.expect_string()?;
+            p.lexer().expect_token(&Token::Colon)?;
+            match key.as_str() {
+                "path" => path = Some(p.expect_string()?),
+                "status" => {
+                    let n = expect_u64_from(p)?;
+                    status = Some(u16::try_from(n).map_err(|_| LiteParseError::ExpectedToken {
+                        expected: "status code",
+                        pos: Pos::new(p.position()),
+                    })?);
+                }
+                "desc" => desc = Some(p.expect_string()?),
+                _ => p.skip_value()?,
+            }
+            if p.peek_is(&Token::Comma)? {
+                p.lexer().next_token()?;
+            } else if p.peek_is(&Token::ObjectEnd)? {
+                break;
+            } else {
+                return Err(LiteParseError::ExpectedToken {
+                    expected: "',' or '}'",
+                    pos: Pos::new(p.position()),
+                });
+            }
+        }
+    }
+    p.lexer().expect_token(&Token::ObjectEnd)?;
+
+    Ok(ItemStatus {
+        path: path.ok_or(LiteParseError::MissingField { field: "path", pos: obj_pos })?,
+        status: status.ok_or(LiteParseError::MissingField { field: "status", pos: obj_pos })?,
+        desc,
     })
 }
 

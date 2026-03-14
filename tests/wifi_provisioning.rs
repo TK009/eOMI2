@@ -1,3 +1,4 @@
+#![cfg(feature = "json")]
 // Host-side unit tests for WiFi provisioning flows.
 //
 // Tests cross-module interactions: form parsing → config building,

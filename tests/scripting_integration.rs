@@ -1,3 +1,4 @@
+#![cfg(feature = "json")]
 //! Integration tests for the scripting engine + ODF interaction.
 //!
 //! These exercise the full JSON round-trip for onwrite scripts:

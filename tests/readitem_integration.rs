@@ -1,3 +1,4 @@
+#![cfg(feature = "json")]
 //! Integration tests for `odf.readItem()` — spec 003-odf-readitem.
 //!
 //! Covers all acceptance scenarios: /value suffix, element structure, null cases,

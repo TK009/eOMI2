@@ -15,7 +15,7 @@ use crate::omi::delete::DeleteOp;
 use crate::omi::error::ParseError;
 use crate::omi::read::ReadOp;
 use crate::omi::response::{ResponseBody, ResponseResult, ResultPayload, ItemStatus};
-use crate::omi::write::{WriteItem, WriteOp};
+use crate::omi::write::{WriteItem, WriteOp, MAX_OBJECT_DEPTH, parsed_object_tree_depth};
 
 use super::error::{LiteParseError, Pos};
 use super::lexer::{Lexer, Token};
@@ -754,9 +754,20 @@ fn parse_write_op(p: &mut JsonParser) -> Result<WriteOp, ParseError> {
         }
         Ok(WriteOp::Batch { items })
     } else {
+        let objects = objects.unwrap();
+        let depth = parsed_object_tree_depth(&objects);
+        if depth > MAX_OBJECT_DEPTH {
+            return Err(ParseError::InvalidField {
+                field: "objects",
+                reason: format!(
+                    "nesting depth {} exceeds maximum of {}",
+                    depth, MAX_OBJECT_DEPTH
+                ),
+            });
+        }
         Ok(WriteOp::Tree {
             path: path.ok_or(ParseError::MissingField("path"))?,
-            objects: objects.unwrap(),
+            objects,
         })
     }
 }

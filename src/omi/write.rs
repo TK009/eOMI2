@@ -11,7 +11,29 @@ use super::error::ParseError;
 /// Maximum nesting depth for Object trees in write operations.
 /// Limits recursive serde deserialization to stay within the HTTP thread stack.
 /// NOTE: If you change this value, also update `HTTP_THREAD_STACK` in `server.rs`.
-const MAX_OBJECT_DEPTH: usize = 8;
+pub(crate) const MAX_OBJECT_DEPTH: usize = 8;
+
+/// Count the maximum Object nesting depth in a parsed objects map, iteratively.
+///
+/// Returns 0 if the map is empty.
+pub(crate) fn parsed_object_tree_depth(objects: &BTreeMap<String, Object>) -> usize {
+    let mut max_depth: usize = 0;
+    let mut stack: Vec<(&Object, usize)> = Vec::new();
+    for obj in objects.values() {
+        stack.push((obj, 1));
+    }
+    while let Some((obj, depth)) = stack.pop() {
+        if depth > max_depth {
+            max_depth = depth;
+        }
+        if let Some(children) = &obj.objects {
+            for child in children.values() {
+                stack.push((child, depth + 1));
+            }
+        }
+    }
+    max_depth
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum WriteOp {

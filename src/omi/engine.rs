@@ -608,8 +608,13 @@ impl Engine {
                 }
             }
 
-            // Clear context to prevent stale use
+            // Clear all script globals to prevent stale pointer use
             let null_val = ffi::mjs_mk_null();
+            let (n, l) = mjs_name!("__ctx");
+            ffi::mjs_set(mjs, global, n, l, null_val);
+            let (n, l) = mjs_name!("event");
+            ffi::mjs_set(mjs, global, n, l, null_val);
+            let (n, l) = mjs_name!("odf");
             ffi::mjs_set(mjs, global, n, l, null_val);
         }
 
@@ -832,8 +837,13 @@ impl Engine {
                 }
             }
 
-            // Clear context to prevent stale use
+            // Clear all script globals to prevent stale pointer use
             let null_val = ffi::mjs_mk_null();
+            let (n, l) = mjs_name!("__ctx");
+            ffi::mjs_set(mjs, global, n, l, null_val);
+            let (n, l) = mjs_name!("event");
+            ffi::mjs_set(mjs, global, n, l, null_val);
+            let (n, l) = mjs_name!("odf");
             ffi::mjs_set(mjs, global, n, l, null_val);
         }
 

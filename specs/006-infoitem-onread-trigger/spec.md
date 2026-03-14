@@ -99,6 +99,7 @@ When an interval subscription delivers values for an InfoItem that has an `onrea
 
 - Q: When a read queries multiple historical values (e.g., newest=5), should the onread script transform all values or only the newest? → A: Script runs once (newest value only); older ring buffer entries returned as-is.
 - Q: Should event-based subscription delivery (triggered by writes) also run the onread script? → A: OnRead runs only for interval subscriptions; event subscriptions deliver the written value as-is.
+- Q: When reading an Object (subtree) that contains InfoItems with onread scripts, should the serialized values be transformed? → A: No. Onread scripts execute only for direct InfoItem reads, interval subscription delivery, and `odf.readItem()` calls. Object/Root tree reads return raw stored values.
 
 ## Assumptions
 

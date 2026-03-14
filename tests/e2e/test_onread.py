@@ -348,7 +348,7 @@ def test_cascading_onread(base_url, token):
             "values": [],
             "meta": {
                 "writable": True,
-                "onread": "odf.readItem('/Cascade/Inner') * 2",
+                "onread": "odf.readItem('/Cascade/Inner/value') * 2",
             },
         },
     }

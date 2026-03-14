@@ -21,6 +21,7 @@ use log::{debug, info, warn};
 use crate::captive_portal::{
     self, ConnectionState, ConnectionStatus, ProvisionForm, ScannedNetwork,
 };
+use crate::compress;
 use crate::http::{
     build_read_op, check_bearer_auth, is_mutating_operation, is_successful_write_response,
     now_secs, omi_uri_to_odf_path, render_landing_page, uri_path, uri_query,
@@ -197,6 +198,27 @@ fn send_response(
     }
 }
 
+/// Send an HTML response, gzip-compressed if the client accepts it.
+fn send_html(
+    req: esp_idf_svc::http::server::Request<&mut esp_idf_svc::http::server::EspHttpConnection>,
+    status: u16,
+    reason: &str,
+    html: &[u8],
+) {
+    let accept = req.header("accept-encoding").unwrap_or("");
+    if accept.contains("gzip") {
+        let compressed = compress::gzip_compress(html);
+        let headers = [
+            ("Content-Type", "text/html"),
+            ("Content-Encoding", "gzip"),
+        ];
+        send_response(req, status, reason, &headers, &compressed);
+    } else {
+        let headers = [("Content-Type", "text/html")];
+        send_response(req, status, reason, &headers, html);
+    }
+}
+
 /// Map a `BodyError` to an HTTP error response.
 fn send_body_error(
     req: esp_idf_svc::http::server::Request<&mut esp_idf_svc::http::server::EspHttpConnection>,
@@ -352,13 +374,11 @@ pub fn start_http_server(
                 cfg.is_first_setup,
                 cfg.error_message.as_deref(),
             );
-            let headers = [("Content-Type", "text/html")];
-            send_response(req, 200, "OK", &headers, html.as_bytes());
+            send_html(req, 200, "OK", html.as_bytes());
         } else {
             let store = lock_or_recover(&s, "page_store");
             let html = render_landing_page(&store);
-            let headers = [("Content-Type", "text/html")];
-            send_response(req, 200, "OK", &headers, html.as_bytes());
+            send_html(req, 200, "OK", html.as_bytes());
         }
         Ok(())
     })?;
@@ -439,8 +459,7 @@ pub fn start_http_server(
                     &hostname,
                     ssid_count,
                 );
-                let headers = [("Content-Type", "text/html")];
-                send_response(req, 200, "OK", &headers, html.as_bytes());
+                send_html(req, 200, "OK", html.as_bytes());
             }
             Err(e) => {
                 let msg = match e {
@@ -458,8 +477,7 @@ pub fn start_http_server(
                     cfg.is_first_setup,
                     Some(msg),
                 );
-                let headers = [("Content-Type", "text/html")];
-                send_response(req, 400, "Bad Request", &headers, html.as_bytes());
+                send_html(req, 400, "Bad Request", html.as_bytes());
             }
         }
         Ok(())
@@ -784,8 +802,7 @@ pub fn start_http_server(
         let store = lock_or_recover(&s, "page_store");
         match store.get(&path) {
             Some(html) => {
-                let headers = [("Content-Type", "text/html")];
-                send_response(req, 200, "OK", &headers, html.as_bytes());
+                send_html(req, 200, "OK", html.as_bytes());
             }
             None => {
                 send_response(req, 404, "Not Found", &[], b"Page not found");

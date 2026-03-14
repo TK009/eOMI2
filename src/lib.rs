@@ -23,6 +23,7 @@ pub mod odf;
 pub mod omi;
 #[cfg(feature = "std")]
 pub mod pages;
+pub mod compress;
 pub mod crypto;
 pub mod psram;
 #[cfg(all(feature = "std", feature = "json"))]

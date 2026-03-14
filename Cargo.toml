@@ -43,6 +43,7 @@ embedded-svc = { version = "0.28", default-features = false, optional = true }
 anyhow = "1"
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
+miniz_oxide = "0.8"
 
 [build-dependencies]
 embuild = { version = "0.33", features = ["espidf"], optional = true }

@@ -195,16 +195,14 @@ pub fn update_discovery_tree(
 }
 
 // ---------------------------------------------------------------------------
-// NVS serialization helpers (platform-independent, json-gated)
+// NVS serialization helpers (platform-independent, compact binary format)
 // ---------------------------------------------------------------------------
 
 /// Maximum blob size for NVS storage. Leave headroom below the NVS page
 /// size (~4096 bytes) to avoid write failures.
-#[cfg(feature = "json")]
 pub const MAX_NVS_BLOB: usize = 4000;
 
 /// Errors from serializing items for NVS persistence.
-#[cfg(feature = "json")]
 #[derive(Debug, PartialEq)]
 pub enum NvsSaveError {
     /// Serialized blob exceeds [`MAX_NVS_BLOB`]. Contains the actual size.
@@ -212,20 +210,145 @@ pub enum NvsSaveError {
     SerializeFailed,
 }
 
-/// Serialize saved items to JSON bytes, enforcing the NVS blob size limit.
-#[cfg(feature = "json")]
+/// Binary format version tag.
+const SAVED_ITEMS_VERSION: u8 = 0x01;
+
+/// Serialize saved items to compact binary, enforcing the NVS blob size limit.
+///
+/// Wire format:
+/// ```text
+/// [version: u8 = 0x01] [item_count: u16-LE]
+/// per item:
+///   [path_len: u16-LE] [path: utf8]
+///   [type_tag: u8]  -- 0=null, 1=bool(0), 2=bool(1), 3=f64, 4=str
+///   [value: variable] -- f64: 8 bytes LE; str: u16-LE len + bytes
+///   [has_t: u8] [t: f64-LE if has_t=1]
+/// ```
 pub fn serialize_saved_items(items: &[SavedItem]) -> Result<Vec<u8>, NvsSaveError> {
-    let blob = serde_json::to_vec(items).map_err(|_| NvsSaveError::SerializeFailed)?;
-    if blob.len() > MAX_NVS_BLOB {
-        return Err(NvsSaveError::TooLarge(blob.len()));
+    let mut buf = Vec::with_capacity(128);
+    buf.push(SAVED_ITEMS_VERSION);
+    let count: u16 = items.len().try_into().map_err(|_| NvsSaveError::SerializeFailed)?;
+    buf.extend_from_slice(&count.to_le_bytes());
+
+    for item in items {
+        let path_bytes = item.path.as_bytes();
+        let path_len: u16 = path_bytes.len().try_into().map_err(|_| NvsSaveError::SerializeFailed)?;
+        buf.extend_from_slice(&path_len.to_le_bytes());
+        buf.extend_from_slice(path_bytes);
+
+        match &item.v {
+            OmiValue::Null => buf.push(0),
+            OmiValue::Bool(false) => buf.push(1),
+            OmiValue::Bool(true) => buf.push(2),
+            OmiValue::Number(n) => {
+                buf.push(3);
+                buf.extend_from_slice(&n.to_le_bytes());
+            }
+            OmiValue::Str(s) => {
+                buf.push(4);
+                let s_bytes = s.as_bytes();
+                let s_len: u16 = s_bytes.len().try_into().map_err(|_| NvsSaveError::SerializeFailed)?;
+                buf.extend_from_slice(&s_len.to_le_bytes());
+                buf.extend_from_slice(s_bytes);
+            }
+        }
+
+        match item.t {
+            Some(t) => {
+                buf.push(1);
+                buf.extend_from_slice(&t.to_le_bytes());
+            }
+            None => buf.push(0),
+        }
     }
-    Ok(blob)
+
+    if buf.len() > MAX_NVS_BLOB {
+        return Err(NvsSaveError::TooLarge(buf.len()));
+    }
+    Ok(buf)
 }
 
-/// Deserialize saved items from a JSON byte slice.
-#[cfg(feature = "json")]
+/// Deserialize saved items from a compact binary byte slice.
 pub fn deserialize_saved_items(data: &[u8]) -> Result<Vec<SavedItem>, String> {
-    serde_json::from_slice(data).map_err(|e| e.to_string())
+    let mut pos = 0;
+
+    let read_u8 = |pos: &mut usize| -> Result<u8, String> {
+        if *pos >= data.len() {
+            return Err("unexpected end of data".into());
+        }
+        let v = data[*pos];
+        *pos += 1;
+        Ok(v)
+    };
+
+    let read_u16 = |pos: &mut usize| -> Result<u16, String> {
+        if *pos + 2 > data.len() {
+            return Err("unexpected end of data".into());
+        }
+        let v = u16::from_le_bytes([data[*pos], data[*pos + 1]]);
+        *pos += 2;
+        Ok(v)
+    };
+
+    let read_f64 = |pos: &mut usize| -> Result<f64, String> {
+        if *pos + 8 > data.len() {
+            return Err("unexpected end of data".into());
+        }
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&data[*pos..*pos + 8]);
+        *pos += 8;
+        Ok(f64::from_le_bytes(bytes))
+    };
+
+    let version = read_u8(&mut pos)?;
+    if version != SAVED_ITEMS_VERSION {
+        return Err(format!("unsupported version: {}", version));
+    }
+
+    let count = read_u16(&mut pos)? as usize;
+    let mut items = Vec::with_capacity(count);
+
+    for _ in 0..count {
+        let path_len = read_u16(&mut pos)? as usize;
+        if pos + path_len > data.len() {
+            return Err("unexpected end of data".into());
+        }
+        let path = core::str::from_utf8(&data[pos..pos + path_len])
+            .map_err(|e| e.to_string())?
+            .to_string();
+        pos += path_len;
+
+        let tag = read_u8(&mut pos)?;
+        let v = match tag {
+            0 => OmiValue::Null,
+            1 => OmiValue::Bool(false),
+            2 => OmiValue::Bool(true),
+            3 => OmiValue::Number(read_f64(&mut pos)?),
+            4 => {
+                let s_len = read_u16(&mut pos)? as usize;
+                if pos + s_len > data.len() {
+                    return Err("unexpected end of data".into());
+                }
+                let s = core::str::from_utf8(&data[pos..pos + s_len])
+                    .map_err(|e| e.to_string())?
+                    .to_string();
+                pos += s_len;
+                OmiValue::Str(s)
+            }
+            _ => return Err(format!("unknown type tag: {}", tag)),
+        };
+
+        let has_t = read_u8(&mut pos)?;
+        let t = if has_t == 1 {
+            Some(read_f64(&mut pos)?)
+        } else {
+            None
+        };
+
+        items.push(SavedItem { path, v, t });
+    }
+
+    Ok(items)
 }
 
 #[cfg(test)]
@@ -463,16 +586,18 @@ mod tests {
         assert!(matches!(ot.resolve(PATH_FREE_HEAP), Ok(PathTarget::InfoItem(_))));
     }
 
-    // --- serialize/deserialize_saved_items (requires json feature) ---
+    // --- serialize/deserialize_saved_items (compact binary format) ---
 
-    #[cfg(feature = "json")]
-    mod json_persistence {
+    mod binary_persistence {
         use super::*;
 
         #[test]
         fn serialize_empty() {
             let blob = serialize_saved_items(&[]).unwrap();
-            assert_eq!(blob, b"[]");
+            // version(1) + count(2) = 3 bytes
+            assert_eq!(blob.len(), 3);
+            assert_eq!(blob[0], 0x01); // version
+            assert_eq!(blob[1..3], [0, 0]); // count = 0
         }
 
         #[test]
@@ -483,9 +608,9 @@ mod tests {
                 t: Some(1000.0),
             }];
             let blob = serialize_saved_items(&items).unwrap();
-            let text = std::str::from_utf8(&blob).unwrap();
-            assert!(text.contains("\"path\":\"/A/B\""));
-            assert!(text.contains("42"));
+            assert_eq!(blob[0], 0x01); // version
+            let restored = deserialize_saved_items(&blob).unwrap();
+            assert_eq!(restored, items);
         }
 
         #[test]
@@ -515,37 +640,26 @@ mod tests {
         }
 
         #[test]
-        fn deserialize_empty_array() {
-            let items = deserialize_saved_items(b"[]").unwrap();
+        fn deserialize_empty_items() {
+            let blob = serialize_saved_items(&[]).unwrap();
+            let items = deserialize_saved_items(&blob).unwrap();
             assert!(items.is_empty());
         }
 
         #[test]
-        fn deserialize_single_item() {
-            let json = r#"[{"path":"/A/B","v":"hello","t":1000.0}]"#;
-            let items = deserialize_saved_items(json.as_bytes()).unwrap();
-            assert_eq!(items.len(), 1);
-            assert_eq!(items[0].path, "/A/B");
-            assert_eq!(items[0].v, OmiValue::Str("hello".into()));
-            assert_eq!(items[0].t, Some(1000.0));
+        fn deserialize_invalid_data() {
+            assert!(deserialize_saved_items(b"not binary").is_err());
         }
 
         #[test]
-        fn deserialize_no_timestamp() {
-            let json = r#"[{"path":"/X","v":3.14}]"#;
-            let items = deserialize_saved_items(json.as_bytes()).unwrap();
-            assert_eq!(items.len(), 1);
-            assert_eq!(items[0].t, None);
+        fn deserialize_wrong_version() {
+            assert!(deserialize_saved_items(&[0xFF, 0, 0]).is_err());
         }
 
         #[test]
-        fn deserialize_invalid_json() {
-            assert!(deserialize_saved_items(b"not json").is_err());
-        }
-
-        #[test]
-        fn deserialize_wrong_structure() {
-            assert!(deserialize_saved_items(b"{}").is_err());
+        fn deserialize_truncated() {
+            // Valid version but truncated count
+            assert!(deserialize_saved_items(&[0x01]).is_err());
         }
 
         #[test]
@@ -558,6 +672,78 @@ mod tests {
             let blob = serialize_saved_items(&items).unwrap();
             let restored = deserialize_saved_items(&blob).unwrap();
             assert_eq!(items, restored);
+        }
+
+        #[test]
+        fn roundtrip_null_value() {
+            let items = vec![SavedItem {
+                path: "/X/Y".into(),
+                v: OmiValue::Null,
+                t: None,
+            }];
+            let blob = serialize_saved_items(&items).unwrap();
+            let restored = deserialize_saved_items(&blob).unwrap();
+            assert_eq!(items, restored);
+        }
+
+        #[test]
+        fn roundtrip_all_value_types() {
+            let items = vec![
+                SavedItem { path: "/null".into(), v: OmiValue::Null, t: None },
+                SavedItem { path: "/false".into(), v: OmiValue::Bool(false), t: Some(1.0) },
+                SavedItem { path: "/true".into(), v: OmiValue::Bool(true), t: None },
+                SavedItem { path: "/num".into(), v: OmiValue::Number(3.14), t: Some(2.0) },
+                SavedItem { path: "/str".into(), v: OmiValue::Str("test".into()), t: None },
+            ];
+            let blob = serialize_saved_items(&items).unwrap();
+            let restored = deserialize_saved_items(&blob).unwrap();
+            assert_eq!(items, restored);
+        }
+
+        #[test]
+        fn roundtrip_unicode_strings() {
+            let items = vec![
+                SavedItem { path: "/日本語/パス".into(), v: OmiValue::Str("こんにちは".into()), t: None },
+                SavedItem { path: "/emoji".into(), v: OmiValue::Str("🌡️".into()), t: Some(1.0) },
+            ];
+            let blob = serialize_saved_items(&items).unwrap();
+            let restored = deserialize_saved_items(&blob).unwrap();
+            assert_eq!(items, restored);
+        }
+
+        #[test]
+        fn roundtrip_empty_path_and_string() {
+            let items = vec![
+                SavedItem { path: "".into(), v: OmiValue::Str(String::new()), t: None },
+            ];
+            let blob = serialize_saved_items(&items).unwrap();
+            let restored = deserialize_saved_items(&blob).unwrap();
+            assert_eq!(items, restored);
+        }
+
+        #[test]
+        fn roundtrip_max_length_path() {
+            let long_path = "/".to_string() + &"a".repeat(1000);
+            let items = vec![SavedItem {
+                path: long_path.clone(),
+                v: OmiValue::Number(0.0),
+                t: None,
+            }];
+            let blob = serialize_saved_items(&items).unwrap();
+            let restored = deserialize_saved_items(&blob).unwrap();
+            assert_eq!(restored[0].path, long_path);
+        }
+
+        #[test]
+        fn binary_is_compact() {
+            // Verify binary is more compact than equivalent JSON would be
+            let items = vec![
+                SavedItem { path: "/A/B".into(), v: OmiValue::Number(42.0), t: Some(1000.0) },
+                SavedItem { path: "/C/D".into(), v: OmiValue::Str("hello".into()), t: None },
+            ];
+            let blob = serialize_saved_items(&items).unwrap();
+            // Binary should be well under 100 bytes for this
+            assert!(blob.len() < 100, "binary blob unexpectedly large: {} bytes", blob.len());
         }
     }
 

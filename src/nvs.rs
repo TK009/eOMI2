@@ -1,6 +1,6 @@
 // NVS persistence layer for writable O-DF items.
 //
-// Stores all writable items as a single JSON blob in the ESP-IDF
+// Stores all writable items as a single binary blob in the ESP-IDF
 // Non-Volatile Storage (NVS) under namespace "omi_tree", key "writable".
 
 use esp_idf_svc::nvs::{EspNvs, EspNvsPartition, NvsDefault};
@@ -59,7 +59,7 @@ pub fn load_writable_items(nvs: &EspNvs<NvsDefault>) -> Vec<SavedItem> {
     }
 }
 
-/// Save writable items to NVS as a JSON blob.
+/// Save writable items to NVS as a binary blob.
 pub fn save_writable_items(nvs: &mut EspNvs<NvsDefault>, items: &[SavedItem]) {
     let blob = match serialize_saved_items(items) {
         Ok(b) => b,

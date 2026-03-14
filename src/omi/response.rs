@@ -51,6 +51,9 @@ pub enum ResultPayload {
     /// Arbitrary JSON value (only available with serde_json).
     #[cfg(feature = "json")]
     Json(serde_json::Value),
+    /// Pre-rendered JSON string (only available with lite-json, for object subtree reads).
+    #[cfg(feature = "lite-json")]
+    JsonString(String),
 }
 
 #[cfg(feature = "json")]
@@ -143,6 +146,17 @@ impl OmiResponse {
             rid: None,
             desc: None,
             result: Some(ResponseResult::Single(ResultPayload::ReadValues { path, values })),
+        })
+    }
+
+    /// OK response with pre-rendered JSON string (requires `lite-json` feature).
+    #[cfg(feature = "lite-json")]
+    pub fn ok_json_string(result: String) -> OmiMessage {
+        Self::wrap(ResponseBody {
+            status: StatusCode::Ok.as_u16(),
+            rid: None,
+            desc: None,
+            result: Some(ResponseResult::Single(ResultPayload::JsonString(result))),
         })
     }
 

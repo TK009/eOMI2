@@ -16,7 +16,9 @@ use reconfigurable_device::odf::OmiValue;
 use reconfigurable_device::omi::{Engine, OmiMessage};
 use reconfigurable_device::pages::PageStore;
 
-use common::{engine_with_sensor_tree, extract_json_result, extract_values, response_status};
+#[cfg(feature = "json")]
+use common::extract_json_result;
+use common::{engine_with_sensor_tree, extract_single_result, extract_values, response_status};
 
 /// Chain the full REST GET flow: URI → parse → build read op → engine.process.
 fn get_omi(engine: &mut Engine, uri: &str) -> OmiMessage {
@@ -38,6 +40,7 @@ fn get_omi(engine: &mut Engine, uri: &str) -> OmiMessage {
 // 3.1  REST Discovery
 // ===========================================================================
 
+#[cfg(feature = "json")]
 #[test]
 fn get_omi_root() {
     let mut e = engine_with_sensor_tree();
@@ -47,6 +50,20 @@ fn get_omi_root() {
     assert!(result["System"].is_object(), "root should contain System");
 }
 
+#[cfg(feature = "lite-json")]
+#[test]
+fn get_omi_root_lite() {
+    use reconfigurable_device::omi::response::ResultPayload;
+    let mut e = engine_with_sensor_tree();
+    let resp = get_omi(&mut e, "/omi/");
+    assert_eq!(response_status(&resp), 200);
+    match extract_single_result(&resp) {
+        ResultPayload::JsonString(s) => assert!(s.contains("System")),
+        _ => panic!("expected JsonString"),
+    }
+}
+
+#[cfg(feature = "json")]
 #[test]
 fn get_omi_object() {
     let mut e = engine_with_sensor_tree();
@@ -55,6 +72,23 @@ fn get_omi_object() {
     let result = extract_json_result(&resp);
     assert_eq!(result["id"], "System");
     assert!(result["items"]["FreeHeap"].is_object());
+}
+
+#[cfg(feature = "lite-json")]
+#[test]
+fn get_omi_object_lite() {
+    use reconfigurable_device::omi::response::ResultPayload;
+    let mut e = engine_with_sensor_tree();
+    let resp = get_omi(&mut e, "/omi/System/");
+    assert_eq!(response_status(&resp), 200);
+    match extract_single_result(&resp) {
+        ResultPayload::JsonString(s) => {
+            assert!(s.contains("\"id\""));
+            assert!(s.contains("System"));
+            assert!(s.contains("FreeHeap"));
+        }
+        _ => panic!("expected JsonString"),
+    }
 }
 
 #[test]

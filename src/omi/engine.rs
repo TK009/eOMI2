@@ -203,11 +203,31 @@ impl Engine {
                 }
                 OmiResponse::ok_read_result(path.to_string(), values)
             }
+            #[cfg(feature = "json")]
             Ok(PathTarget::Object(_)) | Ok(PathTarget::Root(_)) => {
                 match self.tree.read(path, op.depth.map(|d| d as usize)) {
                     Ok(val) => OmiResponse::ok(val),
                     Err(e) => Self::tree_error_to_response(e),
                 }
+            }
+            #[cfg(feature = "lite-json")]
+            Ok(PathTarget::Object(obj)) => {
+                use crate::json::serializer::JsonWriter;
+                let mut w = JsonWriter::new();
+                obj.write_json_with_depth(&mut w, op.depth.map(|d| d as usize).unwrap_or(usize::MAX));
+                OmiResponse::ok_json_string(w.into_string())
+            }
+            #[cfg(feature = "lite-json")]
+            Ok(PathTarget::Root(map)) => {
+                use crate::json::serializer::JsonWriter;
+                let mut w = JsonWriter::new();
+                w.begin_object();
+                for (id, obj) in map {
+                    w.key(id);
+                    obj.write_json_with_depth(&mut w, op.depth.map(|d| d as usize).unwrap_or(usize::MAX));
+                }
+                w.end_object();
+                OmiResponse::ok_json_string(w.into_string())
             }
             Err(e) => Self::tree_error_to_response(e),
         }
@@ -1095,6 +1115,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn read_object() {
         let mut e = setup();
@@ -1109,6 +1130,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn read_root() {
         let mut e = setup();
@@ -1122,6 +1144,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn read_with_depth() {
         let mut e = setup();
@@ -1133,6 +1156,52 @@ mod tests {
                 assert!(val.get("items").is_none());
             }
             _ => panic!("expected Single(Json)"),
+        }
+    }
+
+    #[cfg(feature = "lite-json")]
+    #[test]
+    fn read_object_lite() {
+        let mut e = setup();
+        let resp = e.process(read_msg("/Sensor1"), 0.0, None);
+        assert_eq!(status(&resp), 200);
+        match body(&resp).result.as_ref().unwrap() {
+            ResponseResult::Single(ResultPayload::JsonString(s)) => {
+                assert!(s.contains("\"id\""));
+                assert!(s.contains("Sensor1"));
+                assert!(s.contains("Temperature"));
+            }
+            _ => panic!("expected Single(JsonString)"),
+        }
+    }
+
+    #[cfg(feature = "lite-json")]
+    #[test]
+    fn read_root_lite() {
+        let mut e = setup();
+        let resp = e.process(read_msg("/"), 0.0, None);
+        assert_eq!(status(&resp), 200);
+        match body(&resp).result.as_ref().unwrap() {
+            ResponseResult::Single(ResultPayload::JsonString(s)) => {
+                assert!(s.contains("Sensor1"));
+            }
+            _ => panic!("expected Single(JsonString)"),
+        }
+    }
+
+    #[cfg(feature = "lite-json")]
+    #[test]
+    fn read_with_depth_lite() {
+        let mut e = setup();
+        let resp = e.process(read_with("/Sensor1", None, None, None, None, Some(0)), 0.0, None);
+        assert_eq!(status(&resp), 200);
+        match body(&resp).result.as_ref().unwrap() {
+            ResponseResult::Single(ResultPayload::JsonString(s)) => {
+                assert!(s.contains("\"id\""));
+                assert!(s.contains("Sensor1"));
+                assert!(!s.contains("\"items\""));
+            }
+            _ => panic!("expected Single(JsonString)"),
         }
     }
 

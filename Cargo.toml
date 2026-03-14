@@ -22,9 +22,9 @@ debug = true    # Symbols are nice, and they don't increase the size on Flash
 opt-level = "z"
 
 [features]
-default = ["std", "esp", "json", "scripting"]
+default = ["std", "esp", "lite-json", "scripting"]
 std = []
-esp = ["dep:esp-idf-svc", "dep:embedded-svc", "dep:embuild", "json"]
+esp = ["dep:esp-idf-svc", "dep:embedded-svc", "dep:embuild", "lite-json"]
 gpio = ["dep:toml", "dep:serde"]
 json = ["dep:serde", "dep:serde_json"]
 lite-json = []

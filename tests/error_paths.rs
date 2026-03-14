@@ -785,6 +785,7 @@ mod engine_error_responses {
         assert!(batch[1].status >= 400);
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn read_with_depth_zero() {
         let mut e = engine_with_sensor_tree();
@@ -796,6 +797,27 @@ mod engine_error_responses {
         // Depth 0 should return the object without items/objects
         let result = extract_json_result(&resp);
         assert_eq!(result["id"], "System");
+    }
+
+    #[cfg(feature = "lite-json")]
+    #[test]
+    fn read_with_depth_zero_lite() {
+        use reconfigurable_device::omi::response::ResultPayload;
+        let mut e = engine_with_sensor_tree();
+        let resp = parse_and_process(
+            &mut e,
+            r#"{"omi":"1.0","ttl":0,"read":{"path":"/System","depth":0}}"#,
+        );
+        assert_eq!(response_status(&resp), 200);
+        // Depth 0 should return the object without items/objects
+        match extract_single_result(&resp) {
+            ResultPayload::JsonString(s) => {
+                assert!(s.contains("\"id\""));
+                assert!(s.contains("System"));
+                assert!(!s.contains("\"items\""));
+            }
+            _ => panic!("expected Single(JsonString)"),
+        }
     }
 }
 

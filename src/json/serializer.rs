@@ -418,6 +418,10 @@ impl ToJson for ResultPayload {
                     .expect("ResultPayload::Json serialization should not fail");
                 w.raw_json(&s);
             }
+            #[cfg(feature = "lite-json")]
+            ResultPayload::JsonString(s) => {
+                w.raw_json(s);
+            }
         }
     }
 }

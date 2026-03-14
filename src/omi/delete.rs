@@ -1,13 +1,16 @@
+#[cfg(feature = "json")]
 use serde::{Deserialize, Serialize};
 
 use super::error::ParseError;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "json", derive(Serialize, Deserialize))]
 pub struct DeleteOp {
     pub path: String,
 }
 
 impl DeleteOp {
+    #[cfg(feature = "json")]
     pub fn from_value(value: serde_json::Value) -> Result<Self, ParseError> {
         let op: DeleteOp = serde_json::from_value(value)
             .map_err(|e| ParseError::InvalidJson(e.to_string()))?;

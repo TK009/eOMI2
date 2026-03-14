@@ -19,7 +19,7 @@ pub mod device;
 pub mod gpio;
 #[cfg(feature = "std")]
 pub mod odf;
-#[cfg(all(feature = "std", feature = "json"))]
+#[cfg(all(feature = "std", any(feature = "json", feature = "lite-json")))]
 pub mod omi;
 #[cfg(feature = "std")]
 pub mod pages;

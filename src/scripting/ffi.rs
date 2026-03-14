@@ -132,3 +132,223 @@ extern "C" {
     // --- Type checks (additional) ---
     pub fn mjs_is_function(v: mjs_val_t) -> c_int;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mjs_name_macro_length() {
+        let (_, len) = mjs_name!("hello");
+        assert_eq!(len, 5);
+    }
+
+    #[test]
+    fn mjs_name_macro_empty() {
+        let (_, len) = mjs_name!("");
+        assert_eq!(len, 0);
+    }
+
+    #[test]
+    fn mjs_name_macro_nul_terminated() {
+        let (ptr, len) = mjs_name!("test");
+        assert_eq!(len, 4);
+        unsafe {
+            let byte = *(ptr as *const u8).add(len);
+            assert_eq!(byte, 0);
+        }
+    }
+
+    #[test]
+    fn mjs_name_macro_content() {
+        let (ptr, len) = mjs_name!("abc");
+        unsafe {
+            let bytes = std::slice::from_raw_parts(ptr as *const u8, len);
+            assert_eq!(bytes, b"abc");
+        }
+    }
+
+    #[test]
+    fn mjs_create_destroy() {
+        unsafe {
+            let mjs = mjs_create();
+            assert!(!mjs.is_null());
+            mjs_destroy(mjs);
+        }
+    }
+
+    #[test]
+    fn mjs_null_is_null() {
+        unsafe {
+            let val = mjs_mk_null();
+            assert_ne!(mjs_is_null(val), 0);
+            assert_eq!(mjs_is_undefined(val), 0);
+            assert_eq!(mjs_is_number(val), 0);
+        }
+    }
+
+    #[test]
+    fn mjs_undefined_is_undefined() {
+        unsafe {
+            let val = mjs_mk_undefined();
+            assert_ne!(mjs_is_undefined(val), 0);
+            assert_eq!(mjs_is_null(val), 0);
+        }
+    }
+
+    #[test]
+    fn mjs_number_type_checks() {
+        unsafe {
+            let mjs = mjs_create();
+            let val = mjs_mk_number(mjs, 42.0);
+            assert_ne!(mjs_is_number(val), 0);
+            assert_eq!(mjs_is_string(val), 0);
+            assert_eq!(mjs_is_boolean(val), 0);
+            assert_eq!(mjs_is_null(val), 0);
+            assert_eq!(mjs_is_object(val), 0);
+            assert_eq!(mjs_get_double(mjs, val), 42.0);
+            mjs_destroy(mjs);
+        }
+    }
+
+    #[test]
+    fn mjs_boolean_type_checks() {
+        unsafe {
+            let mjs = mjs_create();
+            let val = mjs_mk_boolean(mjs, 1);
+            assert_ne!(mjs_is_boolean(val), 0);
+            assert_eq!(mjs_is_number(val), 0);
+            assert_eq!(mjs_is_string(val), 0);
+            assert_ne!(mjs_get_bool(mjs, val), 0);
+
+            let val_f = mjs_mk_boolean(mjs, 0);
+            assert_eq!(mjs_get_bool(mjs, val_f), 0);
+            mjs_destroy(mjs);
+        }
+    }
+
+    #[test]
+    fn mjs_string_type_checks() {
+        unsafe {
+            let mjs = mjs_create();
+            let s = "test";
+            let val = mjs_mk_string(mjs, s.as_ptr() as *const _, s.len(), 1);
+            assert_ne!(mjs_is_string(val), 0);
+            assert_eq!(mjs_is_number(val), 0);
+            assert_eq!(mjs_is_boolean(val), 0);
+
+            let mut len: usize = 0;
+            let mut v = val;
+            let ptr = mjs_get_string(mjs, &mut v, &mut len);
+            assert!(!ptr.is_null());
+            assert_eq!(len, 4);
+            mjs_destroy(mjs);
+        }
+    }
+
+    #[test]
+    fn mjs_object_type_checks() {
+        unsafe {
+            let mjs = mjs_create();
+            let obj = mjs_mk_object(mjs);
+            assert_ne!(mjs_is_object(obj), 0);
+            assert_eq!(mjs_is_number(obj), 0);
+            assert_eq!(mjs_is_string(obj), 0);
+            mjs_destroy(mjs);
+        }
+    }
+
+    #[test]
+    fn mjs_foreign_type_checks() {
+        unsafe {
+            let mjs = mjs_create();
+            let mut data: u32 = 123;
+            let val = mjs_mk_foreign(mjs, &mut data as *mut u32 as *mut c_void);
+            assert_ne!(mjs_is_foreign(val), 0);
+            assert_eq!(mjs_is_object(val), 0);
+
+            let ptr = mjs_get_ptr(mjs, val);
+            assert_eq!(ptr as *mut u32, &mut data as *mut u32);
+            mjs_destroy(mjs);
+        }
+    }
+
+    #[test]
+    fn mjs_object_set_get_property() {
+        unsafe {
+            let mjs = mjs_create();
+            let obj = mjs_mk_object(mjs);
+            let val = mjs_mk_number(mjs, 7.0);
+
+            let (name, len) = mjs_name!("key");
+            mjs_set(mjs, obj, name, len, val);
+
+            let got = mjs_get(mjs, obj, name, len);
+            assert_ne!(mjs_is_number(got), 0);
+            assert_eq!(mjs_get_double(mjs, got), 7.0);
+            mjs_destroy(mjs);
+        }
+    }
+
+    #[test]
+    fn mjs_array_push_creates_array() {
+        unsafe {
+            let mjs = mjs_create();
+            let arr = mjs_mk_array(mjs);
+            let val = mjs_mk_number(mjs, 1.0);
+            mjs_array_push(mjs, arr, val);
+            assert_ne!(mjs_is_object(arr), 0);
+            mjs_destroy(mjs);
+        }
+    }
+
+    #[test]
+    fn mjs_exec_simple_expression() {
+        unsafe {
+            let mjs = mjs_create();
+            let src = "1 + 2\0";
+            let mut res: mjs_val_t = 0;
+            let err = mjs_exec(mjs, src.as_ptr() as *const _, &mut res);
+            assert_eq!(err, MJS_OK);
+            assert_ne!(mjs_is_number(res), 0);
+            assert_eq!(mjs_get_double(mjs, res), 3.0);
+            mjs_destroy(mjs);
+        }
+    }
+
+    #[test]
+    fn mjs_global_object() {
+        unsafe {
+            let mjs = mjs_create();
+            let global = mjs_get_global(mjs);
+            assert_ne!(mjs_is_object(global), 0);
+            mjs_destroy(mjs);
+        }
+    }
+
+    #[test]
+    fn mjs_foreign_func_creation() {
+        unsafe extern "C" fn dummy(_mjs: *mut mjs) {}
+
+        unsafe {
+            let mjs_inst = mjs_create();
+            let func = mjs_mk_foreign_func(mjs_inst, Some(dummy));
+            assert_ne!(mjs_is_foreign(func), 0);
+            mjs_destroy(mjs_inst);
+        }
+    }
+
+    #[test]
+    fn mjs_op_limit() {
+        unsafe {
+            let mjs = mjs_create();
+            mjs_set_max_ops(mjs, 100);
+            mjs_reset_ops_count(mjs);
+            let src = "while(true){}\0";
+            let mut res: mjs_val_t = 0;
+            let err = mjs_exec(mjs, src.as_ptr() as *const _, &mut res);
+            assert_eq!(err, MJS_OP_LIMIT_ERROR);
+            mjs_destroy(mjs);
+        }
+    }
+}

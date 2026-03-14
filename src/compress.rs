@@ -60,6 +60,23 @@ fn crc32(data: &[u8]) -> u32 {
     !crc
 }
 
+/// Decompress gzip data (RFC 1952) back to the original bytes.
+///
+/// Expects a valid gzip stream: 10-byte header + DEFLATE payload + 8-byte
+/// trailer. Returns `None` if the data is too short or decompression fails.
+pub fn gzip_decompress(data: &[u8]) -> Option<Vec<u8>> {
+    // Minimum: 10 header + 8 trailer = 18
+    if data.len() < 18 {
+        return None;
+    }
+    // Verify gzip magic bytes
+    if data[0] != 0x1f || data[1] != 0x8b {
+        return None;
+    }
+    let deflated = &data[10..data.len() - 8];
+    miniz_oxide::inflate::decompress_to_vec(deflated).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -722,6 +722,9 @@ pub fn start_http_server(
             return Ok(());
         }
         let path = uri_path(req.uri()).to_string();
+        let is_gzip = req.header("content-encoding")
+            .map(|v| v.eq_ignore_ascii_case("gzip"))
+            .unwrap_or(false);
 
         const MAX_PAYLOAD: usize = 64 * 1024;
         let body = match read_body(&mut req, MAX_PAYLOAD) {
@@ -729,17 +732,19 @@ pub fn start_http_server(
             Err(e) => { send_body_error(req, e, "Payload exceeds 64KB limit"); return Ok(()); }
         };
 
-        let html = match String::from_utf8(body) {
-            Ok(s) => s,
-            Err(_) => {
+        // If not pre-compressed, validate UTF-8 (HTML).
+        // If pre-compressed (gzip), store raw bytes directly.
+        if !is_gzip {
+            if core::str::from_utf8(&body).is_err() {
                 send_response(req, 400, "Bad Request", &[], b"Invalid UTF-8");
                 return Ok(());
             }
-        };
+        }
+
         let mut store = lock_or_recover(&s, "page_store");
-        match store.store(&path, &html) {
+        match store.store_bytes(&path, &body, is_gzip) {
             Ok(()) => {
-                info!("PATCH path={} bytes={}", path, html.len());
+                info!("PATCH path={} bytes={} compressed={}", path, body.len(), is_gzip);
                 send_response(req, 200, "OK", &[], b"OK: page stored");
             }
             Err(PageError::ReservedPath) => {
@@ -801,8 +806,31 @@ pub fn start_http_server(
 
         let store = lock_or_recover(&s, "page_store");
         match store.get(&path) {
-            Some(html) => {
-                send_html(req, 200, "OK", html.as_bytes());
+            Some((data, true)) => {
+                // Pre-compressed: check if client accepts gzip
+                let accept = req.header("accept-encoding").unwrap_or("");
+                if accept.contains("gzip") {
+                    let headers = [
+                        ("Content-Type", "text/html"),
+                        ("Content-Encoding", "gzip"),
+                    ];
+                    send_response(req, 200, "OK", &headers, data);
+                } else {
+                    // Client doesn't accept gzip — decompress on the fly
+                    match compress::gzip_decompress(data) {
+                        Some(plain) => {
+                            let headers = [("Content-Type", "text/html")];
+                            send_response(req, 200, "OK", &headers, &plain);
+                        }
+                        None => {
+                            send_response(req, 500, "Internal Server Error", &[], b"Decompression failed");
+                        }
+                    }
+                }
+            }
+            Some((data, false)) => {
+                // Plain HTML — use existing send_html (compresses on the fly if accepted)
+                send_html(req, 200, "OK", data);
             }
             None => {
                 send_response(req, 404, "Not Found", &[], b"Page not found");

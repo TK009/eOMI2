@@ -86,8 +86,11 @@ fn script_reads_written_value() {
     assert_eq!(values[0].v, OmiValue::Number(42.0));
 
     // JSON round-trip
-    let rt = roundtrip_response_json(&resp);
-    assert_eq!(rt["result"]["values"][0]["v"], 42.0);
+    #[cfg(feature = "json")]
+    {
+        let rt = roundtrip_response_json(&resp);
+        assert_eq!(rt["result"]["values"][0]["v"], 42.0);
+    }
 }
 
 // ===========================================================================
@@ -132,8 +135,11 @@ fn script_triggers_cascading_write() {
     assert_eq!(values[0].v, OmiValue::Number(212.0));
 
     // JSON round-trip
-    let rt = roundtrip_response_json(&resp);
-    assert_eq!(rt["result"]["values"][0]["v"], 212.0);
+    #[cfg(feature = "json")]
+    {
+        let rt = roundtrip_response_json(&resp);
+        assert_eq!(rt["result"]["values"][0]["v"], 212.0);
+    }
 }
 
 // ===========================================================================
@@ -170,8 +176,11 @@ fn script_error_does_not_block_write() {
     assert_eq!(values[0].v, OmiValue::Number(7.0));
 
     // JSON round-trip
-    let rt = roundtrip_response_json(&resp);
-    assert_eq!(rt["result"]["values"][0]["v"], 7.0);
+    #[cfg(feature = "json")]
+    {
+        let rt = roundtrip_response_json(&resp);
+        assert_eq!(rt["result"]["values"][0]["v"], 7.0);
+    }
 }
 
 // ===========================================================================

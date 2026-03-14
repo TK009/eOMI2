@@ -1,4 +1,4 @@
-#[cfg(feature = "json")]
+#[cfg(any(feature = "json", feature = "lite-json"))]
 pub mod engine;
 pub mod error;
 pub mod read;
@@ -6,10 +6,10 @@ pub mod write;
 pub mod delete;
 pub mod cancel;
 pub mod response;
-#[cfg(feature = "json")]
+#[cfg(any(feature = "json", feature = "lite-json"))]
 pub mod subscriptions;
 
-#[cfg(feature = "json")]
+#[cfg(any(feature = "json", feature = "lite-json"))]
 pub use self::engine::Engine;
 
 #[cfg(feature = "json")]
@@ -25,7 +25,7 @@ use self::cancel::CancelOp;
 use self::response::ResponseBody;
 pub use self::write::WriteItem;
 pub use self::response::{StatusCode, ResponseResult, ResultPayload, ItemStatus, OmiResponse};
-#[cfg(feature = "json")]
+#[cfg(any(feature = "json", feature = "lite-json"))]
 pub use self::subscriptions::{Delivery, SessionId};
 
 #[derive(Debug, Clone, PartialEq)]

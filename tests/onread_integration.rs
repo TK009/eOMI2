@@ -1377,8 +1377,11 @@ fn json_roundtrip_with_onread() {
     assert_eq!(response_status(&resp), 200);
 
     // JSON round-trip should preserve the transformed value
-    let rt = roundtrip_response_json(&resp);
-    assert_eq!(rt["result"]["values"][0]["v"], 50.0);
+    #[cfg(feature = "json")]
+    {
+        let rt = roundtrip_response_json(&resp);
+        assert_eq!(rt["result"]["values"][0]["v"], 50.0);
+    }
 }
 
 #[test]

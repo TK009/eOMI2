@@ -40,7 +40,7 @@ pub mod log_util;
 pub mod nvs;
 #[cfg(any(feature = "json", feature = "lite-json"))]
 pub mod json;
-#[cfg(feature = "json")]
+#[cfg(any(feature = "json", feature = "lite-json"))]
 pub mod wifi_cfg;
 pub mod mem_stats;
 pub mod wifi_sm;

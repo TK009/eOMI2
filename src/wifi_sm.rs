@@ -202,19 +202,24 @@ impl WifiSm {
         WifiAction::StopPortal
     }
 
+    /// Current backoff delay in ms (for the current rotation count).
+    pub fn backoff_ms(&self) -> u64 {
+        self.backoff_ms_for(self.rotation)
+    }
+
     fn start_backoff_or_portal(&mut self) -> WifiAction {
         self.rotation += 1;
         if self.rotation >= self.config.max_rotations {
             self.state = WifiState::Portal;
             WifiAction::StartPortal
         } else {
-            let backoff_ms = self.backoff_ms(self.rotation);
+            let ms = self.backoff_ms_for(self.rotation);
             self.state = WifiState::Backoff;
-            WifiAction::WaitBackoff { ms: backoff_ms }
+            WifiAction::WaitBackoff { ms }
         }
     }
 
-    fn backoff_ms(&self, rotation: u32) -> u64 {
+    fn backoff_ms_for(&self, rotation: u32) -> u64 {
         let ms = self
             .config
             .initial_backoff_ms
@@ -369,11 +374,11 @@ mod tests {
     #[test]
     fn backoff_increases_exponentially() {
         let sm = WifiSm::new(1, test_config());
-        assert_eq!(sm.backoff_ms(0), 100);
-        assert_eq!(sm.backoff_ms(1), 200);
-        assert_eq!(sm.backoff_ms(2), 400);
+        assert_eq!(sm.backoff_ms_for(0), 100);
+        assert_eq!(sm.backoff_ms_for(1), 200);
+        assert_eq!(sm.backoff_ms_for(2), 400);
         // Capped at max
-        assert_eq!(sm.backoff_ms(10), 5000);
+        assert_eq!(sm.backoff_ms_for(10), 5000);
     }
 
     #[test]
@@ -384,8 +389,8 @@ mod tests {
             max_backoff_ms: 30_000,
         };
         let sm = WifiSm::new(1, config);
-        assert_eq!(sm.backoff_ms(0), 1000);
-        assert_eq!(sm.backoff_ms(5), 30_000); // 1000 * 32 = 32000, capped to 30000
+        assert_eq!(sm.backoff_ms_for(0), 1000);
+        assert_eq!(sm.backoff_ms_for(5), 30_000); // 1000 * 32 = 32000, capped to 30000
     }
 
     #[test]

@@ -653,6 +653,10 @@ fn handle_provision(
         warn!("Provisioning: failed to persist WiFi config to NVS");
     }
 
+    // Update portal form config so re-renders show the new SSIDs/hostname (SC-004)
+    let saved_ssids: Vec<String> = creds.iter().map(|(s, _)| s.clone()).collect();
+    portal.update_form_config(saved_ssids, wifi_cfg.hostname.clone());
+
     // Notify state machine of new credentials
     let action = wifi_sm.credentials_updated(creds.len(), start_index);
 
@@ -743,8 +747,9 @@ fn drive_initial_connect(
                 sm.handle_event(event);
             }
             WifiState::Backoff => {
-                info!("WiFi backoff: waiting before next rotation");
-                std::thread::sleep(std::time::Duration::from_millis(2000));
+                let ms = sm.backoff_ms();
+                info!("WiFi backoff: {}ms before next rotation", ms);
+                std::thread::sleep(std::time::Duration::from_millis(ms));
                 sm.handle_event(WifiEvent::BackoffComplete);
             }
         }

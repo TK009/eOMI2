@@ -594,7 +594,7 @@ pub fn write_item_status(w: &mut JsonWriter, path: &str, status: u16, desc: Opti
 
 // ----- Tests -----
 
-#[cfg(test)]
+#[cfg(all(test, feature = "json"))]
 mod tests {
     use super::*;
 

@@ -53,7 +53,6 @@ serde = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
 object = { version = "0.36", default-features = false, features = ["read", "elf"] }
-serde_json = "1"
 
 [[package.metadata.esp-idf-sys.extra_components]]
 remote_component = { name = "espressif/mdns", version = "1.4" }

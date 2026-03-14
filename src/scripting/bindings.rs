@@ -1392,6 +1392,411 @@ mod tests {
         }
     }
 
+    // ── execute_nested_onread ──
+
+    #[test]
+    fn nested_onread_no_script_returns_none() {
+        unsafe {
+            with_mjs(|mjs| {
+                // Item WITHOUT onread script
+                let mut item = InfoItem::new(10);
+                item.add_value(OmiValue::Number(1.0), None);
+
+                let mut writes = Vec::new();
+                let tree = ObjectTree::new();
+                let onread_fns: std::collections::BTreeMap<String, ffi::mjs_val_t> =
+                    std::collections::BTreeMap::new();
+                let ctx = ScriptCallbackCtx {
+                    pending_writes: &mut writes,
+                    depth: 0,
+                    tree: &tree,
+                    onread_path_ptr: std::ptr::null(),
+                    onread_path_len: 0,
+                    onread_fns: &onread_fns,
+                };
+
+                let result = execute_nested_onread(mjs, &item, "/Dev/Temp", &ctx);
+                assert!(result.is_none());
+            });
+        }
+    }
+
+    #[test]
+    fn nested_onread_depth_exceeded_returns_none() {
+        unsafe {
+            with_mjs(|mjs| {
+                let mut item = InfoItem::new(10);
+                item.add_value(OmiValue::Number(1.0), None);
+                let mut meta = std::collections::BTreeMap::new();
+                meta.insert("onread".into(), OmiValue::Str("event.value".into()));
+                item.meta = Some(meta);
+
+                let mut writes = Vec::new();
+                let tree = ObjectTree::new();
+                let onread_fns: std::collections::BTreeMap<String, ffi::mjs_val_t> =
+                    std::collections::BTreeMap::new();
+                let ctx = ScriptCallbackCtx {
+                    pending_writes: &mut writes,
+                    depth: MAX_SCRIPT_DEPTH - 1, // new_depth == MAX_SCRIPT_DEPTH → blocked
+                    tree: &tree,
+                    onread_path_ptr: std::ptr::null(),
+                    onread_path_len: 0,
+                    onread_fns: &onread_fns,
+                };
+
+                let result = execute_nested_onread(mjs, &item, "/Dev/Temp", &ctx);
+                assert!(result.is_none());
+            });
+        }
+    }
+
+    #[test]
+    fn nested_onread_null_fns_returns_none() {
+        unsafe {
+            with_mjs(|mjs| {
+                let mut item = InfoItem::new(10);
+                item.add_value(OmiValue::Number(1.0), None);
+                let mut meta = std::collections::BTreeMap::new();
+                meta.insert("onread".into(), OmiValue::Str("event.value".into()));
+                item.meta = Some(meta);
+
+                let mut writes = Vec::new();
+                let tree = ObjectTree::new();
+                let ctx = ScriptCallbackCtx {
+                    pending_writes: &mut writes,
+                    depth: 0,
+                    tree: &tree,
+                    onread_path_ptr: std::ptr::null(),
+                    onread_path_len: 0,
+                    onread_fns: std::ptr::null(), // null onread_fns
+                };
+
+                let result = execute_nested_onread(mjs, &item, "/Dev/Temp", &ctx);
+                assert!(result.is_none());
+            });
+        }
+    }
+
+    #[test]
+    fn nested_onread_missing_func_in_map_returns_none() {
+        unsafe {
+            with_mjs(|mjs| {
+                let mut item = InfoItem::new(10);
+                item.add_value(OmiValue::Number(1.0), None);
+                let mut meta = std::collections::BTreeMap::new();
+                meta.insert("onread".into(), OmiValue::Str("event.value".into()));
+                item.meta = Some(meta);
+
+                let mut writes = Vec::new();
+                let tree = ObjectTree::new();
+                // Map exists but doesn't contain the path
+                let onread_fns: std::collections::BTreeMap<String, ffi::mjs_val_t> =
+                    std::collections::BTreeMap::new();
+                let ctx = ScriptCallbackCtx {
+                    pending_writes: &mut writes,
+                    depth: 0,
+                    tree: &tree,
+                    onread_path_ptr: std::ptr::null(),
+                    onread_path_len: 0,
+                    onread_fns: &onread_fns,
+                };
+
+                let result = execute_nested_onread(mjs, &item, "/Dev/Temp", &ctx);
+                assert!(result.is_none());
+            });
+        }
+    }
+
+    #[test]
+    fn nested_onread_non_function_value_returns_none() {
+        unsafe {
+            with_mjs(|mjs| {
+                let mut item = InfoItem::new(10);
+                item.add_value(OmiValue::Number(1.0), None);
+                let mut meta = std::collections::BTreeMap::new();
+                meta.insert("onread".into(), OmiValue::Str("event.value".into()));
+                item.meta = Some(meta);
+
+                let mut writes = Vec::new();
+                let tree = ObjectTree::new();
+                // Map contains the path but value is not a function
+                let mut onread_fns: std::collections::BTreeMap<String, ffi::mjs_val_t> =
+                    std::collections::BTreeMap::new();
+                let not_a_func = ffi::mjs_mk_number(mjs, 42.0);
+                onread_fns.insert("/Dev/Temp".into(), not_a_func);
+                let ctx = ScriptCallbackCtx {
+                    pending_writes: &mut writes,
+                    depth: 0,
+                    tree: &tree,
+                    onread_path_ptr: std::ptr::null(),
+                    onread_path_len: 0,
+                    onread_fns: &onread_fns,
+                };
+
+                let result = execute_nested_onread(mjs, &item, "/Dev/Temp", &ctx);
+                assert!(result.is_none());
+            });
+        }
+    }
+
+    #[test]
+    fn nested_onread_executes_precompiled_function() {
+        unsafe {
+            with_mjs(|mjs| {
+                // Build a tree and item with onread script
+                let mut tree = ObjectTree::new();
+                let mut obj = Object::new("Dev");
+                let mut item = InfoItem::new(10);
+                item.add_value(OmiValue::Number(5.0), Some(100.0));
+                let mut meta = std::collections::BTreeMap::new();
+                meta.insert("onread".into(), OmiValue::Str("event.value * 10".into()));
+                item.meta = Some(meta);
+                obj.add_item("Temp".into(), item);
+                tree.insert_root(obj);
+
+                // Pre-compile the function
+                let script_src = "(function(){ return event.value * 10; })\0";
+                let mut func_val: ffi::mjs_val_t = 0;
+                let err = ffi::mjs_exec(mjs, script_src.as_ptr() as *const _, &mut func_val);
+                assert_eq!(err, ffi::MJS_OK);
+                assert_ne!(ffi::mjs_is_function(func_val), 0);
+
+                let mut onread_fns: std::collections::BTreeMap<String, ffi::mjs_val_t> =
+                    std::collections::BTreeMap::new();
+                onread_fns.insert("/Dev/Temp".into(), func_val);
+
+                let mut writes = Vec::new();
+                let mut ctx = ScriptCallbackCtx {
+                    pending_writes: &mut writes,
+                    depth: 0,
+                    tree: &tree,
+                    onread_path_ptr: std::ptr::null(),
+                    onread_path_len: 0,
+                    onread_fns: &onread_fns,
+                };
+
+                // Set up globals needed by nested execution
+                let global = ffi::mjs_get_global(mjs);
+                let ctx_foreign = ffi::mjs_mk_foreign(
+                    mjs,
+                    &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void,
+                );
+                let (n, l) = ffi::mjs_name!("__ctx");
+                ffi::mjs_set(mjs, global, n, l, ctx_foreign);
+                let odf = ffi::mjs_mk_object(mjs);
+                let read_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_read_item));
+                let (n, l) = ffi::mjs_name!("readItem");
+                ffi::mjs_set(mjs, odf, n, l, read_fn);
+                let (n, l) = ffi::mjs_name!("odf");
+                ffi::mjs_set(mjs, global, n, l, odf);
+                let event = ffi::mjs_mk_object(mjs);
+                let (n, l) = ffi::mjs_name!("event");
+                ffi::mjs_set(mjs, global, n, l, event);
+
+                if let Ok(PathTarget::InfoItem(item)) = tree.resolve("/Dev/Temp") {
+                    let result = execute_nested_onread(mjs, item, "/Dev/Temp", &ctx);
+                    assert!(result.is_some(), "expected Some from nested onread");
+                    let val = result.unwrap();
+                    assert_ne!(ffi::mjs_is_number(val), 0);
+                    assert_eq!(ffi::mjs_get_double(mjs, val), 50.0); // 5.0 * 10
+                } else {
+                    panic!("expected InfoItem at /Dev/Temp");
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn nested_onread_restores_globals() {
+        unsafe {
+            with_mjs(|mjs| {
+                let mut tree = ObjectTree::new();
+                let mut obj = Object::new("Dev");
+                let mut item = InfoItem::new(10);
+                item.add_value(OmiValue::Number(3.0), None);
+                let mut meta = std::collections::BTreeMap::new();
+                meta.insert("onread".into(), OmiValue::Str("event.value + 1".into()));
+                item.meta = Some(meta);
+                obj.add_item("Temp".into(), item);
+                tree.insert_root(obj);
+
+                let script_src = "(function(){ return event.value + 1; })\0";
+                let mut func_val: ffi::mjs_val_t = 0;
+                ffi::mjs_exec(mjs, script_src.as_ptr() as *const _, &mut func_val);
+                let mut onread_fns: std::collections::BTreeMap<String, ffi::mjs_val_t> =
+                    std::collections::BTreeMap::new();
+                onread_fns.insert("/Dev/Temp".into(), func_val);
+
+                let mut writes = Vec::new();
+                let mut ctx = ScriptCallbackCtx {
+                    pending_writes: &mut writes,
+                    depth: 0,
+                    tree: &tree,
+                    onread_path_ptr: std::ptr::null(),
+                    onread_path_len: 0,
+                    onread_fns: &onread_fns,
+                };
+
+                // Set up initial globals — save the raw event val for comparison
+                let global = ffi::mjs_get_global(mjs);
+                let original_event = ffi::mjs_mk_object(mjs);
+                let (n, l) = ffi::mjs_name!("event");
+                ffi::mjs_set(mjs, global, n, l, original_event);
+
+                let ctx_foreign = ffi::mjs_mk_foreign(
+                    mjs,
+                    &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void,
+                );
+                let (n, l) = ffi::mjs_name!("__ctx");
+                ffi::mjs_set(mjs, global, n, l, ctx_foreign);
+
+                let original_odf = ffi::mjs_mk_object(mjs);
+                let read_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_read_item));
+                let (n, l) = ffi::mjs_name!("readItem");
+                ffi::mjs_set(mjs, original_odf, n, l, read_fn);
+                let (n, l) = ffi::mjs_name!("odf");
+                ffi::mjs_set(mjs, global, n, l, original_odf);
+
+                // Execute nested onread
+                if let Ok(PathTarget::InfoItem(item)) = tree.resolve("/Dev/Temp") {
+                    execute_nested_onread(mjs, item, "/Dev/Temp", &ctx);
+                }
+
+                // Verify event global was restored to the original object (same mjs_val_t)
+                let (n, l) = ffi::mjs_name!("event");
+                let restored_event = ffi::mjs_get(mjs, global, n, l);
+                assert_eq!(restored_event, original_event, "event global should be restored");
+
+                // Verify odf global was restored
+                let (n, l) = ffi::mjs_name!("odf");
+                let restored_odf = ffi::mjs_get(mjs, global, n, l);
+                assert_eq!(restored_odf, original_odf, "odf global should be restored");
+            });
+        }
+    }
+
+    #[test]
+    fn nested_onread_null_result_returns_none() {
+        unsafe {
+            with_mjs(|mjs| {
+                let mut tree = ObjectTree::new();
+                let mut obj = Object::new("Dev");
+                let mut item = InfoItem::new(10);
+                item.add_value(OmiValue::Number(1.0), None);
+                let mut meta = std::collections::BTreeMap::new();
+                meta.insert("onread".into(), OmiValue::Str("null".into()));
+                item.meta = Some(meta);
+                obj.add_item("Temp".into(), item);
+                tree.insert_root(obj);
+
+                // Function returns null
+                let script_src = "(function(){ return null; })\0";
+                let mut func_val: ffi::mjs_val_t = 0;
+                ffi::mjs_exec(mjs, script_src.as_ptr() as *const _, &mut func_val);
+                let mut onread_fns: std::collections::BTreeMap<String, ffi::mjs_val_t> =
+                    std::collections::BTreeMap::new();
+                onread_fns.insert("/Dev/Temp".into(), func_val);
+
+                let mut writes = Vec::new();
+                let mut ctx = ScriptCallbackCtx {
+                    pending_writes: &mut writes,
+                    depth: 0,
+                    tree: &tree,
+                    onread_path_ptr: std::ptr::null(),
+                    onread_path_len: 0,
+                    onread_fns: &onread_fns,
+                };
+
+                let global = ffi::mjs_get_global(mjs);
+                let ctx_foreign = ffi::mjs_mk_foreign(
+                    mjs,
+                    &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void,
+                );
+                let (n, l) = ffi::mjs_name!("__ctx");
+                ffi::mjs_set(mjs, global, n, l, ctx_foreign);
+                let odf = ffi::mjs_mk_object(mjs);
+                let (n, l) = ffi::mjs_name!("odf");
+                ffi::mjs_set(mjs, global, n, l, odf);
+                let event = ffi::mjs_mk_object(mjs);
+                let (n, l) = ffi::mjs_name!("event");
+                ffi::mjs_set(mjs, global, n, l, event);
+
+                if let Ok(PathTarget::InfoItem(item)) = tree.resolve("/Dev/Temp") {
+                    let result = execute_nested_onread(mjs, item, "/Dev/Temp", &ctx);
+                    assert!(result.is_none(), "null return should yield None");
+                }
+            });
+        }
+    }
+
+    // ── readItem with onread via js_odf_read_item callback ──
+
+    #[test]
+    fn read_item_triggers_onread_script() {
+        unsafe {
+            let mjs = ffi::mjs_create();
+            assert!(!mjs.is_null());
+            ffi::mjs_set_max_ops(mjs, 50_000);
+
+            // Build tree: /Dev/Sensor with onread script and value
+            let mut tree = ObjectTree::new();
+            let mut obj = Object::new("Dev");
+            let mut item = InfoItem::new(10);
+            item.add_value(OmiValue::Number(7.0), Some(100.0));
+            let mut meta = std::collections::BTreeMap::new();
+            meta.insert("onread".into(), OmiValue::Str("event.value * 2".into()));
+            item.meta = Some(meta);
+            obj.add_item("Sensor".into(), item);
+            tree.insert_root(obj);
+
+            // Pre-compile onread function
+            let script_src = "(function(){ return event.value * 2; })\0";
+            let mut func_val: ffi::mjs_val_t = 0;
+            let err = ffi::mjs_exec(mjs, script_src.as_ptr() as *const _, &mut func_val);
+            assert_eq!(err, ffi::MJS_OK);
+
+            let mut onread_fns: std::collections::BTreeMap<String, ffi::mjs_val_t> =
+                std::collections::BTreeMap::new();
+            onread_fns.insert("/Dev/Sensor".into(), func_val);
+
+            let mut writes = Vec::new();
+            let mut ctx = ScriptCallbackCtx {
+                pending_writes: &mut writes,
+                depth: 0,
+                tree: &tree,
+                onread_path_ptr: std::ptr::null(),
+                onread_path_len: 0,
+                onread_fns: &onread_fns,
+            };
+
+            let global = ffi::mjs_get_global(mjs);
+            let ctx_foreign = ffi::mjs_mk_foreign(
+                mjs,
+                &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void,
+            );
+            let (n, l) = ffi::mjs_name!("__ctx");
+            ffi::mjs_set(mjs, global, n, l, ctx_foreign);
+
+            let odf = ffi::mjs_mk_object(mjs);
+            let read_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_read_item));
+            let (n, l) = ffi::mjs_name!("readItem");
+            ffi::mjs_set(mjs, odf, n, l, read_fn);
+            let (n, l) = ffi::mjs_name!("odf");
+            ffi::mjs_set(mjs, global, n, l, odf);
+
+            // Read with /value suffix — should trigger onread and return transformed value
+            let c_src = std::ffi::CString::new("odf.readItem('/Dev/Sensor/value')").unwrap();
+            let mut res: ffi::mjs_val_t = 0;
+            ffi::mjs_reset_ops_count(mjs);
+            let err = ffi::mjs_exec(mjs, c_src.as_ptr(), &mut res);
+            assert_eq!(err, ffi::MJS_OK);
+            assert_ne!(ffi::mjs_is_number(res), 0);
+            assert_eq!(ffi::mjs_get_double(mjs, res), 14.0); // 7.0 * 2
+
+            ffi::mjs_destroy(mjs);
+        }
+    }
+
     // ── MAX_SCRIPT_DEPTH constant ──
 
     #[test]

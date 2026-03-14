@@ -104,7 +104,7 @@ fn main() -> Result<()> {
     }
 
     info!("WiFi credentials: {} available", creds.len());
-    let hostname = wifi_cfg.hostname.clone();
+    let mut hostname = wifi_cfg.hostname.clone();
 
     // Resolve API token: use build-time value if set, otherwise empty placeholder
     // so the device can boot into captive portal for first-time provisioning.
@@ -377,7 +377,7 @@ fn main() -> Result<()> {
                 &mut wifi,
                 &mut wifi_sm,
                 &mut creds,
-                &hostname,
+                &mut hostname,
                 &mut ap_active,
                 &mut dns_server,
                 &portal,
@@ -595,7 +595,7 @@ fn handle_provision(
     wifi: &mut BlockingWifi<EspWifi<'static>>,
     wifi_sm: &mut WifiSm,
     creds: &mut Vec<(String, String)>,
-    ap_hostname: &str,
+    hostname: &mut String,
     ap_active: &mut bool,
     dns_server: &mut Option<DnsServer>,
     portal: &Arc<PortalState>,
@@ -603,6 +603,11 @@ fn handle_provision(
     wifi_cfg: &mut wifi_cfg::WifiConfig,
 ) {
     let form = &provision.form;
+
+    // Propagate new hostname from form to the live hostname variable
+    if let Some(ref new_hostname) = form.hostname {
+        *hostname = new_hostname.clone();
+    }
 
     // Hash and store the API key (FR-005)
     use reconfigurable_device::captive_portal::ApiKeyAction;
@@ -641,16 +646,16 @@ fn handle_provision(
 
     info!("Provisioning: {} total credentials after update", creds.len());
 
-    // Persist updated config (credentials + API key hash) to NVS (FR-005, FR-013, SC-004, SC-007)
+    // Persist updated config (credentials + hostname + API key hash) to NVS (FR-005, FR-013, SC-004, SC-007)
     wifi_cfg.ssids = creds.clone();
-    wifi_cfg.hostname = ap_hostname.to_string();
+    wifi_cfg.hostname = hostname.clone();
     if !wifi_cfg::save_wifi_config(wifi_nvs, wifi_cfg) {
         warn!("Provisioning: failed to persist WiFi config to NVS");
     }
 
     // Update portal form config so re-renders show the new SSIDs/hostname (SC-004)
     let saved_ssids: Vec<String> = creds.iter().map(|(s, _)| s.clone()).collect();
-    portal.update_form_config(saved_ssids, wifi_cfg.hostname.clone());
+    portal.update_form_config(saved_ssids, hostname.clone());
 
     // Notify state machine of new credentials
     let action = wifi_sm.credentials_updated(creds.len(), start_index);
@@ -661,7 +666,7 @@ fn handle_provision(
             if ssid_index < creds.len() {
                 let (ssid, pass) = &creds[ssid_index];
                 info!("Provisioning: attempting connection to {}", ssid);
-                match wifi_ap::try_connect_sta(wifi, ssid, pass, ap_hostname) {
+                match wifi_ap::try_connect_sta(wifi, ssid, pass, hostname) {
                     Ok(()) => {
                         info!("Provisioning: connected to {}", ssid);
                         wifi_sm.handle_event(WifiEvent::ConnectSuccess);

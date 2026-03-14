@@ -264,6 +264,11 @@ impl Engine {
     // --- Write ---
 
     /// Notify event subscribers after a successful write to `path`.
+    ///
+    /// FR-002: Event-based subscriptions deliver the raw written value as-is.
+    /// Onread scripts are intentionally NOT executed here — event delivery is a
+    /// write notification, not a read. Onread only runs in `process_read_one_time`,
+    /// `tick` (interval subscriptions), and `odf.readItem()` callbacks.
     fn notify_write_event(&mut self, path: &str, now: f64) -> Vec<Delivery> {
         match self.tree.resolve(path) {
             Ok(PathTarget::InfoItem(item)) => {
@@ -721,18 +726,24 @@ impl Engine {
         // FR-007: Pre-compile all onread scripts as functions before execution.
         // This avoids re-entrant mjs_exec from within readItem callbacks,
         // which would corrupt the bytecode buffer.
+        //
+        // Optimisation: only walk the tree and compile if the script actually
+        // calls odf.readItem — simple transforms like "event.value * 0.01"
+        // never need nested onread functions.
         let mut onread_fns = std::collections::BTreeMap::new();
-        unsafe {
-            for (item_path, script) in self.tree.collect_onread_scripts() {
-                if item_path == path {
-                    continue; // Skip self — handled by self-read guard
-                }
-                let func_src = format!("(function() {{ return {}; }})", script);
-                if let Ok(c_src) = std::ffi::CString::new(func_src.as_str()) {
-                    let mut func_val: ffi::mjs_val_t = 0;
-                    let err = ffi::mjs_exec(mjs, c_src.as_ptr(), &mut func_val);
-                    if err == ffi::MJS_OK && ffi::mjs_is_function(func_val) != 0 {
-                        onread_fns.insert(item_path, func_val);
+        if script_src.contains("readItem") {
+            unsafe {
+                for (item_path, script) in self.tree.collect_onread_scripts() {
+                    if item_path == path {
+                        continue; // Skip self — handled by self-read guard
+                    }
+                    let func_src = format!("(function() {{ return {}; }})", script);
+                    if let Ok(c_src) = std::ffi::CString::new(func_src.as_str()) {
+                        let mut func_val: ffi::mjs_val_t = 0;
+                        let err = ffi::mjs_exec(mjs, c_src.as_ptr(), &mut func_val);
+                        if err == ffi::MJS_OK && ffi::mjs_is_function(func_val) != 0 {
+                            onread_fns.insert(item_path, func_val);
+                        }
                     }
                 }
             }

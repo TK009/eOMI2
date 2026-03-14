@@ -384,6 +384,17 @@ fn main() -> Result<()> {
                 &mut wifi_nvs,
                 &mut wifi_cfg,
             );
+            // Restart mDNS with updated hostname if connected
+            if let Some(resp) = mdns_responder.take() {
+                drop(resp);
+                match MdnsResponder::start(MdnsConfig::new(&hostname)) {
+                    Ok(resp) => {
+                        info!("mDNS responder restarted for {}.local", hostname);
+                        mdns_responder = Some(resp);
+                    }
+                    Err(e) => warn!("Failed to restart mDNS responder: {}", e),
+                }
+            }
         }
 
         // Check backoff timer completion

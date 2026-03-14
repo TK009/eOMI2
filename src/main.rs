@@ -106,12 +106,16 @@ fn main() -> Result<()> {
     info!("WiFi credentials: {} available", creds.len());
     let hostname = wifi_cfg.hostname.clone();
 
-    // Resolve API token
-    let api_token: &'static str = if let Some(t) = API_TOKEN {
-        t
-    } else {
-        // Leak a placeholder — the captive portal flow will handle runtime tokens
-        anyhow::bail!("No API_TOKEN: set at build time or provision via captive portal");
+    // Resolve API token: use build-time value if set, otherwise empty placeholder
+    // so the device can boot into captive portal for first-time provisioning.
+    // With an empty token, check_bearer_auth denies all mutating API requests
+    // until a proper token is configured and the device reboots.
+    let api_token: &'static str = match API_TOKEN {
+        Some(t) => t,
+        None => {
+            warn!("No API_TOKEN set at build time — API auth disabled until provisioned");
+            ""
+        }
     };
 
     // Initialize Wi-Fi driver (modem returned from board init)

@@ -84,6 +84,7 @@ fn object_nesting_depth(value: &serde_json::Value) -> usize {
 
 #[cfg(feature = "json")]
 impl WriteOp {
+    #[cfg(feature = "json")]
     pub fn from_value(value: serde_json::Value) -> Result<Self, ParseError> {
         // Guard against deeply nested object trees that would overflow the stack
         // during recursive serde deserialization.

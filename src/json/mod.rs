@@ -10,3 +10,4 @@ pub mod serializer;
 
 pub use parser::{JsonParser, FromJson};
 pub use serializer::{JsonWriter, ToJson};
+pub use parser::parse_omi_message;

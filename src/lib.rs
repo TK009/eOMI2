@@ -37,7 +37,7 @@ pub mod sync_util;
 pub mod log_util;
 #[cfg(feature = "esp")]
 pub mod nvs;
-#[cfg(feature = "lite-json")]
+#[cfg(any(feature = "json", feature = "lite-json"))]
 pub mod json;
 #[cfg(feature = "json")]
 pub mod wifi_cfg;

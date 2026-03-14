@@ -8,4 +8,5 @@ pub mod lexer;
 pub mod parser;
 pub mod serializer;
 
+pub use parser::{JsonParser, FromJson};
 pub use serializer::{JsonWriter, ToJson};

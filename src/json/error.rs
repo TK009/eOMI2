@@ -42,6 +42,12 @@ pub enum LiteParseError {
     InvalidLiteral { pos: Pos },
     /// Expected a specific token but found something else.
     ExpectedToken { expected: &'static str, pos: Pos },
+    /// A required field was missing from a JSON object.
+    MissingField { field: &'static str, pos: Pos },
+    /// Object/array nesting exceeds the configured limit.
+    DepthExceeded { max: usize, pos: Pos },
+    /// Valid JSON followed by unexpected trailing data.
+    TrailingData { pos: Pos },
 }
 
 impl LiteParseError {
@@ -56,7 +62,10 @@ impl LiteParseError {
             | Self::UnterminatedString { pos }
             | Self::InvalidNumber { pos }
             | Self::InvalidLiteral { pos }
-            | Self::ExpectedToken { pos, .. } => *pos,
+            | Self::ExpectedToken { pos, .. }
+            | Self::MissingField { pos, .. }
+            | Self::DepthExceeded { pos, .. }
+            | Self::TrailingData { pos } => *pos,
         }
     }
 }
@@ -82,6 +91,15 @@ impl fmt::Display for LiteParseError {
             Self::InvalidLiteral { pos } => write!(f, "invalid literal at {}", pos),
             Self::ExpectedToken { expected, pos } => {
                 write!(f, "expected {} at {}", expected, pos)
+            }
+            Self::MissingField { field, pos } => {
+                write!(f, "missing required field '{}' at {}", field, pos)
+            }
+            Self::DepthExceeded { max, pos } => {
+                write!(f, "nesting depth exceeds maximum of {} at {}", max, pos)
+            }
+            Self::TrailingData { pos } => {
+                write!(f, "trailing data at {}", pos)
             }
         }
     }
@@ -177,6 +195,9 @@ mod tests {
             LiteParseError::InvalidNumber { pos: Pos::new(0) },
             LiteParseError::InvalidLiteral { pos: Pos::new(0) },
             LiteParseError::ExpectedToken { expected: "test", pos: Pos::new(0) },
+            LiteParseError::MissingField { field: "id", pos: Pos::new(0) },
+            LiteParseError::DepthExceeded { max: 32, pos: Pos::new(0) },
+            LiteParseError::TrailingData { pos: Pos::new(0) },
         ];
         for v in &variants {
             let msg = v.to_string();

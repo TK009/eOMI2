@@ -74,6 +74,18 @@ pub fn scan_results_json(networks: &[ScannedNetwork]) -> Result<String, serde_js
     serde_json::to_string(networks)
 }
 
+/// Serialize scan results to JSON using lite-json (no serde dependency).
+pub fn scan_results_json_lite(networks: &[ScannedNetwork]) -> String {
+    use crate::json::serializer::{JsonWriter, ToJson};
+    let mut w = JsonWriter::new();
+    w.begin_array();
+    for net in networks {
+        net.write_json(&mut w);
+    }
+    w.end_array();
+    w.into_string()
+}
+
 // ---------------------------------------------------------------------------
 // Connection status (GET /status)
 // ---------------------------------------------------------------------------
@@ -103,6 +115,12 @@ pub enum ConnectionState {
 #[cfg(feature = "json")]
 pub fn connection_status_json(status: &ConnectionStatus) -> Result<String, serde_json::Error> {
     serde_json::to_string(status)
+}
+
+/// Serialize connection status to JSON using lite-json (no serde dependency).
+pub fn connection_status_json_lite(status: &ConnectionStatus) -> String {
+    use crate::json::serializer::ToJson;
+    status.to_json_string()
 }
 
 // ---------------------------------------------------------------------------

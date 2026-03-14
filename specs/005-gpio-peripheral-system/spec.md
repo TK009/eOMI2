@@ -69,7 +69,7 @@ A firmware deployer enables a peripheral protocol (e.g., I2C, SPI, UART) via bui
 3. **Given** UART is enabled on GPIO16 (RX) and GPIO17 (TX), **When** data is received, **Then** the RX InfoItem value is updated with the received data.
 4. **Given** UART TX InfoItem, **When** a client writes data with `type: "hex"` set to `"48656C6C6F"`, **Then** the raw bytes for "Hello" are transmitted on the physical UART TX pin.
 5. **Given** UART TX InfoItem, **When** a client writes data with `type: "string"` (or no type), **Then** the string value is transmitted as UTF-8 bytes.
-6. **Given** UART TX InfoItem, **When** a script calls `odf.writeItem("/DeviceName/GPIO16_UART_TX", "AQID", {type: "base64"})`, **Then** the decoded bytes are transmitted.
+6. **Given** UART TX InfoItem, **When** a script calls `odf.writeItem("AQID", "/DeviceName/GPIO16_UART_TX", {type: "base64"})`, **Then** the decoded bytes are transmitted.
 7. **Given** SPI is enabled on designated pins, **When** the firmware boots, **Then** appropriate RX/TX InfoItems are created with "SPI" in their names and mode metadata.
 
 ---
@@ -115,7 +115,7 @@ A client or script discovers all available GPIOs and peripherals by reading the 
 - **FR-008**: System MUST support enabling peripheral protocols (I2C, SPI, UART) via build flags, specifying the GPIO pins to use.
 - **FR-009**: Enabled peripheral protocols MUST create RX and TX InfoItems named "{name}_{protocol}_RX" and "{name}_{protocol}_TX".
 - **FR-009a**: Write requests to protocol TX InfoItems MUST accept an optional `type` key with values `hex`, `base64`, or `string`. If omitted, `string` (UTF-8) is assumed.
-- **FR-009b**: The `odf.writeItem()` script API MUST accept an optional type parameter (e.g., `odf.writeItem(path, value, {type: "hex"})`) for protocol TX writes.
+- **FR-009b**: The `odf.writeItem()` script API MUST accept an optional type parameter (e.g., `odf.writeItem(value, path, {type: "hex"})`) for protocol TX writes.
 - **FR-010**: Protocols with device discovery capability (I2C) MUST scan for connected devices and add discovered devices as child objects in the O-DF tree.
 - **FR-011**: Build configuration MUST detect and reject conflicting GPIO pin assignments (same pin used for multiple purposes).
 - **FR-012**: GPIO and peripheral code MUST be conditionally compiled -- disabled features add zero code size or memory overhead.

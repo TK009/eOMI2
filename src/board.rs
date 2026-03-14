@@ -104,6 +104,54 @@ pub fn peripheral_configs() -> Vec<PeripheralConfig> {
     { Vec::new() }
 }
 
+/// Peripheral config with pin assignments, for board-specific HAL init.
+///
+/// Extends [`PeripheralConfig`] with the pin-role pairs from the board TOML
+/// (e.g., `[(21, "sda"), (22, "scl")]` for I2C). Used by the [`crate::boards`]
+/// module to create typed HAL bus drivers.
+pub struct PeripheralPinConfig {
+    pub protocol: PeripheralProtocol,
+    pub name: String,
+    pub pins: Vec<(u8, String)>,
+}
+
+impl PeripheralPinConfig {
+    /// Look up the pin number for a given role (e.g., "sda", "rx").
+    pub fn pin_for_role(&self, role: &str) -> Option<u8> {
+        self.pins
+            .iter()
+            .find(|(_, r)| r == role)
+            .map(|(pin, _)| *pin)
+    }
+}
+
+/// Parse the generated PERIPHERAL_CONFIGS into configs with pin assignments.
+///
+/// Returns the full pin-role mapping from the board TOML, needed by
+/// board-specific HAL init modules to allocate typed I2C/UART/SPI drivers.
+pub fn peripheral_pin_configs() -> Vec<PeripheralPinConfig> {
+    #[cfg(has_board_config)]
+    {
+        generated::PERIPHERAL_CONFIGS
+            .iter()
+            .filter_map(|&(protocol_str, pins)| {
+                let protocol = parse_protocol(protocol_str)?;
+                let pin_pairs: Vec<(u8, String)> = pins
+                    .iter()
+                    .map(|&(pin, role)| (pin, role.to_string()))
+                    .collect();
+                Some(PeripheralPinConfig {
+                    protocol,
+                    name: protocol_str.to_string(),
+                    pins: pin_pairs,
+                })
+            })
+            .collect()
+    }
+    #[cfg(not(has_board_config))]
+    { Vec::new() }
+}
+
 /// Initialize GPIO pins on the [`GpioManager`] from the board config (ESP only).
 ///
 /// Registers digital_in, digital_out, and edge trigger pins using type-erased
@@ -146,17 +194,10 @@ pub fn init_gpio(
                 let pin = unsafe { AnyIOPin::new(cfg.pin as i32) };
                 gpio_manager.add_edge_pin(path, cfg.pin, pin, EdgeType::High)?;
             }
-            GpioMode::Pwm => {
-                warn!(
-                    "Board config: PWM pin {} ({}) requires manual LEDC channel/timer setup — skipped",
-                    cfg.pin, cfg.name
-                );
-            }
-            GpioMode::AnalogIn => {
-                warn!(
-                    "Board config: ADC pin {} ({}) requires manual ADC driver setup — skipped",
-                    cfg.pin, cfg.name
-                );
+            GpioMode::Pwm | GpioMode::AnalogIn => {
+                // Handled by board-specific typed HAL init in crate::boards.
+                // These modes require typed LEDC/ADC resources from Peripherals
+                // that cannot be allocated with AnyIOPin.
             }
         }
     }

@@ -12,6 +12,8 @@ compile_error!(
 );
 
 pub mod board;
+#[cfg(feature = "esp")]
+pub mod boards;
 pub mod device;
 #[cfg(feature = "std")]
 pub mod gpio;

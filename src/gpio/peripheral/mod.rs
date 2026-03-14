@@ -13,7 +13,7 @@ pub mod spi;
 
 pub use super::encoding::DataEncoding;
 
-use crate::odf::{InfoItem, Object, OmiValue};
+use crate::odf::{InfoItem, OmiValue};
 use std::collections::BTreeMap;
 
 /// Ring buffer capacity for peripheral RX/TX InfoItems.
@@ -130,25 +130,19 @@ pub fn parse_peripherals(s: &str) -> Vec<PeripheralConfig> {
         .collect()
 }
 
-/// Build an Object subtree for configured peripherals (FR-008, FR-009, FR-010).
+/// Build RX/TX InfoItems for all configured peripherals (FR-008, FR-009).
 ///
-/// Creates RX/TX InfoItems for each peripheral bus under a "Peripherals" child
-/// object. Returns the Object to be added to the device root.
+/// Returns `(name, InfoItem)` pairs to be added directly to the device root
+/// object, consistent with how GPIO items are placed (FR-002). Each pair
+/// follows the `{name}_{protocol}_RX` / `{name}_{protocol}_TX` naming.
 ///
 /// This is the platform-independent tree builder. ESP-specific drivers attach
 /// to these tree paths at runtime.
-pub fn build_peripheral_tree(configs: &[PeripheralConfig]) -> Object {
-    let mut periph_obj = Object::new("Peripherals");
-    periph_obj.type_uri = Some("omi:peripherals".into());
-
-    for config in configs {
-        let items = build_peripheral_items(&config.name, config.protocol.as_str());
-        for (name, item) in items {
-            periph_obj.add_item(name, item);
-        }
-    }
-
-    periph_obj
+pub fn build_peripheral_items_all(configs: &[PeripheralConfig]) -> Vec<(String, InfoItem)> {
+    configs
+        .iter()
+        .flat_map(|c| build_peripheral_items(&c.name, c.protocol.as_str()))
+        .collect()
 }
 
 // --- ESP-only PeripheralManager ---
@@ -524,48 +518,46 @@ mod tests {
         assert_eq!(cfg.protocol, PeripheralProtocol::I2C);
     }
 
-    // --- build_peripheral_tree ---
+    // --- build_peripheral_items_all ---
 
     #[test]
-    fn build_tree_empty_configs() {
-        let obj = build_peripheral_tree(&[]);
-        assert_eq!(obj.id, "Peripherals");
-        assert_eq!(obj.type_uri.as_deref(), Some("omi:peripherals"));
-        assert!(obj.items.is_none());
+    fn build_all_empty_configs() {
+        let items = build_peripheral_items_all(&[]);
+        assert!(items.is_empty());
     }
 
     #[test]
-    fn build_tree_single_i2c() {
+    fn build_all_single_i2c() {
         let configs = vec![PeripheralConfig::new("GPIO21", PeripheralProtocol::I2C)];
-        let obj = build_peripheral_tree(&configs);
-        assert_eq!(obj.id, "Peripherals");
-        assert!(obj.get_item("GPIO21_I2C_RX").is_some());
-        assert!(obj.get_item("GPIO21_I2C_TX").is_some());
+        let items = build_peripheral_items_all(&configs);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].0, "GPIO21_I2C_RX");
+        assert_eq!(items[1].0, "GPIO21_I2C_TX");
     }
 
     #[test]
-    fn build_tree_multiple_protocols() {
+    fn build_all_multiple_protocols() {
         let configs = vec![
             PeripheralConfig::new("GPIO21", PeripheralProtocol::I2C),
             PeripheralConfig::new("GPIO16", PeripheralProtocol::UART),
             PeripheralConfig::new("GPIO18", PeripheralProtocol::SPI),
         ];
-        let obj = build_peripheral_tree(&configs);
-        let items = obj.items.as_ref().unwrap();
+        let items = build_peripheral_items_all(&configs);
         assert_eq!(items.len(), 6); // 3 protocols * 2 (RX + TX)
-        assert!(obj.get_item("GPIO21_I2C_RX").is_some());
-        assert!(obj.get_item("GPIO21_I2C_TX").is_some());
-        assert!(obj.get_item("GPIO16_UART_RX").is_some());
-        assert!(obj.get_item("GPIO16_UART_TX").is_some());
-        assert!(obj.get_item("GPIO18_SPI_RX").is_some());
-        assert!(obj.get_item("GPIO18_SPI_TX").is_some());
+        let names: Vec<&str> = items.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"GPIO21_I2C_RX"));
+        assert!(names.contains(&"GPIO21_I2C_TX"));
+        assert!(names.contains(&"GPIO16_UART_RX"));
+        assert!(names.contains(&"GPIO16_UART_TX"));
+        assert!(names.contains(&"GPIO18_SPI_RX"));
+        assert!(names.contains(&"GPIO18_SPI_TX"));
     }
 
     #[test]
-    fn build_tree_i2c_rx_not_writable() {
+    fn build_all_i2c_rx_not_writable() {
         let configs = vec![PeripheralConfig::new("GPIO21", PeripheralProtocol::I2C)];
-        let obj = build_peripheral_tree(&configs);
-        let rx = obj.get_item("GPIO21_I2C_RX").unwrap();
+        let items = build_peripheral_items_all(&configs);
+        let rx = &items[0].1;
         assert!(!rx.is_writable());
         let meta = rx.meta.as_ref().unwrap();
         assert_eq!(meta.get("protocol"), Some(&OmiValue::Str("I2C".into())));
@@ -573,10 +565,10 @@ mod tests {
     }
 
     #[test]
-    fn build_tree_i2c_tx_writable() {
+    fn build_all_i2c_tx_writable() {
         let configs = vec![PeripheralConfig::new("GPIO21", PeripheralProtocol::I2C)];
-        let obj = build_peripheral_tree(&configs);
-        let tx = obj.get_item("GPIO21_I2C_TX").unwrap();
+        let items = build_peripheral_items_all(&configs);
+        let tx = &items[1].1;
         assert!(tx.is_writable());
         let meta = tx.meta.as_ref().unwrap();
         assert_eq!(meta.get("protocol"), Some(&OmiValue::Str("I2C".into())));
@@ -584,28 +576,30 @@ mod tests {
     }
 
     #[test]
-    fn build_tree_in_object_tree() {
-        use crate::odf::{ObjectTree, PathTarget};
+    fn build_all_in_object_tree() {
+        use crate::odf::{Object, ObjectTree, PathTarget};
 
         let configs = vec![PeripheralConfig::new("GPIO21", PeripheralProtocol::I2C)];
-        let periph_obj = build_peripheral_tree(&configs);
+        let items = build_peripheral_items_all(&configs);
 
         let mut device = Object::new("Device");
-        device.add_child(periph_obj);
+        for (name, item) in items {
+            device.add_item(name, item);
+        }
 
         let mut tree = ObjectTree::new();
         tree.insert_root(device);
 
-        // RX is discoverable
-        match tree.resolve("/Device/Peripherals/GPIO21_I2C_RX") {
+        // RX is discoverable directly under device root
+        match tree.resolve("/Device/GPIO21_I2C_RX") {
             Ok(PathTarget::InfoItem(item)) => {
                 assert!(!item.is_writable());
             }
             other => panic!("expected InfoItem, got {:?}", other),
         }
 
-        // TX is writable
-        match tree.resolve("/Device/Peripherals/GPIO21_I2C_TX") {
+        // TX is writable directly under device root
+        match tree.resolve("/Device/GPIO21_I2C_TX") {
             Ok(PathTarget::InfoItem(item)) => {
                 assert!(item.is_writable());
             }

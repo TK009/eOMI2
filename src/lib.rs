@@ -26,9 +26,9 @@ pub mod pages;
 pub mod compress;
 pub mod crypto;
 pub mod psram;
-#[cfg(all(feature = "std", feature = "json"))]
+#[cfg(all(feature = "std", any(feature = "json", feature = "lite-json")))]
 pub mod http;
-#[cfg(all(feature = "std", feature = "json"))]
+#[cfg(all(feature = "std", any(feature = "json", feature = "lite-json")))]
 pub mod captive_portal;
 #[cfg(feature = "scripting")]
 pub mod scripting;

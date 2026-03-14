@@ -22,6 +22,7 @@ use crate::captive_portal::{
     self, ConnectionState, ConnectionStatus, ProvisionForm, ScannedNetwork,
 };
 use crate::compress;
+use crate::json::serializer::ToJson;
 use crate::http::{
     build_read_op, check_bearer_auth, is_mutating_operation, is_successful_write_response,
     now_secs, omi_uri_to_odf_path, render_landing_page, uri_path, uri_query,
@@ -238,26 +239,15 @@ fn send_omi_json(
     msg: &OmiMessage,
 ) {
     let headers = [("Content-Type", "application/json")];
-    match serde_json::to_string(msg) {
-        Ok(json) => {
-            send_response(req, 200, "OK", &headers, json.as_bytes());
-        }
-        Err(e) => {
-            warn!("OMI response serialization failed: {}", e);
-            let err = OmiResponse::error("Serialization error");
-            let json = serde_json::to_string(&err).unwrap_or_default();
-            send_response(req, 500, "Internal Server Error", &headers, json.as_bytes());
-        }
-    }
+    let json = msg.to_json_string();
+    send_response(req, 200, "OK", &headers, json.as_bytes());
 }
 
 fn send_ws_omi(
     conn: &mut esp_idf_svc::http::server::ws::EspHttpWsConnection,
     msg: OmiMessage,
 ) -> Result<()> {
-    let json = serde_json::to_string(&msg).unwrap_or_else(|_|
-        r#"{"omi":"1.0","ttl":0,"response":{"status":500,"desc":"Serialization error"}}"#.into()
-    );
+    let json = msg.to_json_string();
     conn.send(FrameType::Text(false), json.as_bytes())?;
     Ok(())
 }
@@ -288,31 +278,19 @@ pub fn dispatch_deliveries(
                 DeliveryTarget::WebSocket(session) => {
                     if let Some(sender) = senders.get_mut(session) {
                         let resp = OmiResponse::subscription_event(&d.rid, &d.path, &d.values);
-                        match serde_json::to_string(&resp) {
-                            Ok(json) => {
-                                if sender.send(FrameType::Text(false), json.as_bytes()).is_err() {
-                                    info!("WS send failed for session {}, removing", session);
-                                    if !failed_sessions.contains(session) {
-                                        failed_sessions.push(*session);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                warn!("WS delivery serialization failed session={}: {}", session, e);
+                        let json = resp.to_json_string();
+                        if sender.send(FrameType::Text(false), json.as_bytes()).is_err() {
+                            info!("WS send failed for session {}, removing", session);
+                            if !failed_sessions.contains(session) {
+                                failed_sessions.push(*session);
                             }
                         }
                     }
                 }
                 DeliveryTarget::Callback(url) => {
                     let resp = OmiResponse::subscription_event(&d.rid, &d.path, &d.values);
-                    match serde_json::to_string(&resp) {
-                        Ok(json) => {
-                            pending_callbacks.push((url.clone(), json, d.rid.clone()));
-                        }
-                        Err(e) => {
-                            warn!("Callback delivery serialization failed: {}", e);
-                        }
-                    }
+                    let json = resp.to_json_string();
+                    pending_callbacks.push((url.clone(), json, d.rid.clone()));
                 }
                 DeliveryTarget::Poll => {}
             }
@@ -488,10 +466,8 @@ pub fn start_http_server(
     server.fn_handler::<Infallible, _>("/scan", Method::Get, move |req| {
         let results = lock_or_recover(&p.scan_results, "scan_results");
         let headers = [("Content-Type", "application/json")];
-        match serde_json::to_string(&*results) {
-            Ok(json) => send_response(req, 200, "OK", &headers, json.as_bytes()),
-            Err(_) => send_response(req, 200, "OK", &headers, b"[]"),
-        }
+        let json = captive_portal::scan_results_json_lite(&results);
+        send_response(req, 200, "OK", &headers, json.as_bytes());
         Ok(())
     })?;
 
@@ -500,10 +476,8 @@ pub fn start_http_server(
     server.fn_handler::<Infallible, _>("/status", Method::Get, move |req| {
         let status = lock_or_recover(&p.connection_status, "connection_status");
         let headers = [("Content-Type", "application/json")];
-        match serde_json::to_string(&*status) {
-            Ok(json) => send_response(req, 200, "OK", &headers, json.as_bytes()),
-            Err(_) => send_response(req, 200, "OK", &headers, b"{\"state\":\"idle\"}"),
-        }
+        let json = captive_portal::connection_status_json_lite(&status);
+        send_response(req, 200, "OK", &headers, json.as_bytes());
         Ok(())
     })?;
 
@@ -681,13 +655,8 @@ pub fn start_http_server(
             let mut eng = lock_or_recover(&eng, "engine");
             eng.process(msg, now_secs(), Some(session_id))
         };
-        match serde_json::to_string(&resp) {
-            Ok(json) => conn.send(FrameType::Text(false), json.as_bytes())?,
-            Err(e) => {
-                warn!("WS response serialization failed session={}: {}", session_id, e);
-                send_ws_omi(conn, OmiResponse::error("Serialization error"))?;
-            }
-        }
+        let json = resp.to_json_string();
+        conn.send(FrameType::Text(false), json.as_bytes())?;
         Ok(())
     })?;
 

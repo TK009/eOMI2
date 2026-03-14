@@ -467,6 +467,171 @@ impl ToJson for ResponseBody {
     }
 }
 
+// ----- ToJson for OmiMessage and Operation types -----
+
+use crate::omi::{OmiMessage, Operation};
+use crate::omi::read::ReadOp;
+use crate::omi::write::{WriteOp, WriteItem};
+use crate::omi::delete::DeleteOp;
+use crate::omi::cancel::CancelOp;
+
+impl ToJson for OmiMessage {
+    fn write_json(&self, w: &mut JsonWriter) {
+        w.begin_object();
+        w.field_str("omi", &self.version);
+        w.field_i64("ttl", self.ttl);
+        match &self.operation {
+            Operation::Read(op) => {
+                w.key("read");
+                op.write_json(w);
+            }
+            Operation::Write(op) => {
+                w.key("write");
+                op.write_json(w);
+            }
+            Operation::Delete(op) => {
+                w.key("delete");
+                op.write_json(w);
+            }
+            Operation::Cancel(op) => {
+                w.key("cancel");
+                op.write_json(w);
+            }
+            Operation::Response(body) => {
+                w.key("response");
+                body.write_json(w);
+            }
+        }
+        w.end_object();
+    }
+}
+
+impl ToJson for ReadOp {
+    fn write_json(&self, w: &mut JsonWriter) {
+        w.begin_object();
+        w.field_str_opt("path", self.path.as_deref());
+        w.field_str_opt("rid", self.rid.as_deref());
+        w.field_u64_opt("newest", self.newest);
+        w.field_u64_opt("oldest", self.oldest);
+        w.field_f64_opt("begin", self.begin);
+        w.field_f64_opt("end", self.end);
+        w.field_u64_opt("depth", self.depth);
+        w.field_f64_opt("interval", self.interval);
+        w.field_str_opt("callback", self.callback.as_deref());
+        w.end_object();
+    }
+}
+
+impl ToJson for WriteOp {
+    fn write_json(&self, w: &mut JsonWriter) {
+        match self {
+            WriteOp::Single { path, v, t } => {
+                w.begin_object();
+                w.field_str("path", path);
+                w.key("v");
+                v.write_json(w);
+                w.field_f64_opt("t", *t);
+                w.end_object();
+            }
+            WriteOp::Batch { items } => {
+                w.begin_object();
+                w.key("items");
+                w.begin_array();
+                for item in items {
+                    item.write_json(w);
+                }
+                w.end_array();
+                w.end_object();
+            }
+            WriteOp::Tree { path, objects } => {
+                w.begin_object();
+                w.field_str("path", path);
+                w.key("objects");
+                w.begin_object();
+                for (k, obj) in objects {
+                    w.key(k);
+                    obj.write_json(w);
+                }
+                w.end_object();
+                w.end_object();
+            }
+        }
+    }
+}
+
+impl ToJson for WriteItem {
+    fn write_json(&self, w: &mut JsonWriter) {
+        w.begin_object();
+        w.field_str("path", &self.path);
+        w.key("v");
+        self.v.write_json(w);
+        w.field_f64_opt("t", self.t);
+        w.end_object();
+    }
+}
+
+impl ToJson for DeleteOp {
+    fn write_json(&self, w: &mut JsonWriter) {
+        w.begin_object();
+        w.field_str("path", &self.path);
+        w.end_object();
+    }
+}
+
+impl ToJson for CancelOp {
+    fn write_json(&self, w: &mut JsonWriter) {
+        w.begin_object();
+        w.key("rid");
+        w.begin_array();
+        for rid in &self.rid {
+            w.string(rid);
+        }
+        w.end_array();
+        w.end_object();
+    }
+}
+
+// ----- ToJson for captive portal types -----
+
+#[cfg(feature = "std")]
+use crate::captive_portal::{ScannedNetwork, ConnectionStatus, ConnectionState};
+
+#[cfg(feature = "std")]
+impl ToJson for ScannedNetwork {
+    fn write_json(&self, w: &mut JsonWriter) {
+        w.begin_object();
+        w.field_str("ssid", &self.ssid);
+        w.key("rssi");
+        w.i64_val(self.rssi as i64);
+        w.field_str("auth", &self.auth);
+        w.end_object();
+    }
+}
+
+#[cfg(feature = "std")]
+impl ToJson for ConnectionState {
+    fn write_json(&self, w: &mut JsonWriter) {
+        w.string(match self {
+            ConnectionState::Idle => "idle",
+            ConnectionState::Connecting => "connecting",
+            ConnectionState::Connected => "connected",
+            ConnectionState::Failed => "failed",
+        });
+    }
+}
+
+#[cfg(feature = "std")]
+impl ToJson for ConnectionStatus {
+    fn write_json(&self, w: &mut JsonWriter) {
+        w.begin_object();
+        w.key("state");
+        self.state.write_json(w);
+        w.field_str_opt("message", self.message.as_deref());
+        w.field_str_opt("ip", self.ip.as_deref());
+        w.end_object();
+    }
+}
+
 // ----- OMI message serialization helpers -----
 
 /// Write the OMI message envelope. `write_op` writes the operation body.

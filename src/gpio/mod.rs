@@ -3,7 +3,7 @@
 //! Platform-independent types live here. ESP-specific drivers are in submodules
 //! gated on the `esp` feature.
 
-#[cfg(feature = "esp")]
+#[cfg(any(feature = "esp", feature = "std"))]
 pub mod adc;
 pub mod driver;
 pub mod encoding;

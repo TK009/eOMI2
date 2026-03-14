@@ -1,4 +1,4 @@
-#![cfg(feature = "json")]
+#![cfg(any(feature = "json", feature = "lite-json"))]
 //! Integration tests for the scripting engine + ODF interaction.
 //!
 //! These exercise the full JSON round-trip for onwrite scripts:

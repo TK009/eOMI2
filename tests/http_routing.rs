@@ -1,4 +1,4 @@
-#![cfg(feature = "json")]
+#![cfg(any(feature = "json", feature = "lite-json"))]
 //! Integration tests for HTTP helpers + Engine wiring.
 //!
 //! These tests verify the cross-module chain:

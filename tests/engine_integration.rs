@@ -1,4 +1,4 @@
-#![cfg(feature = "json")]
+#![cfg(any(feature = "json", feature = "lite-json"))]
 //! Integration tests for the OMI engine.
 //!
 //! Unlike the unit tests in `src/omi/engine.rs`, these exercise the full

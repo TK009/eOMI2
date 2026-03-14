@@ -9,7 +9,13 @@ use std::collections::BTreeMap;
 use crate::odf::{InfoItem, Object, OmiValue};
 use crate::odf::value::{RingBuffer, Value};
 use crate::omi::OmiMessage;
+use crate::omi::Operation;
+use crate::omi::cancel::CancelOp;
+use crate::omi::delete::DeleteOp;
 use crate::omi::error::ParseError;
+use crate::omi::read::ReadOp;
+use crate::omi::response::ResponseBody;
+use crate::omi::write::{WriteItem, WriteOp};
 
 use super::error::{LiteParseError, Pos};
 use super::lexer::{Lexer, Token};
@@ -556,10 +562,434 @@ impl FromJson for Object {
 /// Parse an OMI message from a JSON string using the lite-json parser.
 ///
 /// This is the lite-json equivalent of `OmiMessage::parse()` from the serde path.
-/// It must produce identical results for all valid OMI messages (FR-012).
-pub fn parse_omi_message(_input: &str) -> Result<OmiMessage, ParseError> {
-    // Stub: will be implemented by T05 (operation sub-parsers) and T04 (envelope parser).
-    Err(ParseError::InvalidJson("lite-json OMI envelope parser not yet implemented".into()))
+/// Parses the OMI envelope (version, TTL, operation key) and delegates to
+/// operation-specific sub-parsers. Unknown fields are silently ignored (FR-007).
+/// Must produce identical results for all valid OMI messages (FR-012).
+pub fn parse_omi_message(input: &str) -> Result<OmiMessage, ParseError> {
+    let mut p = JsonParser::new(input.as_bytes());
+    let msg = parse_envelope(&mut p)?;
+    if !p.is_eof() {
+        return Err(ParseError::InvalidJson(format!(
+            "trailing content at byte {}",
+            p.position()
+        )));
+    }
+    Ok(msg)
+}
+
+// ---------------------------------------------------------------------------
+// OMI envelope parsing
+// ---------------------------------------------------------------------------
+
+fn parse_envelope(p: &mut JsonParser) -> Result<OmiMessage, ParseError> {
+    p.lexer().expect_token(&Token::ObjectStart).map_err(lpe)?;
+
+    let mut version: Option<String> = None;
+    let mut ttl: Option<i64> = None;
+    let mut operation: Option<Operation> = None;
+    let mut seen_ops: u8 = 0;
+
+    const OP_READ: u8 = 1;
+    const OP_WRITE: u8 = 2;
+    const OP_DELETE: u8 = 4;
+    const OP_CANCEL: u8 = 8;
+    const OP_RESPONSE: u8 = 16;
+
+    if !p.peek_is(&Token::ObjectEnd).map_err(lpe)? {
+        loop {
+            let key = p.expect_string().map_err(lpe)?;
+            p.lexer().expect_token(&Token::Colon).map_err(lpe)?;
+
+            match key.as_str() {
+                "omi" => version = Some(p.expect_string().map_err(lpe)?),
+                "ttl" => {
+                    ttl = Some(expect_i64_from(p).map_err(lpe)?);
+                }
+                "read" => {
+                    seen_ops |= OP_READ;
+                    operation = Some(Operation::Read(parse_read_op(p)?));
+                }
+                "write" => {
+                    seen_ops |= OP_WRITE;
+                    operation = Some(Operation::Write(parse_write_op(p)?));
+                }
+                "delete" => {
+                    seen_ops |= OP_DELETE;
+                    operation = Some(Operation::Delete(parse_delete_op(p)?));
+                }
+                "cancel" => {
+                    seen_ops |= OP_CANCEL;
+                    operation = Some(Operation::Cancel(parse_cancel_op(p)?));
+                }
+                "response" => {
+                    seen_ops |= OP_RESPONSE;
+                    operation = Some(Operation::Response(parse_response_body(p)?));
+                }
+                _ => p.skip_value().map_err(lpe)?,
+            }
+
+            if p.peek_is(&Token::Comma).map_err(lpe)? {
+                p.lexer().next_token().map_err(lpe)?;
+            } else if p.peek_is(&Token::ObjectEnd).map_err(lpe)? {
+                break;
+            } else {
+                return Err(lpe(LiteParseError::ExpectedToken {
+                    expected: "',' or '}'",
+                    pos: Pos::new(p.position()),
+                }));
+            }
+        }
+    }
+    p.lexer().expect_token(&Token::ObjectEnd).map_err(lpe)?;
+
+    let version = version.ok_or(ParseError::MissingField("omi"))?;
+    if version != "1.0" {
+        return Err(ParseError::UnsupportedVersion(version));
+    }
+    let ttl = ttl.ok_or(ParseError::MissingField("ttl"))?;
+    let op_count = seen_ops.count_ones() as usize;
+    if op_count != 1 {
+        return Err(ParseError::InvalidOperationCount(op_count));
+    }
+
+    Ok(OmiMessage {
+        version,
+        ttl,
+        operation: operation.unwrap(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Operation sub-parsers
+// ---------------------------------------------------------------------------
+
+fn parse_read_op(p: &mut JsonParser) -> Result<ReadOp, ParseError> {
+    p.lexer().expect_token(&Token::ObjectStart).map_err(lpe)?;
+
+    let mut path: Option<String> = None;
+    let mut rid: Option<String> = None;
+    let mut newest: Option<u64> = None;
+    let mut oldest: Option<u64> = None;
+    let mut begin: Option<f64> = None;
+    let mut end: Option<f64> = None;
+    let mut depth: Option<u64> = None;
+    let mut interval: Option<f64> = None;
+    let mut callback: Option<String> = None;
+
+    parse_op_fields(p, |p, key| {
+        match key {
+            "path" => path = Some(p.expect_string()?),
+            "rid" => rid = Some(p.expect_string()?),
+            "newest" => newest = Some(expect_u64_from(p)?),
+            "oldest" => oldest = Some(expect_u64_from(p)?),
+            "begin" => begin = Some(p.expect_f64()?),
+            "end" => end = Some(p.expect_f64()?),
+            "depth" => depth = Some(expect_u64_from(p)?),
+            "interval" => interval = Some(p.expect_f64()?),
+            "callback" => callback = Some(p.expect_string()?),
+            _ => p.skip_value()?,
+        }
+        Ok(())
+    })?;
+
+    let op = ReadOp {
+        path, rid, newest, oldest, begin, end, depth, interval, callback,
+    };
+    op.validate()?;
+    Ok(op)
+}
+
+fn parse_write_op(p: &mut JsonParser) -> Result<WriteOp, ParseError> {
+    p.lexer().expect_token(&Token::ObjectStart).map_err(lpe)?;
+
+    let mut path: Option<String> = None;
+    let mut v: Option<OmiValue> = None;
+    let mut t: Option<f64> = None;
+    let mut items: Option<Vec<WriteItem>> = None;
+    let mut objects: Option<BTreeMap<String, Object>> = None;
+
+    parse_op_fields(p, |p, key| {
+        match key {
+            "path" => path = Some(p.expect_string()?),
+            "v" => v = Some(p.parse_omi_value()?),
+            "t" => t = Some(p.expect_f64()?),
+            "items" => items = Some(parse_write_items(p)?),
+            "objects" => objects = Some(p.parse_objects_map()?),
+            _ => p.skip_value()?,
+        }
+        Ok(())
+    })?;
+
+    let has_v = v.is_some();
+    let has_items = items.is_some();
+    let has_objects = objects.is_some();
+    let form_count = has_v as u8 + has_items as u8 + has_objects as u8;
+
+    if form_count == 0 {
+        return Err(ParseError::MissingField("v, items, or objects"));
+    }
+    if has_v && has_items {
+        return Err(ParseError::MutuallyExclusive("v", "items"));
+    }
+    if has_v && has_objects {
+        return Err(ParseError::MutuallyExclusive("v", "objects"));
+    }
+    if has_items && has_objects {
+        return Err(ParseError::MutuallyExclusive("items", "objects"));
+    }
+
+    if has_v {
+        Ok(WriteOp::Single {
+            path: path.ok_or(ParseError::MissingField("path"))?,
+            v: v.unwrap(),
+            t,
+        })
+    } else if has_items {
+        let items = items.unwrap();
+        if items.is_empty() {
+            return Err(ParseError::InvalidField {
+                field: "items",
+                reason: "items array must not be empty".into(),
+            });
+        }
+        Ok(WriteOp::Batch { items })
+    } else {
+        Ok(WriteOp::Tree {
+            path: path.ok_or(ParseError::MissingField("path"))?,
+            objects: objects.unwrap(),
+        })
+    }
+}
+
+fn parse_write_items(p: &mut JsonParser) -> Result<Vec<WriteItem>, LiteParseError> {
+    p.lexer().expect_token(&Token::ArrayStart)?;
+    let mut items = Vec::new();
+    if !p.peek_is(&Token::ArrayEnd)? {
+        loop {
+            items.push(parse_write_item(p)?);
+            if p.peek_is(&Token::Comma)? {
+                p.lexer().next_token()?;
+            } else if p.peek_is(&Token::ArrayEnd)? {
+                break;
+            } else {
+                return Err(LiteParseError::ExpectedToken {
+                    expected: "',' or ']'",
+                    pos: Pos::new(p.position()),
+                });
+            }
+        }
+    }
+    p.lexer().expect_token(&Token::ArrayEnd)?;
+    Ok(items)
+}
+
+fn parse_write_item(p: &mut JsonParser) -> Result<WriteItem, LiteParseError> {
+    p.lexer().expect_token(&Token::ObjectStart)?;
+
+    let mut path: Option<String> = None;
+    let mut v: Option<OmiValue> = None;
+    let mut t: Option<f64> = None;
+    let obj_pos = Pos::new(p.position());
+
+    if !p.peek_is(&Token::ObjectEnd)? {
+        loop {
+            let key = p.expect_string()?;
+            p.lexer().expect_token(&Token::Colon)?;
+            match key.as_str() {
+                "path" => path = Some(p.expect_string()?),
+                "v" => v = Some(p.parse_omi_value()?),
+                "t" => t = Some(p.expect_f64()?),
+                _ => p.skip_value()?,
+            }
+            if p.peek_is(&Token::Comma)? {
+                p.lexer().next_token()?;
+            } else if p.peek_is(&Token::ObjectEnd)? {
+                break;
+            } else {
+                return Err(LiteParseError::ExpectedToken {
+                    expected: "',' or '}'",
+                    pos: Pos::new(p.position()),
+                });
+            }
+        }
+    }
+    p.lexer().expect_token(&Token::ObjectEnd)?;
+
+    Ok(WriteItem {
+        path: path.ok_or(LiteParseError::MissingField { field: "path", pos: obj_pos })?,
+        v: v.ok_or(LiteParseError::MissingField { field: "v", pos: obj_pos })?,
+        t,
+    })
+}
+
+fn parse_delete_op(p: &mut JsonParser) -> Result<DeleteOp, ParseError> {
+    p.lexer().expect_token(&Token::ObjectStart).map_err(lpe)?;
+
+    let mut path: Option<String> = None;
+
+    parse_op_fields(p, |p, key| {
+        match key {
+            "path" => path = Some(p.expect_string()?),
+            _ => p.skip_value()?,
+        }
+        Ok(())
+    })?;
+
+    let op = DeleteOp {
+        path: path.ok_or(ParseError::MissingField("path"))?,
+    };
+    op.validate()?;
+    Ok(op)
+}
+
+fn parse_cancel_op(p: &mut JsonParser) -> Result<CancelOp, ParseError> {
+    p.lexer().expect_token(&Token::ObjectStart).map_err(lpe)?;
+
+    let mut rid: Option<Vec<String>> = None;
+
+    parse_op_fields(p, |p, key| {
+        match key {
+            "rid" => rid = Some(parse_string_array(p)?),
+            _ => p.skip_value()?,
+        }
+        Ok(())
+    })?;
+
+    let op = CancelOp {
+        rid: rid.ok_or(ParseError::MissingField("rid"))?,
+    };
+    op.validate()?;
+    Ok(op)
+}
+
+fn parse_response_body(p: &mut JsonParser) -> Result<ResponseBody, ParseError> {
+    p.lexer().expect_token(&Token::ObjectStart).map_err(lpe)?;
+
+    let mut status: Option<u16> = None;
+    let mut rid: Option<String> = None;
+    let mut desc: Option<String> = None;
+
+    parse_op_fields(p, |p, key| {
+        match key {
+            "status" => {
+                let n = expect_u64_from(p)?;
+                status = Some(u16::try_from(n).map_err(|_| LiteParseError::ExpectedToken {
+                    expected: "status code (0..65535)",
+                    pos: Pos::new(p.position()),
+                })?);
+            }
+            "rid" => rid = Some(p.expect_string()?),
+            "desc" => desc = Some(p.expect_string()?),
+            "result" => {
+                // Result parsing deferred to downstream task (eo-4z9)
+                p.skip_value()?;
+            }
+            _ => p.skip_value()?,
+        }
+        Ok(())
+    })?;
+
+    Ok(ResponseBody {
+        status: status.ok_or(ParseError::MissingField("status"))?,
+        rid,
+        desc,
+        result: None,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Helpers for envelope/operation parsing
+// ---------------------------------------------------------------------------
+
+/// Convert LiteParseError to ParseError.
+fn lpe(e: LiteParseError) -> ParseError {
+    ParseError::InvalidJson(e.to_string())
+}
+
+/// Extract i64 from the next token (Integer or Number).
+fn expect_i64_from(p: &mut JsonParser) -> Result<i64, LiteParseError> {
+    match p.lexer().next_token()? {
+        Some(Token::Integer(i)) => Ok(i),
+        Some(Token::Number(n)) => {
+            let i = n as i64;
+            if i as f64 == n {
+                Ok(i)
+            } else {
+                Err(LiteParseError::ExpectedToken {
+                    expected: "integer",
+                    pos: Pos::new(p.position()),
+                })
+            }
+        }
+        _ => Err(LiteParseError::ExpectedToken {
+            expected: "integer",
+            pos: Pos::new(p.position()),
+        }),
+    }
+}
+
+/// Extract u64 from the next token.
+fn expect_u64_from(p: &mut JsonParser) -> Result<u64, LiteParseError> {
+    let i = expect_i64_from(p)?;
+    if i < 0 {
+        Err(LiteParseError::ExpectedToken {
+            expected: "non-negative integer",
+            pos: Pos::new(p.position()),
+        })
+    } else {
+        Ok(i as u64)
+    }
+}
+
+/// Parse key-value pairs of an already-opened object, calling `handler` for each.
+/// Handles commas and closing `}`.
+fn parse_op_fields<F>(p: &mut JsonParser, mut handler: F) -> Result<(), ParseError>
+where
+    F: FnMut(&mut JsonParser, &str) -> Result<(), LiteParseError>,
+{
+    if !p.peek_is(&Token::ObjectEnd).map_err(lpe)? {
+        loop {
+            let key = p.expect_string().map_err(lpe)?;
+            p.lexer().expect_token(&Token::Colon).map_err(lpe)?;
+            handler(p, &key).map_err(lpe)?;
+
+            if p.peek_is(&Token::Comma).map_err(lpe)? {
+                p.lexer().next_token().map_err(lpe)?;
+            } else if p.peek_is(&Token::ObjectEnd).map_err(lpe)? {
+                break;
+            } else {
+                return Err(lpe(LiteParseError::ExpectedToken {
+                    expected: "',' or '}'",
+                    pos: Pos::new(p.position()),
+                }));
+            }
+        }
+    }
+    p.lexer().expect_token(&Token::ObjectEnd).map_err(lpe)?;
+    Ok(())
+}
+
+/// Parse a JSON array of strings.
+fn parse_string_array(p: &mut JsonParser) -> Result<Vec<String>, LiteParseError> {
+    p.lexer().expect_token(&Token::ArrayStart)?;
+    let mut items = Vec::new();
+    if !p.peek_is(&Token::ArrayEnd)? {
+        loop {
+            items.push(p.expect_string()?);
+            if p.peek_is(&Token::Comma)? {
+                p.lexer().next_token()?;
+            } else if p.peek_is(&Token::ArrayEnd)? {
+                break;
+            } else {
+                return Err(LiteParseError::ExpectedToken {
+                    expected: "',' or ']'",
+                    pos: Pos::new(p.position()),
+                });
+            }
+        }
+    }
+    p.lexer().expect_token(&Token::ArrayEnd)?;
+    Ok(items)
 }
 
 #[cfg(test)]
@@ -944,4 +1374,268 @@ mod tests {
         assert!(Object::from_json_str("   ").is_err());
     }
 
+    // ----- OMI envelope parsing (T04) -----
+
+    #[test]
+    fn omi_parse_minimal_read() {
+        let msg = parse_omi_message(
+            r#"{"omi":"1.0","ttl":0,"read":{"path":"/DeviceA/Temperature"}}"#,
+        ).unwrap();
+        assert_eq!(msg.version, "1.0");
+        assert_eq!(msg.ttl, 0);
+        match &msg.operation {
+            Operation::Read(op) => assert_eq!(op.path.as_deref(), Some("/DeviceA/Temperature")),
+            _ => panic!("expected Read"),
+        }
+    }
+
+    #[test]
+    fn omi_parse_read_all_fields() {
+        let msg = parse_omi_message(
+            r#"{"omi":"1.0","ttl":5,"read":{"path":"/A/B","newest":10,"oldest":5,"begin":100.0,"end":200.0,"depth":3,"interval":10.0,"callback":"http://example.com/cb"}}"#,
+        ).unwrap();
+        match &msg.operation {
+            Operation::Read(op) => {
+                assert_eq!(op.newest, Some(10));
+                assert_eq!(op.oldest, Some(5));
+                assert_eq!(op.depth, Some(3));
+                assert_eq!(op.interval, Some(10.0));
+                assert_eq!(op.callback.as_deref(), Some("http://example.com/cb"));
+            }
+            _ => panic!("expected Read"),
+        }
+    }
+
+    #[test]
+    fn omi_parse_read_poll() {
+        let msg = parse_omi_message(r#"{"omi":"1.0","ttl":0,"read":{"rid":"sub-123"}}"#).unwrap();
+        match &msg.operation {
+            Operation::Read(op) => assert_eq!(op.rid.as_deref(), Some("sub-123")),
+            _ => panic!("expected Read"),
+        }
+    }
+
+    #[test]
+    fn omi_parse_write_single() {
+        let msg = parse_omi_message(
+            r#"{"omi":"1.0","ttl":10,"write":{"path":"/A/B","v":22.5}}"#,
+        ).unwrap();
+        match &msg.operation {
+            Operation::Write(WriteOp::Single { path, v, t }) => {
+                assert_eq!(path, "/A/B");
+                assert_eq!(*v, OmiValue::Number(22.5));
+                assert!(t.is_none());
+            }
+            _ => panic!("expected Write Single"),
+        }
+    }
+
+    #[test]
+    fn omi_parse_write_batch() {
+        let msg = parse_omi_message(
+            r#"{"omi":"1.0","ttl":10,"write":{"items":[{"path":"/A","v":1},{"path":"/B","v":"hi"}]}}"#,
+        ).unwrap();
+        match &msg.operation {
+            Operation::Write(WriteOp::Batch { items }) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[0].path, "/A");
+            }
+            _ => panic!("expected Write Batch"),
+        }
+    }
+
+    #[test]
+    fn omi_parse_write_tree() {
+        let msg = parse_omi_message(
+            r#"{"omi":"1.0","ttl":10,"write":{"path":"/","objects":{"Dev":{"id":"Dev"}}}}"#,
+        ).unwrap();
+        match &msg.operation {
+            Operation::Write(WriteOp::Tree { path, objects }) => {
+                assert_eq!(path, "/");
+                assert!(objects.contains_key("Dev"));
+            }
+            _ => panic!("expected Write Tree"),
+        }
+    }
+
+    #[test]
+    fn omi_parse_delete() {
+        let msg = parse_omi_message(r#"{"omi":"1.0","ttl":0,"delete":{"path":"/DeviceA"}}"#).unwrap();
+        match &msg.operation {
+            Operation::Delete(op) => assert_eq!(op.path, "/DeviceA"),
+            _ => panic!("expected Delete"),
+        }
+    }
+
+    #[test]
+    fn omi_parse_cancel() {
+        let msg = parse_omi_message(
+            r#"{"omi":"1.0","ttl":0,"cancel":{"rid":["req-1","req-2"]}}"#,
+        ).unwrap();
+        match &msg.operation {
+            Operation::Cancel(op) => assert_eq!(op.rid, vec!["req-1", "req-2"]),
+            _ => panic!("expected Cancel"),
+        }
+    }
+
+    #[test]
+    fn omi_parse_response() {
+        let msg = parse_omi_message(
+            r#"{"omi":"1.0","ttl":0,"response":{"status":200,"desc":"OK"}}"#,
+        ).unwrap();
+        match &msg.operation {
+            Operation::Response(body) => {
+                assert_eq!(body.status, 200);
+                assert_eq!(body.desc.as_deref(), Some("OK"));
+            }
+            _ => panic!("expected Response"),
+        }
+    }
+
+    #[test]
+    fn omi_unknown_fields_ignored() {
+        let msg = parse_omi_message(
+            r#"{"omi":"1.0","ttl":0,"extra":{"nested":true},"read":{"path":"/A","unknown":[1,2]}}"#,
+        ).unwrap();
+        assert!(matches!(msg.operation, Operation::Read(_)));
+    }
+
+    #[test]
+    fn omi_reject_missing_omi() {
+        assert_eq!(
+            parse_omi_message(r#"{"ttl":0,"read":{"path":"/A"}}"#).unwrap_err(),
+            ParseError::MissingField("omi")
+        );
+    }
+
+    #[test]
+    fn omi_reject_wrong_version() {
+        assert_eq!(
+            parse_omi_message(r#"{"omi":"2.0","ttl":0,"read":{"path":"/A"}}"#).unwrap_err(),
+            ParseError::UnsupportedVersion("2.0".into())
+        );
+    }
+
+    #[test]
+    fn omi_reject_missing_ttl() {
+        assert_eq!(
+            parse_omi_message(r#"{"omi":"1.0","read":{"path":"/A"}}"#).unwrap_err(),
+            ParseError::MissingField("ttl")
+        );
+    }
+
+    #[test]
+    fn omi_reject_zero_operations() {
+        assert_eq!(
+            parse_omi_message(r#"{"omi":"1.0","ttl":0}"#).unwrap_err(),
+            ParseError::InvalidOperationCount(0)
+        );
+    }
+
+    #[test]
+    fn omi_reject_multiple_operations() {
+        assert_eq!(
+            parse_omi_message(r#"{"omi":"1.0","ttl":0,"read":{"path":"/A"},"delete":{"path":"/B"}}"#)
+                .unwrap_err(),
+            ParseError::InvalidOperationCount(2)
+        );
+    }
+
+    #[test]
+    fn omi_reject_invalid_json() {
+        assert!(matches!(parse_omi_message("not json").unwrap_err(), ParseError::InvalidJson(_)));
+    }
+
+    #[test]
+    fn omi_negative_ttl_allowed() {
+        let msg = parse_omi_message(r#"{"omi":"1.0","ttl":-1,"read":{"path":"/A"}}"#).unwrap();
+        assert_eq!(msg.ttl, -1);
+    }
+
+    #[test]
+    fn omi_duplicate_key_last_wins() {
+        let msg = parse_omi_message(r#"{"omi":"2.0","omi":"1.0","ttl":0,"read":{"path":"/A"}}"#).unwrap();
+        assert_eq!(msg.version, "1.0");
+    }
+
+    #[test]
+    fn omi_reject_read_both_path_and_rid() {
+        assert_eq!(
+            parse_omi_message(r#"{"omi":"1.0","ttl":0,"read":{"path":"/A","rid":"r1"}}"#).unwrap_err(),
+            ParseError::MutuallyExclusive("path", "rid")
+        );
+    }
+
+    #[test]
+    fn omi_reject_write_no_form() {
+        assert_eq!(
+            parse_omi_message(r#"{"omi":"1.0","ttl":0,"write":{"path":"/A"}}"#).unwrap_err(),
+            ParseError::MissingField("v, items, or objects")
+        );
+    }
+
+    #[test]
+    fn omi_reject_write_empty_items() {
+        assert_eq!(
+            parse_omi_message(r#"{"omi":"1.0","ttl":0,"write":{"items":[]}}"#).unwrap_err(),
+            ParseError::InvalidField {
+                field: "items",
+                reason: "items array must not be empty".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn omi_reject_cancel_empty_rid() {
+        assert!(matches!(
+            parse_omi_message(r#"{"omi":"1.0","ttl":0,"cancel":{"rid":[]}}"#).unwrap_err(),
+            ParseError::InvalidField { .. }
+        ));
+    }
+
+    #[test]
+    fn omi_reject_delete_root() {
+        assert!(matches!(
+            parse_omi_message(r#"{"omi":"1.0","ttl":0,"delete":{"path":"/"}}"#).unwrap_err(),
+            ParseError::InvalidField { .. }
+        ));
+    }
+
+    // Parity tests: compare lite-json parser with serde parser
+    #[cfg(feature = "json")]
+    mod parity {
+        use super::*;
+
+        fn assert_parity(json: &str) {
+            let serde_result = OmiMessage::parse(json);
+            let lite_result = parse_omi_message(json);
+            match (serde_result, lite_result) {
+                (Ok(a), Ok(b)) => {
+                    assert_eq!(a.version, b.version);
+                    assert_eq!(a.ttl, b.ttl);
+                    assert_eq!(std::mem::discriminant(&a.operation), std::mem::discriminant(&b.operation));
+                }
+                (Err(_), Err(_)) => {}
+                (Ok(_), Err(e)) => panic!("serde accepted but lite rejected: {}", e),
+                (Err(e), Ok(_)) => panic!("serde rejected but lite accepted: {}", e),
+            }
+        }
+
+        #[test]
+        fn parity_read() { assert_parity(r#"{"omi":"1.0","ttl":0,"read":{"path":"/A"}}"#); }
+        #[test]
+        fn parity_write() { assert_parity(r#"{"omi":"1.0","ttl":10,"write":{"path":"/A","v":1}}"#); }
+        #[test]
+        fn parity_delete() { assert_parity(r#"{"omi":"1.0","ttl":0,"delete":{"path":"/A"}}"#); }
+        #[test]
+        fn parity_cancel() { assert_parity(r#"{"omi":"1.0","ttl":0,"cancel":{"rid":["r1"]}}"#); }
+        #[test]
+        fn parity_reject_missing_omi() { assert_parity(r#"{"ttl":0,"read":{"path":"/A"}}"#); }
+        #[test]
+        fn parity_reject_zero_ops() { assert_parity(r#"{"omi":"1.0","ttl":0}"#); }
+        #[test]
+        fn parity_reject_invalid() { assert_parity("not json"); }
+        #[test]
+        fn parity_unknown_fields() { assert_parity(r#"{"omi":"1.0","ttl":0,"x":1,"read":{"path":"/A"}}"#); }
+    }
 }

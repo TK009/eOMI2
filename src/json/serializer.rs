@@ -339,27 +339,40 @@ impl ToJson for InfoItem {
 
 impl ToJson for Object {
     fn write_json(&self, w: &mut JsonWriter) {
+        self.write_json_with_depth(w, usize::MAX);
+    }
+}
+
+impl Object {
+    /// Serialize this object with a depth limit via [`JsonWriter`].
+    ///
+    /// Depth 0 = only id/type/desc, no items or child objects.
+    /// Depth 1 = include direct items and child object shells (depth 0).
+    /// Use `usize::MAX` for unlimited depth.
+    pub fn write_json_with_depth(&self, w: &mut JsonWriter, depth: usize) {
         w.begin_object();
         w.field_str("id", &self.id);
         w.field_str_opt("type", self.type_uri.as_deref());
         w.field_str_opt("desc", self.desc.as_deref());
-        if let Some(ref items) = self.items {
-            w.key("items");
-            w.begin_object();
-            for (k, item) in items {
-                w.key(k);
-                item.write_json(w);
+        if depth > 0 {
+            if let Some(ref items) = self.items {
+                w.key("items");
+                w.begin_object();
+                for (k, item) in items {
+                    w.key(k);
+                    item.write_json(w);
+                }
+                w.end_object();
             }
-            w.end_object();
-        }
-        if let Some(ref objects) = self.objects {
-            w.key("objects");
-            w.begin_object();
-            for (k, obj) in objects {
-                w.key(k);
-                obj.write_json(w);
+            if let Some(ref objects) = self.objects {
+                w.key("objects");
+                w.begin_object();
+                for (k, obj) in objects {
+                    w.key(k);
+                    obj.write_json_with_depth(w, depth - 1);
+                }
+                w.end_object();
             }
-            w.end_object();
         }
         w.end_object();
     }
@@ -1126,5 +1139,220 @@ mod tests {
         w.end_object();
         let v = parse(&w.into_string());
         assert_eq!(v["test"], "value");
+    }
+
+    // -- Depth-limited Object serialization --
+
+    #[test]
+    fn object_depth_zero_only_scalars() {
+        let mut root = Object::new("Root");
+        root.type_uri = Some("omi:building".into());
+        root.desc = Some("HQ".into());
+        let mut child = Object::new("Floor1");
+        let mut item = InfoItem::new(10);
+        item.add_value(OmiValue::Number(22.5), Some(1000.0));
+        child.add_item("Temp".into(), item);
+        root.add_child(child);
+
+        let mut w = JsonWriter::new();
+        root.write_json_with_depth(&mut w, 0);
+        let v = parse(&w.into_string());
+        assert_eq!(v["id"], "Root");
+        assert_eq!(v["type"], "omi:building");
+        assert_eq!(v["desc"], "HQ");
+        assert!(v.get("items").is_none());
+        assert!(v.get("objects").is_none());
+    }
+
+    #[test]
+    fn object_depth_one_child_shells() {
+        let mut root = Object::new("Root");
+        let mut child = Object::new("Child");
+        child.type_uri = Some("omi:floor".into());
+        let mut item = InfoItem::new(10);
+        item.add_value(OmiValue::Number(22.5), None);
+        child.add_item("Temp".into(), item);
+        root.add_child(child);
+
+        let mut w = JsonWriter::new();
+        root.write_json_with_depth(&mut w, 1);
+        let v = parse(&w.into_string());
+        // Root has no items, so "items" should be absent
+        assert!(v.get("items").is_none());
+        // Child exists at depth 0 — no items inside
+        assert_eq!(v["objects"]["Child"]["id"], "Child");
+        assert_eq!(v["objects"]["Child"]["type"], "omi:floor");
+        assert!(v["objects"]["Child"].get("items").is_none());
+    }
+
+    #[test]
+    fn object_depth_two_full_tree() {
+        let mut root = Object::new("Root");
+        let mut child = Object::new("Child");
+        let mut item = InfoItem::new(10);
+        item.add_value(OmiValue::Number(22.5), None);
+        child.add_item("Temp".into(), item);
+        root.add_child(child);
+
+        let mut w = JsonWriter::new();
+        root.write_json_with_depth(&mut w, 2);
+        let v = parse(&w.into_string());
+        assert_eq!(v["objects"]["Child"]["items"]["Temp"]["values"][0]["v"], 22.5);
+    }
+
+    #[test]
+    fn object_unlimited_depth_matches_write_json() {
+        let mut root = Object::new("Root");
+        let mut child = Object::new("Child");
+        let mut item = InfoItem::new(10);
+        item.add_value(OmiValue::Number(22.5), Some(1000.0));
+        child.add_item("Temp".into(), item);
+        root.add_child(child);
+
+        let full = root.to_json_string();
+        let mut w = JsonWriter::new();
+        root.write_json_with_depth(&mut w, usize::MAX);
+        assert_eq!(full, w.into_string());
+    }
+
+    // -- Serde parity tests --
+    // Verify ToJson output matches serde_json output for the same structures.
+
+    #[test]
+    fn parity_omi_value() {
+        for val in &[
+            OmiValue::Null,
+            OmiValue::Bool(true),
+            OmiValue::Bool(false),
+            OmiValue::Number(42.5),
+            OmiValue::Str("hello \"world\"".into()),
+        ] {
+            let serde_out = serde_json::to_string(val).unwrap();
+            let lite_out = val.to_json_string();
+            assert_eq!(
+                parse(&serde_out), parse(&lite_out),
+                "OmiValue parity failed for {:?}", val
+            );
+        }
+    }
+
+    #[test]
+    fn parity_value_with_timestamp() {
+        let v = Value::new(OmiValue::Number(22.5), Some(1000.0));
+        let serde_out = serde_json::to_string(&v).unwrap();
+        let lite_out = v.to_json_string();
+        assert_eq!(parse(&serde_out), parse(&lite_out));
+    }
+
+    #[test]
+    fn parity_value_without_timestamp() {
+        let v = Value::new(OmiValue::Str("test".into()), None);
+        let serde_out = serde_json::to_string(&v).unwrap();
+        let lite_out = v.to_json_string();
+        assert_eq!(parse(&serde_out), parse(&lite_out));
+    }
+
+    #[test]
+    fn parity_ring_buffer() {
+        let mut rb = RingBuffer::new(5);
+        rb.push(Value::new(OmiValue::Number(1.0), Some(100.0)));
+        rb.push(Value::new(OmiValue::Number(2.0), Some(200.0)));
+        rb.push(Value::new(OmiValue::Number(3.0), Some(300.0)));
+
+        let serde_out = serde_json::to_string(&rb).unwrap();
+        let lite_out = rb.to_json_string();
+        assert_eq!(parse(&serde_out), parse(&lite_out));
+    }
+
+    #[test]
+    fn parity_ring_buffer_after_overflow() {
+        let mut rb = RingBuffer::new(3);
+        for i in 1..=5 {
+            rb.push(Value::new(OmiValue::Number(i as f64), Some(i as f64 * 100.0)));
+        }
+
+        let serde_out = serde_json::to_string(&rb).unwrap();
+        let lite_out = rb.to_json_string();
+        assert_eq!(parse(&serde_out), parse(&lite_out));
+    }
+
+    #[test]
+    fn parity_info_item_empty() {
+        let item = InfoItem::new(10);
+        let serde_out = serde_json::to_string(&item).unwrap();
+        let lite_out = item.to_json_string();
+        assert_eq!(parse(&serde_out), parse(&lite_out));
+    }
+
+    #[test]
+    fn parity_info_item_full() {
+        let mut item = InfoItem::new(10);
+        item.type_uri = Some("omi:temperature".into());
+        item.desc = Some("Room temp".into());
+        let mut meta = BTreeMap::new();
+        meta.insert("writable".into(), OmiValue::Bool(true));
+        meta.insert("unit".into(), OmiValue::Str("celsius".into()));
+        item.meta = Some(meta);
+        item.add_value(OmiValue::Number(22.5), Some(1000.0));
+        item.add_value(OmiValue::Number(23.0), Some(1001.0));
+
+        let serde_out = serde_json::to_string(&item).unwrap();
+        let lite_out = item.to_json_string();
+        assert_eq!(parse(&serde_out), parse(&lite_out));
+    }
+
+    #[test]
+    fn parity_object_minimal() {
+        let obj = Object::new("DeviceA");
+        let serde_out = serde_json::to_string(&obj).unwrap();
+        let lite_out = obj.to_json_string();
+        assert_eq!(parse(&serde_out), parse(&lite_out));
+    }
+
+    #[test]
+    fn parity_object_nested() {
+        let mut root = Object::new("Root");
+        root.type_uri = Some("omi:building".into());
+        root.desc = Some("Headquarters".into());
+
+        let mut child = Object::new("Floor1");
+        child.type_uri = Some("omi:floor".into());
+        let mut item = InfoItem::new(10);
+        item.type_uri = Some("omi:temperature".into());
+        item.add_value(OmiValue::Number(22.5), Some(1000.0));
+        item.add_value(OmiValue::Number(23.0), Some(1001.0));
+        child.add_item("Temp".into(), item);
+
+        let mut item2 = InfoItem::new(10);
+        item2.add_value(OmiValue::Number(45.0), None);
+        child.add_item("Humidity".into(), item2);
+
+        root.add_child(child);
+        root.add_child(Object::new("Floor2"));
+
+        let serde_out = serde_json::to_string(&root).unwrap();
+        let lite_out = root.to_json_string();
+        assert_eq!(parse(&serde_out), parse(&lite_out));
+    }
+
+    #[test]
+    fn parity_depth_limited() {
+        let mut root = Object::new("Root");
+        let mut child = Object::new("Child");
+        let mut item = InfoItem::new(10);
+        item.add_value(OmiValue::Number(22.5), Some(1000.0));
+        child.add_item("Temp".into(), item);
+        root.add_child(child);
+
+        for depth in 0..=3 {
+            let serde_val = root.serialize_with_depth(depth).unwrap();
+            let mut w = JsonWriter::new();
+            root.write_json_with_depth(&mut w, depth);
+            let lite_val = parse(&w.into_string());
+            assert_eq!(
+                serde_val, lite_val,
+                "Depth-limited parity failed at depth {}", depth
+            );
+        }
     }
 }

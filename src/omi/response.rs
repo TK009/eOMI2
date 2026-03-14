@@ -2,6 +2,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::odf::Value;
+#[cfg(feature = "json")]
 use super::error::ParseError;
 use super::{OmiMessage, Operation};
 

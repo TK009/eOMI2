@@ -1,3 +1,4 @@
+#[cfg(feature = "json")]
 pub mod engine;
 pub mod error;
 pub mod read;
@@ -7,9 +8,12 @@ pub mod cancel;
 pub mod response;
 pub mod subscriptions;
 
+#[cfg(feature = "json")]
 pub use self::engine::Engine;
 
-use serde::{Deserialize, Serialize, Serializer};
+#[cfg(feature = "json")]
+use serde::{Serialize, Serializer};
+#[cfg(feature = "json")]
 use serde::ser::SerializeMap;
 
 use self::error::ParseError;
@@ -38,64 +42,82 @@ pub enum Operation {
     Response(ResponseBody),
 }
 
-#[derive(Deserialize)]
-struct RawEnvelope {
-    omi: Option<String>,
-    ttl: Option<i64>,
-    read: Option<serde_json::Value>,
-    write: Option<serde_json::Value>,
-    delete: Option<serde_json::Value>,
-    cancel: Option<serde_json::Value>,
-    response: Option<serde_json::Value>,
-}
+#[cfg(feature = "json")]
+mod serde_parse {
+    use super::*;
+    use serde::Deserialize;
 
-impl OmiMessage {
-    pub fn parse(json: &str) -> Result<Self, ParseError> {
-        let raw: RawEnvelope =
-            serde_json::from_str(json).map_err(|e| ParseError::InvalidJson(e.to_string()))?;
+    #[derive(Deserialize)]
+    struct RawEnvelope {
+        omi: Option<String>,
+        ttl: Option<i64>,
+        read: Option<serde_json::Value>,
+        write: Option<serde_json::Value>,
+        delete: Option<serde_json::Value>,
+        cancel: Option<serde_json::Value>,
+        response: Option<serde_json::Value>,
+    }
 
-        // Validate version
-        let version = raw.omi.ok_or(ParseError::MissingField("omi"))?;
-        if version != "1.0" {
-            return Err(ParseError::UnsupportedVersion(version));
+    impl OmiMessage {
+        pub fn parse(json: &str) -> Result<Self, ParseError> {
+            let raw: RawEnvelope =
+                serde_json::from_str(json).map_err(|e| ParseError::InvalidJson(e.to_string()))?;
+
+            // Validate version
+            let version = raw.omi.ok_or(ParseError::MissingField("omi"))?;
+            if version != "1.0" {
+                return Err(ParseError::UnsupportedVersion(version));
+            }
+
+            // Validate ttl
+            let ttl = raw.ttl.ok_or(ParseError::MissingField("ttl"))?;
+
+            // Exactly one operation
+            let op_count = raw.read.is_some() as usize
+                + raw.write.is_some() as usize
+                + raw.delete.is_some() as usize
+                + raw.cancel.is_some() as usize
+                + raw.response.is_some() as usize;
+
+            if op_count != 1 {
+                return Err(ParseError::InvalidOperationCount(op_count));
+            }
+
+            let operation = if let Some(v) = raw.read {
+                Operation::Read(ReadOp::from_value(v)?)
+            } else if let Some(v) = raw.write {
+                Operation::Write(WriteOp::from_value(v)?)
+            } else if let Some(v) = raw.delete {
+                Operation::Delete(DeleteOp::from_value(v)?)
+            } else if let Some(v) = raw.cancel {
+                Operation::Cancel(CancelOp::from_value(v)?)
+            } else if let Some(v) = raw.response {
+                Operation::Response(ResponseBody::from_value(v)?)
+            } else {
+                unreachable!()
+            };
+
+            Ok(OmiMessage {
+                version,
+                ttl,
+                operation,
+            })
         }
-
-        // Validate ttl
-        let ttl = raw.ttl.ok_or(ParseError::MissingField("ttl"))?;
-
-        // Exactly one operation
-        let op_count = raw.read.is_some() as usize
-            + raw.write.is_some() as usize
-            + raw.delete.is_some() as usize
-            + raw.cancel.is_some() as usize
-            + raw.response.is_some() as usize;
-
-        if op_count != 1 {
-            return Err(ParseError::InvalidOperationCount(op_count));
-        }
-
-        let operation = if let Some(v) = raw.read {
-            Operation::Read(ReadOp::from_value(v)?)
-        } else if let Some(v) = raw.write {
-            Operation::Write(WriteOp::from_value(v)?)
-        } else if let Some(v) = raw.delete {
-            Operation::Delete(DeleteOp::from_value(v)?)
-        } else if let Some(v) = raw.cancel {
-            Operation::Cancel(CancelOp::from_value(v)?)
-        } else if let Some(v) = raw.response {
-            Operation::Response(ResponseBody::from_value(v)?)
-        } else {
-            unreachable!()
-        };
-
-        Ok(OmiMessage {
-            version,
-            ttl,
-            operation,
-        })
     }
 }
 
+#[cfg(feature = "lite-json")]
+mod lite_parse {
+    use super::*;
+
+    impl OmiMessage {
+        pub fn parse(json: &str) -> Result<Self, ParseError> {
+            crate::json::parser::parse_omi_message(json)
+        }
+    }
+}
+
+#[cfg(feature = "json")]
 impl Serialize for OmiMessage {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(Some(3))?;

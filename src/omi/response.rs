@@ -1,3 +1,4 @@
+#[cfg(feature = "json")]
 use serde::{Deserialize, Serialize};
 
 use crate::odf::Value;
@@ -39,32 +40,41 @@ impl StatusCode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "json", derive(Serialize, Deserialize))]
 pub struct ResponseBody {
     pub status: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
     pub rid: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
     pub desc: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
     pub result: Option<ResponseResult>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "json", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "json", serde(untagged))]
 pub enum ResponseResult {
     Batch(Vec<ItemStatus>),
+    #[cfg(feature = "json")]
     Single(serde_json::Value),
+    /// Lite-json placeholder: raw JSON bytes for single results.
+    /// Will be replaced with protocol-specific types by T09.
+    #[cfg(feature = "lite-json")]
+    Single(Vec<u8>),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "json", derive(Serialize, Deserialize))]
 pub struct ItemStatus {
     pub path: String,
     pub status: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
     pub desc: Option<String>,
 }
 
+#[cfg(feature = "json")]
 impl ResponseBody {
     pub fn from_value(value: serde_json::Value) -> Result<Self, ParseError> {
         serde_json::from_value(value).map_err(|e| ParseError::InvalidJson(e.to_string()))
@@ -83,6 +93,7 @@ impl OmiResponse {
         }
     }
 
+    #[cfg(feature = "json")]
     pub fn ok(result: serde_json::Value) -> OmiMessage {
         Self::wrap(ResponseBody {
             status: StatusCode::Ok.as_u16(),
@@ -92,6 +103,7 @@ impl OmiResponse {
         })
     }
 
+    #[cfg(feature = "json")]
     pub fn ok_with_rid(rid: String, result: serde_json::Value) -> OmiMessage {
         Self::wrap(ResponseBody {
             status: StatusCode::Ok.as_u16(),

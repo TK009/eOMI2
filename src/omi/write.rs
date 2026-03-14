@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
+#[cfg(feature = "json")]
 use serde::{Deserialize, Serialize, Serializer};
+#[cfg(feature = "json")]
 use serde::ser::SerializeMap;
 
 use crate::odf::{OmiValue, Object};
@@ -27,14 +29,16 @@ pub enum WriteOp {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "json", derive(Serialize, Deserialize))]
 pub struct WriteItem {
     pub path: String,
     pub v: OmiValue,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
     pub t: Option<f64>,
 }
 
+#[cfg(feature = "json")]
 #[derive(Deserialize)]
 struct RawWriteOp {
     path: Option<String>,
@@ -44,6 +48,7 @@ struct RawWriteOp {
     objects: Option<BTreeMap<String, Object>>,
 }
 
+#[cfg(feature = "json")]
 /// Count the maximum Object nesting depth in a JSON `"objects"` map, iteratively.
 ///
 /// Expects `value` to be the top-level `"objects"` map (`{ "Id": { "id": ..., "objects": ... }, ... }`).
@@ -77,6 +82,7 @@ fn object_nesting_depth(value: &serde_json::Value) -> usize {
     max_depth
 }
 
+#[cfg(feature = "json")]
 impl WriteOp {
     pub fn from_value(value: serde_json::Value) -> Result<Self, ParseError> {
         // Guard against deeply nested object trees that would overflow the stack
@@ -142,6 +148,7 @@ impl WriteOp {
     }
 }
 
+#[cfg(feature = "json")]
 impl Serialize for WriteOp {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {

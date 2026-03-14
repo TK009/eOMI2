@@ -96,8 +96,8 @@ fn fr001_onread_metadata_via_tree_write() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Sensor/Temp","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], -39.0);
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(-39.0));
 }
 
 #[test]
@@ -118,8 +118,8 @@ fn fr001_onread_metadata_via_direct_mutation() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Raw","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 25.0);
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(25.0));
 }
 
 #[test]
@@ -137,8 +137,8 @@ fn fr001_no_onread_returns_stored_value() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Plain","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 42.0);
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(42.0));
 }
 
 // ===========================================================================
@@ -160,8 +160,8 @@ fn fr002_one_time_read_triggers_onread() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Sensor","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 200.0, "one-time read should trigger onread");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(200.0), "one-time read should trigger onread");
 }
 
 #[test]
@@ -253,9 +253,9 @@ fn fr002_readitem_from_onread_triggers_nested_onread() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Reader","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 100.0,
+        values[0].v, OmiValue::Number(100.0),
         "odf.readItem from onread should trigger nested onread (50 * 2 = 100)"
     );
 }
@@ -297,9 +297,9 @@ fn fr002_readitem_from_onwrite_returns_stored_value() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Result","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 50.0,
+        values[0].v, OmiValue::Number(50.0),
         "odf.readItem from onwrite context returns stored value (50), not onread-transformed"
     );
 }
@@ -323,8 +323,8 @@ fn fr003_event_value_is_stored_value() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 43.0, "event.value should be the stored value (42 + 1 = 43)");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(43.0), "event.value should be the stored value (42 + 1 = 43)");
 }
 
 #[test]
@@ -350,9 +350,9 @@ fn fr003_event_path_is_item_path() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/PathCheck","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], "/Dev/PathCheck",
+        values[0].v, OmiValue::Str("/Dev/PathCheck".into()),
         "event.path should be the InfoItem path"
     );
 }
@@ -372,9 +372,9 @@ fn fr003_event_timestamp_present() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/TsCheck","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 12345.0,
+        values[0].v, OmiValue::Number(12345.0),
         "event.timestamp should be the stored timestamp"
     );
 }
@@ -407,7 +407,7 @@ fn fr003_event_value_null_when_empty() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Empty","newest":1}}"#,
     );
-    let _values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let _values = extract_values(&resp);
     // Empty ring buffer → event.value is null → script runs but may have no slot.
     // The key assertion is that the read succeeds without errors.
     assert_eq!(response_status(&resp), 200);
@@ -432,17 +432,17 @@ fn fr004_stored_value_unchanged_after_read() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 30.0, "first read: 10 * 3 = 30");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(30.0), "first read: 10 * 3 = 30");
 
     // Second read — should still be 30, NOT 90 (proving storage unchanged)
     let resp = parse_and_process(
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 30.0,
+        values[0].v, OmiValue::Number(30.0),
         "second read should still be 30 — onread must not mutate storage"
     );
 
@@ -451,8 +451,8 @@ fn fr004_stored_value_unchanged_after_read() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 30.0, "third read confirms storage is immutable");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(30.0), "third read confirms storage is immutable");
 }
 
 #[test]
@@ -480,8 +480,8 @@ fn fr004_write_after_onread_uses_raw_stored_value() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 1000.0);
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(1000.0));
 
     // Write new value — onwrite should see the new raw value, not transformed
     parse_and_process(
@@ -492,9 +492,9 @@ fn fr004_write_after_onread_uses_raw_stored_value() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Copy","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 5.0,
+        values[0].v, OmiValue::Number(5.0),
         "onwrite should see raw value 5, not onread-transformed 500"
     );
 }
@@ -518,8 +518,8 @@ fn fr005_syntax_error_falls_back_to_stored_value() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200, "read should succeed despite script error");
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 42.0, "should fall back to stored value on script error");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(42.0), "should fall back to stored value on script error");
 }
 
 #[test]
@@ -538,8 +538,8 @@ fn fr005_runtime_error_falls_back_to_stored_value() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 77.0, "should fall back to stored value on runtime error");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(77.0), "should fall back to stored value on runtime error");
 }
 
 #[test]
@@ -557,8 +557,8 @@ fn fr005_null_return_falls_back_to_stored_value() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 55.0, "null return should fall back to stored value");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(55.0), "null return should fall back to stored value");
 }
 
 #[test]
@@ -576,8 +576,8 @@ fn fr005_undefined_return_falls_back_to_stored_value() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 33.0, "undefined return should fall back to stored value");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(33.0), "undefined return should fall back to stored value");
 }
 
 #[test]
@@ -595,8 +595,8 @@ fn fr005_op_limit_falls_back_to_stored_value() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200, "read must never fail due to script op limit");
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 99.0, "op limit should fall back to stored value");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(99.0), "op limit should fall back to stored value");
 }
 
 // ===========================================================================
@@ -634,9 +634,9 @@ fn fr006_onread_has_readitem_but_no_writeitem() {
     // The script should error because writeItem is not defined in onread context
     // Falls back to stored value
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 5.0,
+        values[0].v, OmiValue::Number(5.0),
         "onread with writeItem should error and fall back to stored value"
     );
 
@@ -645,8 +645,8 @@ fn fr006_onread_has_readitem_but_no_writeitem() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Target","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 0.0, "onread must not have side-effects via writeItem");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(0.0), "onread must not have side-effects via writeItem");
 }
 
 #[test]
@@ -673,8 +673,8 @@ fn fr006_onread_readitem_works() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Raw","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 150.0, "odf.readItem should work in onread (50 + 100 = 150)");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(150.0), "odf.readItem should work in onread (50 + 100 = 150)");
 }
 
 // ===========================================================================
@@ -707,9 +707,9 @@ fn fr007_nested_onread_executes() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Display","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 212.0,
+        values[0].v, OmiValue::Number(212.0),
         "nested onread should transform 100°C → 212°F"
     );
 }
@@ -774,9 +774,9 @@ fn fr007_nested_onread_element_structure() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Reader","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 15.0,
+        values[0].v, OmiValue::Number(15.0),
         "nested onread element structure should have transformed value (10 + 5 = 15)"
     );
 }
@@ -804,9 +804,9 @@ fn fr008_self_read_returns_stored_value() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Self","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 11.0,
+        values[0].v, OmiValue::Number(11.0),
         "self-read should return stored 10 (not recursively transformed), so 10 + 1 = 11"
     );
 }
@@ -830,9 +830,9 @@ fn fr008_self_read_element_structure() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Elem","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 25.0,
+        values[0].v, OmiValue::Number(25.0),
         "self-read element should have stored value 20, so 20 + 5 = 25"
     );
 }
@@ -856,9 +856,9 @@ fn fr008_self_read_repeated_is_stable() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Stable","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 14.0,
+        values[0].v, OmiValue::Number(14.0),
         "two self-reads should both return stored 7, so 7 + 7 = 14"
     );
 }
@@ -905,15 +905,15 @@ fn fr009_write_triggers_onwrite_not_onread() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/WriteDst","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 42.0, "onwrite should fire on write");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(42.0), "onwrite should fire on write");
 
     let resp = parse_and_process(
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/ReadDst","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 0.0, "onread should NOT fire during write");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(0.0), "onread should NOT fire during write");
 }
 
 #[test]
@@ -941,15 +941,15 @@ fn fr009_read_triggers_onread_not_onwrite() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 200.0, "onread should transform on read");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(200.0), "onread should transform on read");
 
     let resp = parse_and_process(
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/WriteDst","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 0.0, "onwrite should NOT fire during read");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(0.0), "onwrite should NOT fire during read");
 }
 
 #[test]
@@ -975,8 +975,8 @@ fn fr009_broken_onwrite_does_not_affect_onread() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 60.0, "onread should work despite broken onwrite");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(60.0), "onread should work despite broken onwrite");
 }
 
 #[test]
@@ -1009,16 +1009,16 @@ fn fr009_broken_onread_does_not_affect_onwrite() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Dst","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 88.0, "onwrite should work despite broken onread");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(88.0), "onwrite should work despite broken onread");
 
     // Read falls back to stored value
     let resp = parse_and_process(
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 88.0, "broken onread falls back to stored value");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(88.0), "broken onread falls back to stored value");
 }
 
 // ===========================================================================
@@ -1041,8 +1041,8 @@ fn fr010_infinite_loop_hits_op_limit() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 42.0, "op limit → fall back to stored value");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(42.0), "op limit → fall back to stored value");
 }
 
 #[test]
@@ -1070,8 +1070,8 @@ fn fr010_read_loop_hits_op_limit() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Loop","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 99.0, "read loop op limit → fall back to stored value");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(99.0), "read loop op limit → fall back to stored value");
 }
 
 #[test]
@@ -1094,8 +1094,8 @@ fn fr010_bounded_computation_succeeds() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 50.0, "bounded computation: 5 * 10 = 50");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(50.0), "bounded computation: 5 * 10 = 50");
 }
 
 // ===========================================================================
@@ -1117,10 +1117,10 @@ fn fr011_onread_preserves_timestamps() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 200.0, "value should be transformed");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(200.0), "value should be transformed");
     assert_eq!(
-        values[0]["t"], 12345.0,
+        values[0].t, Some(12345.0),
         "timestamp should be preserved from original stored value"
     );
 }
@@ -1146,18 +1146,18 @@ fn fr011_multiple_values_preserve_timestamps() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Multi","newest":3}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(values.len(), 3);
 
     // Newest (index 0) should be transformed, with original timestamp
-    assert_eq!(values[0]["v"], 300.0, "newest value transformed: 30 * 10 = 300");
-    assert_eq!(values[0]["t"], 3000.0, "newest timestamp preserved");
+    assert_eq!(values[0].v, OmiValue::Number(300.0), "newest value transformed: 30 * 10 = 300");
+    assert_eq!(values[0].t, Some(3000.0), "newest timestamp preserved");
 
     // Older values should be raw, with original timestamps (FR-012)
-    assert_eq!(values[1]["v"], 20.0, "second value should be raw");
-    assert_eq!(values[1]["t"], 2000.0, "second timestamp preserved");
-    assert_eq!(values[2]["v"], 10.0, "third value should be raw");
-    assert_eq!(values[2]["t"], 1000.0, "third timestamp preserved");
+    assert_eq!(values[1].v, OmiValue::Number(20.0), "second value should be raw");
+    assert_eq!(values[1].t, Some(2000.0), "second timestamp preserved");
+    assert_eq!(values[2].v, OmiValue::Number(10.0), "third value should be raw");
+    assert_eq!(values[2].t, Some(1000.0), "third timestamp preserved");
 }
 
 // ===========================================================================
@@ -1187,13 +1187,13 @@ fn fr012_only_newest_value_transformed() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/History","newest":3}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(values.len(), 3);
 
     // Only newest (index 0) is transformed
-    assert_eq!(values[0]["v"], 300.0, "newest: 3 * 100 = 300 (transformed)");
-    assert_eq!(values[1]["v"], 2.0, "second oldest: raw value 2 (not transformed)");
-    assert_eq!(values[2]["v"], 1.0, "oldest: raw value 1 (not transformed)");
+    assert_eq!(values[0].v, OmiValue::Number(300.0), "newest: 3 * 100 = 300 (transformed)");
+    assert_eq!(values[1].v, OmiValue::Number(2.0), "second oldest: raw value 2 (not transformed)");
+    assert_eq!(values[2].v, OmiValue::Number(1.0), "oldest: raw value 1 (not transformed)");
 }
 
 #[test]
@@ -1210,9 +1210,9 @@ fn fr012_single_value_transforms() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Single","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(values.len(), 1);
-    assert_eq!(values[0]["v"], 21.0, "single value: 7 * 3 = 21");
+    assert_eq!(values[0].v, OmiValue::Number(21.0), "single value: 7 * 3 = 21");
 }
 
 #[test]
@@ -1235,17 +1235,17 @@ fn fr012_newest_5_with_transform() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Five","newest":5}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(values.len(), 5);
 
     // Only newest (5) is transformed to 1005
-    assert_eq!(values[0]["v"], 1005.0, "newest (5) transformed: 5 + 1000 = 1005");
+    assert_eq!(values[0].v, OmiValue::Number(1005.0), "newest (5) transformed: 5 + 1000 = 1005");
 
     // All others are raw
-    assert_eq!(values[1]["v"], 4.0, "4th value raw");
-    assert_eq!(values[2]["v"], 3.0, "3rd value raw");
-    assert_eq!(values[3]["v"], 2.0, "2nd value raw");
-    assert_eq!(values[4]["v"], 1.0, "1st value raw");
+    assert_eq!(values[1].v, OmiValue::Number(4.0), "4th value raw");
+    assert_eq!(values[2].v, OmiValue::Number(3.0), "3rd value raw");
+    assert_eq!(values[3].v, OmiValue::Number(2.0), "2nd value raw");
+    assert_eq!(values[4].v, OmiValue::Number(1.0), "1st value raw");
 }
 
 // ===========================================================================
@@ -1278,8 +1278,8 @@ fn thermostat_onread_scenario() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/HVAC/Sensor","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 25.0, "calibrated: 6500 * 0.01 - 40 = 25°C");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(25.0), "calibrated: 6500 * 0.01 - 40 = 25°C");
 
     // Stored raw value is still 6500 — verified by writing to heater
     set_onwrite(
@@ -1299,16 +1299,16 @@ fn thermostat_onread_scenario() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/HVAC/Heater","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], false, "onwrite sees raw ADC value, not calibrated");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Bool(false), "onwrite sees raw ADC value, not calibrated");
 
     // But reading calibrated: 5800 * 0.01 - 40 = 18.0°C
     let resp = parse_and_process(
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/HVAC/Sensor","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 18.0, "calibrated: 5800 * 0.01 - 40 = 18°C");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(18.0), "calibrated: 5800 * 0.01 - 40 = 18°C");
 }
 
 #[test]
@@ -1341,8 +1341,8 @@ fn status_aggregation_onread() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Sys/Status","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], "ok");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Str("ok".into()));
 
     // Change temperature to alarm level
     parse_and_process(
@@ -1355,8 +1355,8 @@ fn status_aggregation_onread() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Sys/Status","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], "alarm");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Str("alarm".into()));
 }
 
 #[test]
@@ -1394,8 +1394,8 @@ fn onread_with_string_value() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Status","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], "raw_processed");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Str("raw_processed".into()));
 }
 
 #[test]
@@ -1413,8 +1413,8 @@ fn onread_with_boolean_value() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Flag","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], false, "boolean inversion: !true = false");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Bool(false), "boolean inversion: !true = false");
 }
 
 #[test]
@@ -1432,8 +1432,8 @@ fn onread_returns_different_type() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], "high");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Str("high".into()));
 }
 
 #[test]
@@ -1465,10 +1465,10 @@ fn interval_poll_sub_delivers_raw_value() {
     let poll_json = format!(r#"{{"omi":"1.0","ttl":0,"read":{{"rid":"{}"}}}}"#, rid);
     let resp = process_at(&mut e, &poll_json, BASE_TIME + 6.0, None);
     assert_eq!(response_status(&resp), 200);
-    let polled = extract_single_result(&resp)["values"].as_array().unwrap();
+    let polled = extract_values(&resp);
     assert_eq!(polled.len(), 1);
     assert_eq!(
-        polled[0]["v"], 50.0,
+        polled[0].v, OmiValue::Number(50.0),
         "poll delivery returns raw value (onread only applies to callback deliveries)"
     );
 }

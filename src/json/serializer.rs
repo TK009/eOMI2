@@ -131,6 +131,13 @@ impl JsonWriter {
         write_escaped_str(&mut self.buf, s);
     }
 
+    /// Write a pre-formatted JSON string directly into the output.
+    /// The caller must ensure the string is valid JSON.
+    pub fn raw_json(&mut self, json: &str) {
+        self.pre_value();
+        self.buf.extend_from_slice(json.as_bytes());
+    }
+
     // -- Convenience: key + value in one call --
 
     pub fn field_str(&mut self, k: &str, v: &str) {
@@ -373,6 +380,81 @@ impl Object {
                 }
                 w.end_object();
             }
+        }
+        w.end_object();
+    }
+}
+
+// ----- ToJson for response types -----
+
+use crate::omi::response::{ItemStatus, ResponseBody, ResponseResult, ResultPayload};
+
+impl ToJson for ResultPayload {
+    fn write_json(&self, w: &mut JsonWriter) {
+        match self {
+            ResultPayload::Null => w.null(),
+            ResultPayload::ReadValues { path, values } => {
+                w.begin_object();
+                w.field_str("path", path);
+                w.key("values");
+                w.begin_array();
+                for v in values {
+                    v.write_json(w);
+                }
+                w.end_array();
+                w.end_object();
+            }
+            #[cfg(feature = "json")]
+            ResultPayload::Json(v) => {
+                // For Json variant, fall back to serde_json serialization.
+                let s = serde_json::to_string(v)
+                    .expect("ResultPayload::Json serialization should not fail");
+                w.raw_json(&s);
+            }
+        }
+    }
+}
+
+impl ToJson for ItemStatus {
+    fn write_json(&self, w: &mut JsonWriter) {
+        w.begin_object();
+        w.field_str("path", &self.path);
+        w.field_u16("status", self.status);
+        w.field_str_opt("desc", self.desc.as_deref());
+        w.end_object();
+    }
+}
+
+impl ToJson for ResponseResult {
+    fn write_json(&self, w: &mut JsonWriter) {
+        match self {
+            ResponseResult::Batch(items) => {
+                w.begin_array();
+                for item in items {
+                    item.write_json(w);
+                }
+                w.end_array();
+            }
+            ResponseResult::Single(payload) => {
+                payload.write_json(w);
+            }
+        }
+    }
+}
+
+impl ToJson for ResponseBody {
+    fn write_json(&self, w: &mut JsonWriter) {
+        w.begin_object();
+        w.field_u16("status", self.status);
+        if let Some(ref rid) = self.rid {
+            w.field_str("rid", rid);
+        }
+        if let Some(ref desc) = self.desc {
+            w.field_str("desc", desc);
+        }
+        if let Some(ref result) = self.result {
+            w.key("result");
+            result.write_json(w);
         }
         w.end_object();
     }

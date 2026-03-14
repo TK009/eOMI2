@@ -434,7 +434,7 @@ mod tests {
     #[test]
     fn successful_write_200() {
         use crate::omi::OmiResponse;
-        let msg = OmiResponse::ok(serde_json::json!(null));
+        let msg = OmiResponse::ok_null();
         assert!(is_successful_write_response(&msg));
     }
 
@@ -537,7 +537,7 @@ mod tests {
     #[test]
     fn non_mutating_response() {
         use crate::omi::OmiResponse;
-        let msg = OmiResponse::ok(serde_json::json!(null));
+        let msg = OmiResponse::ok_null();
         assert!(!is_mutating_operation(&msg.operation));
     }
 

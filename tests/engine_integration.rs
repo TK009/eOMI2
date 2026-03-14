@@ -11,6 +11,7 @@ use common::*;
 use reconfigurable_device::odf::OmiValue;
 use reconfigurable_device::omi::error::ParseError;
 use reconfigurable_device::omi::{Engine, OmiMessage};
+use serde_json::json;
 
 // ---------------------------------------------------------------------------
 // Helpers (file-specific)
@@ -27,7 +28,7 @@ fn read_root_returns_objects() {
     let mut e = engine_with_sensor_tree();
     let resp = parse_and_process(&mut e, r#"{"omi":"1.0","ttl":0,"read":{"path":"/"}}"#);
     assert_eq!(response_status(&resp), 200);
-    let result = extract_single_result(&resp);
+    let result = extract_json_result(&resp);
     assert!(result["System"].is_object(), "root should contain System");
 
     // Verify via JSON round-trip
@@ -41,7 +42,7 @@ fn read_object_returns_items() {
     let mut e = engine_with_sensor_tree();
     let resp = parse_and_process(&mut e, r#"{"omi":"1.0","ttl":0,"read":{"path":"/System"}}"#);
     assert_eq!(response_status(&resp), 200);
-    let result = extract_single_result(&resp);
+    let result = extract_json_result(&resp);
     assert_eq!(result["id"], "System");
     assert!(result["items"]["FreeHeap"].is_object());
 }
@@ -54,8 +55,8 @@ fn read_infoitem_empty() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/System/FreeHeap"}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let result = extract_single_result(&resp);
-    assert_eq!(result["values"].as_array().unwrap().len(), 0);
+    let values = extract_values(&resp);
+    assert_eq!(values.len(), 0);
 }
 
 #[test]
@@ -71,9 +72,9 @@ fn read_infoitem_with_values() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/System/FreeHeap"}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(values.len(), 1);
-    assert_eq!(values[0]["v"], 23.5);
+    assert_eq!(values[0].v, OmiValue::Number(23.5));
 
     // JSON round-trip
     let rt = roundtrip_response_json(&resp);
@@ -98,14 +99,14 @@ fn read_newest_oldest_filters() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/System/FreeHeap","newest":2}}"#,
     );
-    assert_eq!(extract_single_result(&resp)["values"].as_array().unwrap().len(), 2);
+    assert_eq!(extract_values(&resp).len(), 2);
 
     // oldest=2
     let resp = parse_and_process(
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/System/FreeHeap","oldest":2}}"#,
     );
-    assert_eq!(extract_single_result(&resp)["values"].as_array().unwrap().len(), 2);
+    assert_eq!(extract_values(&resp).len(), 2);
 }
 
 #[test]
@@ -122,9 +123,9 @@ fn read_time_range() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/System/FreeHeap","begin":150,"end":250}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(values.len(), 1);
-    assert_eq!(values[0]["t"], 200.0);
+    assert_eq!(values[0].t, Some(200.0));
 }
 
 #[test]
@@ -135,7 +136,7 @@ fn read_with_depth() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/System","depth":0}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let result = extract_single_result(&resp);
+    let result = extract_json_result(&resp);
     assert_eq!(result["id"], "System");
     // depth=0 should omit nested items
     assert!(result.get("items").is_none());
@@ -149,7 +150,7 @@ fn read_with_depth_includes_items() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/System","depth":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let result = extract_single_result(&resp);
+    let result = extract_json_result(&resp);
     assert_eq!(result["id"], "System");
     // depth=1 should include items
     assert!(result["items"]["FreeHeap"].is_object());
@@ -190,8 +191,8 @@ fn write_new_path_creates_item() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/MyObj/MyItem","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 42.0);
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(42.0));
 }
 
 #[test]
@@ -274,7 +275,7 @@ fn write_tree_merges_objects() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Garage"}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    assert_eq!(extract_single_result(&resp)["id"], "Garage");
+    assert_eq!(extract_json_result(&resp)["id"], "Garage");
 
     // Original sensor tree should still exist
     let resp = parse_and_process(
@@ -290,46 +291,49 @@ fn write_then_read_roundtrip_all_types() {
 
     // Note: JSON `"v": null` is indistinguishable from absent `v` in the
     // parser (Option<OmiValue>), so OmiValue::Null is not testable via JSON.
-    let cases: &[(&str, &str, serde_json::Value)] = &[
+    let cases: &[(&str, &str, OmiValue, serde_json::Value)] = &[
         (
             r#"{"omi":"1.0","ttl":10,"write":{"path":"/T/Str","v":"hello"}}"#,
             "/T/Str",
-            serde_json::json!("hello"),
+            OmiValue::Str("hello".into()),
+            json!("hello"),
         ),
         (
             r#"{"omi":"1.0","ttl":10,"write":{"path":"/T/Num","v":3.14}}"#,
             "/T/Num",
-            serde_json::json!(3.14),
+            OmiValue::Number(3.14),
+            json!(3.14),
         ),
         (
             r#"{"omi":"1.0","ttl":10,"write":{"path":"/T/Bool","v":true}}"#,
             "/T/Bool",
-            serde_json::json!(true),
+            OmiValue::Bool(true),
+            json!(true),
         ),
     ];
 
-    for (write_json, _, _) in cases {
+    for (write_json, _, _, _) in cases {
         parse_and_process(&mut e, write_json);
     }
 
     // Read each back and verify the value survives the full round-trip
-    for (_, path, expected) in cases {
+    for (_, path, expected_omi, expected_json) in cases {
         let read_json = format!(
             r#"{{"omi":"1.0","ttl":0,"read":{{"path":"{}","newest":1}}}}"#,
             path
         );
         let resp = parse_and_process(&mut e, &read_json);
         assert_eq!(response_status(&resp), 200);
-        let values = extract_single_result(&resp)["values"].as_array().unwrap();
+        let values = extract_values(&resp);
         assert_eq!(
-            values[0]["v"], *expected,
+            values[0].v, *expected_omi,
             "round-trip mismatch for path {}",
             path
         );
 
         // Also verify via serialization round-trip
         let rt = roundtrip_response_json(&resp);
-        assert_eq!(rt["result"]["values"][0]["v"], *expected);
+        assert_eq!(rt["result"]["values"][0]["v"], *expected_json);
     }
 }
 
@@ -434,8 +438,7 @@ fn subscribe_then_poll_interval() {
     let msg = OmiMessage::parse(&poll_json).expect("poll JSON should parse");
     let (resp, _) = e.process(msg, 6.0, None);
     assert_eq!(response_status(&resp), 200);
-    let result = extract_single_result(&resp);
-    assert_eq!(result["path"], "/System/FreeHeap");
+    assert_eq!(extract_read_path(&resp), "/System/FreeHeap");
 }
 
 #[test]

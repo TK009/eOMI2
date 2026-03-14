@@ -91,17 +91,17 @@ fn write_triggers_onwrite_not_onread() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/WriteDst","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 42.0, "onwrite should have fired on write");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(42.0), "onwrite should have fired on write");
 
     // /Dev/ReadDst should still be 0 (onread should NOT have fired)
     let resp = parse_and_process(
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/ReadDst","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 0.0,
+        values[0].v, OmiValue::Number(0.0),
         "onread should NOT fire during a write operation"
     );
 }
@@ -139,9 +139,9 @@ fn read_triggers_onread_not_onwrite() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 200.0,
+        values[0].v, OmiValue::Number(200.0),
         "onread should transform the read value (100 * 2 = 200)"
     );
 
@@ -150,9 +150,9 @@ fn read_triggers_onread_not_onwrite() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/WriteDst","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 0.0,
+        values[0].v, OmiValue::Number(0.0),
         "onwrite should NOT fire during a read operation"
     );
 }
@@ -196,17 +196,17 @@ fn both_scripts_operate_independently() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Log","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 25.0, "onwrite should log the raw value");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(25.0), "onwrite should log the raw value");
 
     // Read /Dev/Sensor — onread transforms to Fahrenheit, onwrite does NOT fire
     let resp = parse_and_process(
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Sensor","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 77.0,
+        values[0].v, OmiValue::Number(77.0),
         "onread should transform 25°C to 77°F"
     );
 
@@ -215,9 +215,9 @@ fn both_scripts_operate_independently() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Log","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 25.0,
+        values[0].v, OmiValue::Number(25.0),
         "onwrite should not have fired again during read"
     );
 }
@@ -252,9 +252,9 @@ fn broken_onwrite_does_not_affect_onread() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 60.0,
+        values[0].v, OmiValue::Number(60.0),
         "onread should work despite broken onwrite (30 * 2 = 60)"
     );
 }
@@ -297,9 +297,9 @@ fn broken_onread_does_not_affect_onwrite() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Dst","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 88.0,
+        values[0].v, OmiValue::Number(88.0),
         "onwrite should work despite broken onread"
     );
 
@@ -309,9 +309,9 @@ fn broken_onread_does_not_affect_onwrite() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 88.0,
+        values[0].v, OmiValue::Number(88.0),
         "broken onread should fall back to raw value"
     );
 }
@@ -337,17 +337,17 @@ fn onread_does_not_mutate_stored_value() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 30.0, "first read: 10 * 3 = 30");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(30.0), "first read: 10 * 3 = 30");
 
     // Second read — should still get 30 (not 90), proving storage is unchanged
     let resp = parse_and_process(
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 30.0,
+        values[0].v, OmiValue::Number(30.0),
         "second read should still be 30 (not 90) — onread must not mutate storage"
     );
 }
@@ -394,17 +394,17 @@ fn onwrite_persists_side_effects_onread_is_display_only() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Accumulator","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 8.0, "accumulator should be 5+3=8");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(8.0), "accumulator should be 5+3=8");
 
     // Read /Dev/Counter — onread adds display offset (3 + 1000 = 1003)
     let resp = parse_and_process(
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Counter","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 1003.0,
+        values[0].v, OmiValue::Number(1003.0),
         "onread should add display offset (3 + 1000 = 1003)"
     );
 
@@ -413,9 +413,9 @@ fn onwrite_persists_side_effects_onread_is_display_only() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Accumulator","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 8.0,
+        values[0].v, OmiValue::Number(8.0),
         "accumulator should still be 8 — reads must not trigger onwrite"
     );
 }
@@ -471,17 +471,17 @@ fn tree_write_with_both_scripts() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dual/Mirror","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 7.0, "onwrite should cascade value to mirror");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(7.0), "onwrite should cascade value to mirror");
 
     // Read /Dual/Sensor — onread transforms (7 * 10 = 70)
     let resp = parse_and_process(
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dual/Sensor","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 70.0,
+        values[0].v, OmiValue::Number(70.0),
         "onread should transform read value (7 * 10 = 70)"
     );
 }

@@ -85,8 +85,8 @@ fn read_value_suffix_returns_raw_number() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Result","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 22.5);
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(22.5));
 }
 
 #[test]
@@ -121,8 +121,8 @@ fn read_value_suffix_returns_raw_string() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Result","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], "OK");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Str("OK".into()));
 }
 
 #[test]
@@ -156,8 +156,8 @@ fn read_value_suffix_returns_raw_boolean() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Result","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], true);
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Bool(true));
 }
 
 // ===========================================================================
@@ -200,8 +200,8 @@ fn read_without_suffix_returns_element_structure() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Result","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 22.5);
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(22.5));
 }
 
 #[test]
@@ -242,9 +242,9 @@ fn element_structure_has_values_array() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Len","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     // Should have 2 values in the history
-    assert_eq!(values[0]["v"], 2.0);
+    assert_eq!(values[0].v, OmiValue::Number(2.0));
 }
 
 // ===========================================================================
@@ -279,8 +279,8 @@ fn read_nonexistent_path_returns_null() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Result","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 1.0, "readItem of nonexistent path should return null");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(1.0), "readItem of nonexistent path should return null");
 }
 
 #[test]
@@ -310,8 +310,8 @@ fn read_nonexistent_path_with_value_suffix_returns_null() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Result","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 1.0);
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(1.0));
 }
 
 // ===========================================================================
@@ -351,8 +351,8 @@ fn read_non_readable_item_returns_null() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Result","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 1.0, "non-readable item should return null");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(1.0), "non-readable item should return null");
 }
 
 #[test]
@@ -388,8 +388,8 @@ fn read_non_readable_item_with_value_suffix_returns_null() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Result","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 1.0);
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(1.0));
 }
 
 // ===========================================================================
@@ -440,8 +440,8 @@ fn read_empty_infoitem_returns_null() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Result","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 1.0, "empty InfoItem should return null");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(1.0), "empty InfoItem should return null");
 }
 
 // ===========================================================================
@@ -481,8 +481,8 @@ fn read_object_path_returns_null() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Test/Result","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 1.0, "Object path should return null");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(1.0), "Object path should return null");
 }
 
 // ===========================================================================
@@ -525,8 +525,8 @@ fn infoitem_named_value_takes_precedence() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Test/Result","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 99.0, "InfoItem named 'value' should be returned as element");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(99.0), "InfoItem named 'value' should be returned as element");
 }
 
 #[test]
@@ -564,8 +564,8 @@ fn infoitem_named_value_raw_via_double_value_suffix() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Test/Result","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 99.0, "/Dev/value/value should return raw 99");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(99.0), "/Dev/value/value should return raw 99");
 }
 
 // ===========================================================================
@@ -608,8 +608,8 @@ fn read_after_write_consistency() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Result","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 77.0, "read-after-write in same script sees the pending write");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(77.0), "read-after-write in same script sees the pending write");
 }
 
 #[test]
@@ -657,9 +657,9 @@ fn read_after_write_via_cascading_sees_updated_value() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Result","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(
-        values[0]["v"], 77.0,
+        values[0].v, OmiValue::Number(77.0),
         "cascaded script should see the updated value from prior deferred write"
     );
 }
@@ -742,8 +742,8 @@ fn bounded_reads_succeed_normally() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Sum","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 50.0, "10 reads of value 5 should sum to 50");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(50.0), "10 reads of value 5 should sum to 50");
 }
 
 // ===========================================================================
@@ -785,8 +785,8 @@ fn thermostat_scenario() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/HVAC/Heater","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], true, "heater should be ON when sensor < target");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Bool(true), "heater should be ON when sensor < target");
 
     // Sensor reads 25°C (above target 22°C) → heater OFF
     parse_and_process(
@@ -797,8 +797,8 @@ fn thermostat_scenario() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/HVAC/Heater","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], false, "heater should be OFF when sensor > target");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Bool(false), "heater should be OFF when sensor > target");
 }
 
 // ===========================================================================
@@ -832,8 +832,8 @@ fn read_no_args_returns_null() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Result","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 1.0, "readItem() with no args should return null");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(1.0), "readItem() with no args should return null");
 }
 
 // ===========================================================================
@@ -867,8 +867,8 @@ fn read_empty_string_returns_null() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Result","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 1.0, "readItem('') should return null");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(1.0), "readItem('') should return null");
 }
 
 // ===========================================================================
@@ -903,6 +903,6 @@ fn read_invalid_path_returns_null() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Result","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 1.0, "readItem('/value') should return null");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(1.0), "readItem('/value') should return null");
 }

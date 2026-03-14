@@ -23,7 +23,7 @@ use self::delete::DeleteOp;
 use self::cancel::CancelOp;
 use self::response::ResponseBody;
 pub use self::write::WriteItem;
-pub use self::response::{StatusCode, ResponseResult, ItemStatus, OmiResponse};
+pub use self::response::{StatusCode, ResponseResult, ResultPayload, ItemStatus, OmiResponse};
 pub use self::subscriptions::{Delivery, SessionId};
 
 #[derive(Debug, Clone, PartialEq)]

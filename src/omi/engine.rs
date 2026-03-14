@@ -201,13 +201,7 @@ impl Engine {
                         }
                     }
                 }
-                match serde_json::to_value(&values) {
-                    Ok(val) => OmiResponse::ok(serde_json::json!({
-                        "path": path,
-                        "values": val,
-                    })),
-                    Err(e) => OmiResponse::error(&e.to_string()),
-                }
+                OmiResponse::ok_read_result(path.to_string(), values)
             }
             Ok(PathTarget::Object(_)) | Ok(PathTarget::Root(_)) => {
                 match self.tree.read(path, op.depth.map(|d| d as usize)) {
@@ -233,7 +227,7 @@ impl Engine {
             DeliveryTarget::Poll
         };
         match self.subscriptions.create(path, interval, target, ttl as f64, now) {
-            Ok(rid) => OmiResponse::ok_with_rid(rid, serde_json::json!(null)),
+            Ok(rid) => OmiResponse::ok_with_rid_null(rid),
             Err(e) => OmiResponse::bad_request(e),
         }
     }
@@ -242,13 +236,7 @@ impl Engine {
         let rid = op.rid.as_deref().unwrap_or("");
         match self.subscriptions.poll(rid, now) {
             PollResult::Ok { path, values } => {
-                match serde_json::to_value(&values) {
-                    Ok(val) => OmiResponse::ok(serde_json::json!({
-                        "path": path,
-                        "values": val,
-                    })),
-                    Err(e) => OmiResponse::error(&e.to_string()),
-                }
+                OmiResponse::ok_read_result(path, values)
             }
             PollResult::NotPollable => OmiResponse::bad_request(&format!(
                 "Subscription '{}' is not pollable",
@@ -317,7 +305,7 @@ impl Engine {
                         for p in &item_paths {
                             deliveries.extend(self.notify_write_event(p, now));
                         }
-                        (OmiResponse::ok(serde_json::json!(null)), deliveries)
+                        (OmiResponse::ok_null(), deliveries)
                     }
                     Err(e) => (Self::tree_error_to_response(e), Vec::new()),
                 }
@@ -380,7 +368,7 @@ impl Engine {
                 } else if created {
                     OmiResponse::created()
                 } else {
-                    OmiResponse::ok(serde_json::json!(null))
+                    OmiResponse::ok_null()
                 };
                 (response, deliveries)
             }
@@ -871,7 +859,7 @@ impl Engine {
 
     fn process_delete(&mut self, op: DeleteOp) -> OmiMessage {
         match self.tree.delete(&op.path) {
-            Ok(()) => OmiResponse::ok(serde_json::json!(null)),
+            Ok(()) => OmiResponse::ok_null(),
             Err(e) => Self::tree_error_to_response(e),
         }
     }
@@ -880,7 +868,7 @@ impl Engine {
 
     fn process_cancel(&mut self, op: CancelOp) -> OmiMessage {
         self.subscriptions.cancel(&op.rid);
-        OmiResponse::ok(serde_json::json!(null))
+        OmiResponse::ok_null()
     }
 }
 
@@ -894,7 +882,7 @@ impl Default for Engine {
 mod tests {
     use super::*;
     use crate::odf::{InfoItem, Object, OmiValue};
-    use super::super::response::ResponseResult;
+    use super::super::response::{ResponseResult, ResultPayload};
 
     // --- Helpers ---
 
@@ -1055,11 +1043,11 @@ mod tests {
         let resp = e.process(read_msg("/Sensor1/Temperature"), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(val) => {
-                assert_eq!(val["path"], "/Sensor1/Temperature");
-                assert_eq!(val["values"].as_array().unwrap().len(), 3);
+            ResponseResult::Single(ResultPayload::ReadValues { path, values }) => {
+                assert_eq!(path, "/Sensor1/Temperature");
+                assert_eq!(values.len(), 3);
             }
-            _ => panic!("expected Single"),
+            _ => panic!("expected Single(ReadValues)"),
         }
     }
 
@@ -1069,12 +1057,11 @@ mod tests {
         let resp = e.process(read_with("/Sensor1/Temperature", Some(1), None, None, None, None), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(val) => {
-                let values = val["values"].as_array().unwrap();
+            ResponseResult::Single(ResultPayload::ReadValues { path: _, values }) => {
                 assert_eq!(values.len(), 1);
-                assert_eq!(values[0]["v"], 22.0);
+                assert_eq!(values[0].v, OmiValue::Number(22.0));
             }
-            _ => panic!("expected Single"),
+            _ => panic!("expected Single(ReadValues)"),
         }
     }
 
@@ -1084,12 +1071,11 @@ mod tests {
         let resp = e.process(read_with("/Sensor1/Temperature", None, Some(1), None, None, None), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(val) => {
-                let values = val["values"].as_array().unwrap();
+            ResponseResult::Single(ResultPayload::ReadValues { path: _, values }) => {
                 assert_eq!(values.len(), 1);
-                assert_eq!(values[0]["v"], 20.0);
+                assert_eq!(values[0].v, OmiValue::Number(20.0));
             }
-            _ => panic!("expected Single"),
+            _ => panic!("expected Single(ReadValues)"),
         }
     }
 
@@ -1101,12 +1087,11 @@ mod tests {
         ), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(val) => {
-                let values = val["values"].as_array().unwrap();
+            ResponseResult::Single(ResultPayload::ReadValues { path: _, values }) => {
                 assert_eq!(values.len(), 1);
-                assert_eq!(values[0]["v"], 21.0);
+                assert_eq!(values[0].v, OmiValue::Number(21.0));
             }
-            _ => panic!("expected Single"),
+            _ => panic!("expected Single(ReadValues)"),
         }
     }
 
@@ -1116,11 +1101,11 @@ mod tests {
         let resp = e.process(read_msg("/Sensor1"), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(val) => {
+            ResponseResult::Single(ResultPayload::Json(val)) => {
                 assert_eq!(val["id"], "Sensor1");
                 assert!(val["items"]["Temperature"].is_object());
             }
-            _ => panic!("expected Single"),
+            _ => panic!("expected Single(Json)"),
         }
     }
 
@@ -1130,10 +1115,10 @@ mod tests {
         let resp = e.process(read_msg("/"), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(val) => {
+            ResponseResult::Single(ResultPayload::Json(val)) => {
                 assert!(val["Sensor1"].is_object());
             }
-            _ => panic!("expected Single"),
+            _ => panic!("expected Single(Json)"),
         }
     }
 
@@ -1143,11 +1128,11 @@ mod tests {
         let resp = e.process(read_with("/Sensor1", None, None, None, None, Some(0)), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(val) => {
+            ResponseResult::Single(ResultPayload::Json(val)) => {
                 assert_eq!(val["id"], "Sensor1");
                 assert!(val.get("items").is_none());
             }
-            _ => panic!("expected Single"),
+            _ => panic!("expected Single(Json)"),
         }
     }
 
@@ -1211,11 +1196,11 @@ mod tests {
         let resp = e.process(poll_msg(rid), 1001.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(val) => {
-                assert_eq!(val["path"], "/Sensor1/Temperature");
-                assert_eq!(val["values"].as_array().unwrap().len(), 0);
+            ResponseResult::Single(ResultPayload::ReadValues { path, values }) => {
+                assert_eq!(path, "/Sensor1/Temperature");
+                assert_eq!(values.len(), 0);
             }
-            _ => panic!("expected Single"),
+            _ => panic!("expected Single(ReadValues)"),
         }
     }
 
@@ -1387,11 +1372,11 @@ mod tests {
         let resp = e.process(read_with("/Dev/Sensor", Some(1), None, None, None, None), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(val) => {
-                let values = val["values"].as_array().unwrap();
-                assert_eq!(values[0]["v"], 42.0);
+            ResponseResult::Single(ResultPayload::ReadValues { path: _, values }) => {
+                assert_eq!(values.len(), 1);
+                assert_eq!(values[0].v, OmiValue::Number(42.0));
             }
-            _ => panic!("expected Single"),
+            _ => panic!("expected Single(ReadValues)"),
         }
     }
 
@@ -1411,7 +1396,7 @@ mod tests {
     #[test]
     fn response_message_rejected() {
         let mut e = Engine::new();
-        let msg = OmiResponse::ok(serde_json::json!(null));
+        let msg = OmiResponse::ok_null();
         let resp = e.process(msg, 0.0, None);
         assert_eq!(status(&resp), 400);
     }
@@ -1452,10 +1437,10 @@ mod tests {
         let resp = e.process(poll_msg(&rid), 1001.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(val) => {
-                assert_eq!(val["values"].as_array().unwrap().len(), 0);
+            ResponseResult::Single(ResultPayload::ReadValues { path: _, values }) => {
+                assert_eq!(values.len(), 0);
             }
-            _ => panic!("expected Single"),
+            _ => panic!("expected Single(ReadValues)"),
         }
 
         // Tick at 1006 (due at 1005) — buffers current value
@@ -1469,13 +1454,12 @@ mod tests {
         let resp = e.process(poll_msg(&rid), 1007.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(val) => {
-                assert_eq!(val["path"], "/Sensor1/Temperature");
-                let values = val["values"].as_array().unwrap();
+            ResponseResult::Single(ResultPayload::ReadValues { path, values }) => {
+                assert_eq!(path, "/Sensor1/Temperature");
                 assert_eq!(values.len(), 1);
-                assert_eq!(values[0]["v"], 22.0);
+                assert_eq!(values[0].v, OmiValue::Number(22.0));
             }
-            _ => panic!("expected Single"),
+            _ => panic!("expected Single(ReadValues)"),
         }
     }
 
@@ -1499,12 +1483,11 @@ mod tests {
         let poll = e.process(poll_msg(&rid), 1003.0, None);
         assert_eq!(status(&poll), 200);
         match body(&poll).result.as_ref().unwrap() {
-            ResponseResult::Single(val) => {
-                let values = val["values"].as_array().unwrap();
+            ResponseResult::Single(ResultPayload::ReadValues { path: _, values }) => {
                 assert_eq!(values.len(), 1);
-                assert_eq!(values[0]["v"], 42.0);
+                assert_eq!(values[0].v, OmiValue::Number(42.0));
             }
-            _ => panic!("expected Single"),
+            _ => panic!("expected Single(ReadValues)"),
         }
     }
 

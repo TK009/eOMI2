@@ -52,10 +52,9 @@ fn poll_sub_create_write_poll() {
     let resp = process_at(&mut e, &poll_json, BASE_TIME + 2.0, None);
     assert_eq!(response_status(&resp), 200);
 
-    let result = extract_single_result(&resp);
-    let polled_values = result["values"].as_array().expect("expected values array");
+    let polled_values = extract_values(&resp);
     assert_eq!(polled_values.len(), 1);
-    assert_eq!(polled_values[0]["v"], 23.5);
+    assert_eq!(polled_values[0].v, OmiValue::Number(23.5));
 }
 
 #[test]
@@ -83,13 +82,13 @@ fn poll_sub_drain_clears_buffer() {
     // First poll: returns 1 value
     let resp = process_at(&mut e, &poll_json, BASE_TIME + 2.0, None);
     assert_eq!(response_status(&resp), 200);
-    let polled = extract_single_result(&resp)["values"].as_array().unwrap();
+    let polled = extract_values(&resp);
     assert_eq!(polled.len(), 1);
 
     // Second poll: buffer drained, returns empty
     let resp = process_at(&mut e, &poll_json, BASE_TIME + 3.0, None);
     assert_eq!(response_status(&resp), 200);
-    let polled = extract_single_result(&resp)["values"].as_array().unwrap();
+    let polled = extract_values(&resp);
     assert_eq!(polled.len(), 0);
 }
 
@@ -120,7 +119,7 @@ fn poll_sub_multiple_values() {
     let poll_json = format!(r#"{{"omi":"1.0","ttl":0,"read":{{"rid":"{}"}}}}"#, rid);
     let resp = process_at(&mut e, &poll_json, BASE_TIME + 5.0, None);
     assert_eq!(response_status(&resp), 200);
-    let polled = extract_single_result(&resp)["values"].as_array().unwrap();
+    let polled = extract_values(&resp);
     assert_eq!(polled.len(), 3);
 }
 
@@ -254,9 +253,9 @@ fn interval_sub_fires_on_tick() {
     let poll_json = format!(r#"{{"omi":"1.0","ttl":0,"read":{{"rid":"{}"}}}}"#, rid);
     let resp = process_at(&mut e, &poll_json, BASE_TIME + 11.0, None);
     assert_eq!(response_status(&resp), 200);
-    let polled = extract_single_result(&resp)["values"].as_array().unwrap();
+    let polled = extract_values(&resp);
     assert_eq!(polled.len(), 1);
-    assert_eq!(polled[0]["v"], 22.0);
+    assert_eq!(polled[0].v, OmiValue::Number(22.0));
 }
 
 #[test]
@@ -285,7 +284,7 @@ fn interval_sub_skips_before_due() {
     let poll_json = format!(r#"{{"omi":"1.0","ttl":0,"read":{{"rid":"{}"}}}}"#, rid);
     let resp = process_at(&mut e, &poll_json, BASE_TIME + 6.0, None);
     assert_eq!(response_status(&resp), 200);
-    let polled = extract_single_result(&resp)["values"].as_array().unwrap();
+    let polled = extract_values(&resp);
     assert!(polled.is_empty(), "interval not yet due, poll should be empty");
 }
 
@@ -539,8 +538,7 @@ fn write_triggers_poll_sub_event() {
     let poll_json = format!(r#"{{"omi":"1.0","ttl":0,"read":{{"rid":"{}"}}}}"#, rid);
     let resp = process_at(&mut e, &poll_json, BASE_TIME + 2.0, None);
     assert_eq!(response_status(&resp), 200);
-    let result = extract_single_result(&resp);
-    let polled = result["values"].as_array().expect("expected values array");
+    let polled = extract_values(&resp);
     assert_eq!(polled.len(), 1);
-    assert_eq!(polled[0]["v"], "hello");
+    assert_eq!(polled[0].v, OmiValue::Str("hello".into()));
 }

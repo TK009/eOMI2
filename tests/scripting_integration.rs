@@ -81,8 +81,8 @@ fn script_reads_written_value() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Dst","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 42.0);
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(42.0));
 
     // JSON round-trip
     let rt = roundtrip_response_json(&resp);
@@ -127,8 +127,8 @@ fn script_triggers_cascading_write() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/TempF","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 212.0);
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(212.0));
 
     // JSON round-trip
     let rt = roundtrip_response_json(&resp);
@@ -165,8 +165,8 @@ fn script_error_does_not_block_write() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 7.0);
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(7.0));
 
     // JSON round-trip
     let rt = roundtrip_response_json(&resp);
@@ -216,9 +216,9 @@ fn cascading_depth_limit_stops_chain() {
         );
         let resp = parse_and_process(&mut e, &json);
         assert_eq!(response_status(&resp), 200);
-        let values = extract_single_result(&resp)["values"].as_array().unwrap();
+        let values = extract_values(&resp);
         assert_eq!(
-            values[0]["v"], 99.0,
+            values[0].v, OmiValue::Number(99.0),
             "/Chain/L{i} should have been updated (within depth limit)"
         );
     }
@@ -231,9 +231,9 @@ fn cascading_depth_limit_stops_chain() {
         );
         let resp = parse_and_process(&mut e, &json);
         assert_eq!(response_status(&resp), 200);
-        let values = extract_single_result(&resp)["values"].as_array().unwrap();
+        let values = extract_values(&resp);
         assert_eq!(
-            values[0]["v"], -1.0,
+            values[0].v, OmiValue::Number(-1.0),
             "/Chain/L{i} should NOT have been updated (beyond depth limit)"
         );
     }
@@ -284,8 +284,8 @@ fn tree_write_with_onwrite_meta() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Script/Dst","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 42.0);
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(42.0));
 }
 
 // ===========================================================================
@@ -328,8 +328,8 @@ fn op_limit_script_returns_warning_in_response() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Item","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 42.0);
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(42.0));
 }
 
 // ===========================================================================
@@ -404,24 +404,24 @@ fn cascading_timeout_preserves_earlier_writes() {
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Chain/A","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 77.0, "/Chain/A should be updated");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(77.0), "/Chain/A should be updated");
 
     // /Chain/B should also have the value (write happened before script ran)
     let resp = parse_and_process(
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Chain/B","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 77.0, "/Chain/B should be updated (write before script)");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(77.0), "/Chain/B should be updated (write before script)");
 
     // /Chain/C should NOT have been updated (B's script failed before writing to C)
     let resp = parse_and_process(
         &mut e,
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Chain/C","newest":1}}"#,
     );
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], -1.0, "/Chain/C should retain initial value");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(-1.0), "/Chain/C should retain initial value");
 }
 
 // ===========================================================================
@@ -463,8 +463,8 @@ fn write_item_with_hex_encoding_succeeds() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/TX","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], "Hello");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Str("Hello".into()));
 }
 
 #[test]
@@ -497,8 +497,8 @@ fn write_item_with_base64_encoding_succeeds() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/TX","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], "Hello");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Str("Hello".into()));
 }
 
 #[test]
@@ -531,8 +531,8 @@ fn write_item_with_string_encoding_succeeds() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/TX","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], "hello");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Str("hello".into()));
 }
 
 #[test]
@@ -566,8 +566,8 @@ fn write_item_without_encoding_still_works() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/Dst","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], 99.0);
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Number(99.0));
 }
 
 #[test]
@@ -601,8 +601,8 @@ fn write_item_with_unknown_encoding_succeeds() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/TX","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], "data");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Str("data".into()));
 }
 
 #[test]
@@ -636,8 +636,8 @@ fn write_item_with_non_object_third_arg_succeeds() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/Dev/TX","newest":1}}"#,
     );
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
-    assert_eq!(values[0]["v"], "data");
+    let values = extract_values(&resp);
+    assert_eq!(values[0].v, OmiValue::Str("data".into()));
 }
 
 // ===========================================================================

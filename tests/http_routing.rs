@@ -15,7 +15,7 @@ use reconfigurable_device::odf::OmiValue;
 use reconfigurable_device::omi::{Engine, OmiMessage};
 use reconfigurable_device::pages::PageStore;
 
-use common::{engine_with_sensor_tree, extract_single_result, response_status};
+use common::{engine_with_sensor_tree, extract_json_result, extract_values, response_status};
 
 /// Chain the full REST GET flow: URI → parse → build read op → engine.process.
 fn get_omi(engine: &mut Engine, uri: &str) -> OmiMessage {
@@ -42,7 +42,7 @@ fn get_omi_root() {
     let mut e = engine_with_sensor_tree();
     let resp = get_omi(&mut e, "/omi/");
     assert_eq!(response_status(&resp), 200);
-    let result = extract_single_result(&resp);
+    let result = extract_json_result(&resp);
     assert!(result["System"].is_object(), "root should contain System");
 }
 
@@ -51,7 +51,7 @@ fn get_omi_object() {
     let mut e = engine_with_sensor_tree();
     let resp = get_omi(&mut e, "/omi/System/");
     assert_eq!(response_status(&resp), 200);
-    let result = extract_single_result(&resp);
+    let result = extract_json_result(&resp);
     assert_eq!(result["id"], "System");
     assert!(result["items"]["FreeHeap"].is_object());
 }
@@ -61,7 +61,7 @@ fn get_omi_infoitem() {
     let mut e = engine_with_sensor_tree();
     let resp = get_omi(&mut e, "/omi/System/FreeHeap");
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert!(values.is_empty());
 }
 
@@ -82,11 +82,12 @@ fn get_omi_with_query_params() {
 
     let resp = get_omi(&mut e, "/omi/System/FreeHeap?newest=3&depth=1");
     assert_eq!(response_status(&resp), 200);
-    let values = extract_single_result(&resp)["values"].as_array().unwrap();
+    let values = extract_values(&resp);
     assert_eq!(values.len(), 3);
     // Verify the 3 newest values were returned (newest-first order).
-    let nums: Vec<f64> = values.iter().map(|v| v["v"].as_f64().unwrap()).collect();
-    assert_eq!(nums, vec![25.0, 24.0, 23.0]);
+    assert_eq!(values[0].v, OmiValue::Number(25.0));
+    assert_eq!(values[1].v, OmiValue::Number(24.0));
+    assert_eq!(values[2].v, OmiValue::Number(23.0));
 }
 
 #[test]

@@ -3,7 +3,8 @@
 #![allow(dead_code)]
 
 use reconfigurable_device::device;
-use reconfigurable_device::omi::{Engine, ItemStatus, OmiMessage, Operation, ResponseResult, SessionId};
+use reconfigurable_device::odf;
+use reconfigurable_device::omi::{Engine, ItemStatus, OmiMessage, Operation, ResponseResult, ResultPayload, SessionId};
 
 /// Build an engine pre-populated with the real System/FreeHeap sensor tree.
 pub fn engine_with_sensor_tree() -> Engine {
@@ -39,14 +40,38 @@ pub fn response_status(resp: &OmiMessage) -> u16 {
     }
 }
 
-/// Extract the `Single` result value from a 200 response.
-pub fn extract_single_result(resp: &OmiMessage) -> &serde_json::Value {
+/// Extract the `Single` result payload from a 200 response.
+pub fn extract_single_result(resp: &OmiMessage) -> &ResultPayload {
     match &resp.operation {
         Operation::Response(body) => match &body.result {
             Some(ResponseResult::Single(v)) => v,
             other => panic!("expected Single result, got {:?}", other),
         },
         _ => panic!("expected Response"),
+    }
+}
+
+/// Extract the read values from a ReadValues response result.
+pub fn extract_values(resp: &OmiMessage) -> &[odf::Value] {
+    match extract_single_result(resp) {
+        ResultPayload::ReadValues { values, .. } => values,
+        other => panic!("expected ReadValues, got {:?}", other),
+    }
+}
+
+/// Extract the read path from a ReadValues response result.
+pub fn extract_read_path(resp: &OmiMessage) -> &str {
+    match extract_single_result(resp) {
+        ResultPayload::ReadValues { path, .. } => path,
+        other => panic!("expected ReadValues, got {:?}", other),
+    }
+}
+
+/// Extract the JSON result from a Json response result (object/tree reads).
+pub fn extract_json_result(resp: &OmiMessage) -> &serde_json::Value {
+    match extract_single_result(resp) {
+        ResultPayload::Json(v) => v,
+        other => panic!("expected Json result, got {:?}", other),
     }
 }
 

@@ -12,6 +12,7 @@ use common::*;
 use reconfigurable_device::odf::OmiValue;
 use reconfigurable_device::omi::error::ParseError;
 use reconfigurable_device::omi::{Engine, OmiMessage};
+#[cfg(feature = "json")]
 use serde_json::json;
 
 // ---------------------------------------------------------------------------
@@ -25,6 +26,7 @@ use serde_json::json;
 // ===========================================================================
 
 #[test]
+#[cfg(feature = "json")]
 fn read_root_returns_objects() {
     let mut e = engine_with_sensor_tree();
     let resp = parse_and_process(&mut e, r#"{"omi":"1.0","ttl":0,"read":{"path":"/"}}"#);
@@ -39,6 +41,7 @@ fn read_root_returns_objects() {
 }
 
 #[test]
+#[cfg(feature = "json")]
 fn read_object_returns_items() {
     let mut e = engine_with_sensor_tree();
     let resp = parse_and_process(&mut e, r#"{"omi":"1.0","ttl":0,"read":{"path":"/System"}}"#);
@@ -77,9 +80,12 @@ fn read_infoitem_with_values() {
     assert_eq!(values.len(), 1);
     assert_eq!(values[0].v, OmiValue::Number(23.5));
 
-    // JSON round-trip
-    let rt = roundtrip_response_json(&resp);
-    assert_eq!(rt["result"]["values"][0]["v"], 23.5);
+    // JSON round-trip (serde-only)
+    #[cfg(feature = "json")]
+    {
+        let rt = roundtrip_response_json(&resp);
+        assert_eq!(rt["result"]["values"][0]["v"], 23.5);
+    }
 }
 
 #[test]
@@ -130,6 +136,7 @@ fn read_time_range() {
 }
 
 #[test]
+#[cfg(feature = "json")]
 fn read_with_depth() {
     let mut e = engine_with_sensor_tree();
     let resp = parse_and_process(
@@ -144,6 +151,7 @@ fn read_with_depth() {
 }
 
 #[test]
+#[cfg(feature = "json")]
 fn read_with_depth_includes_items() {
     let mut e = engine_with_sensor_tree();
     let resp = parse_and_process(
@@ -167,8 +175,11 @@ fn read_nonexistent_path() {
     assert_eq!(response_status(&resp), 404);
 
     // Verify 404 survives JSON serialization round-trip
-    let rt = roundtrip_response_json(&resp);
-    assert_eq!(rt["status"], 404);
+    #[cfg(feature = "json")]
+    {
+        let rt = roundtrip_response_json(&resp);
+        assert_eq!(rt["status"], 404);
+    }
 }
 
 // ===========================================================================
@@ -247,13 +258,17 @@ fn write_batch_mixed_results() {
     assert_eq!(batch[1].status, 403); // sensor item not writable
 
     // Verify batch survives JSON round-trip
-    let rt = roundtrip_response_json(&resp);
-    let items = rt["result"].as_array().unwrap();
-    assert_eq!(items[0]["status"], 201);
-    assert_eq!(items[1]["status"], 403);
+    #[cfg(feature = "json")]
+    {
+        let rt = roundtrip_response_json(&resp);
+        let items = rt["result"].as_array().unwrap();
+        assert_eq!(items[0]["status"], 201);
+        assert_eq!(items[1]["status"], 403);
+    }
 }
 
 #[test]
+#[cfg(feature = "json")]
 fn write_tree_merges_objects() {
     let mut e = engine_with_sensor_tree();
     let resp = parse_and_process(
@@ -287,6 +302,7 @@ fn write_tree_merges_objects() {
 }
 
 #[test]
+#[cfg(feature = "json")]
 fn write_then_read_roundtrip_all_types() {
     let mut e = Engine::new();
 
@@ -397,8 +413,11 @@ fn subscribe_poll_returns_rid() {
     assert!(!rid.is_empty(), "subscription should return a non-empty rid");
 
     // Verify rid survives JSON round-trip
-    let rt = roundtrip_response_json(&resp);
-    assert_eq!(rt["rid"], rid);
+    #[cfg(feature = "json")]
+    {
+        let rt = roundtrip_response_json(&resp);
+        assert_eq!(rt["rid"], rid);
+    }
 }
 
 #[test]

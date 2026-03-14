@@ -9,7 +9,7 @@
 //! The `serde_json` dev-dependency is available for constructing expected values
 //! and cross-checking serializer output.
 
-#![cfg(feature = "lite-json")]
+#![cfg(all(feature = "lite-json", feature = "json"))]
 
 use std::collections::BTreeMap;
 

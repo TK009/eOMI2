@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use serde::ser::SerializeMap;
 
 use crate::odf::{OmiValue, Object};
+#[cfg(feature = "json")]
 use super::error::ParseError;
 
 /// Maximum nesting depth for Object trees in write operations.

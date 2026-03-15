@@ -25,7 +25,9 @@ mod imp {
     pub fn heap() -> Option<MemStat> {
         unsafe {
             let free = esp_idf_svc::sys::esp_get_free_heap_size();
-            let total = esp_idf_svc::sys::esp_get_heap_size();
+            let total = esp_idf_svc::sys::heap_caps_get_total_size(
+                esp_idf_svc::sys::MALLOC_CAP_DEFAULT,
+            );
             Some(MemStat {
                 free: free as u32,
                 total: total as u32,
@@ -66,6 +68,7 @@ mod imp {
         let mut stats = esp_idf_svc::sys::nvs_stats_t {
             used_entries: 0,
             free_entries: 0,
+            available_entries: 0,
             total_entries: 0,
             namespace_count: 0,
         };

@@ -63,8 +63,9 @@ fn crc32(data: &[u8]) -> u32 {
 /// Decompress gzip data (RFC 1952) back to the original bytes.
 ///
 /// Expects a valid gzip stream: 10-byte header + DEFLATE payload + 8-byte
-/// trailer. Returns `None` if the data is too short or decompression fails.
-pub fn gzip_decompress(data: &[u8]) -> Option<Vec<u8>> {
+/// trailer. Returns `None` if the data is too short, decompression fails,
+/// or the decompressed output exceeds `max_decompressed_size`.
+pub fn gzip_decompress(data: &[u8], max_decompressed_size: usize) -> Option<Vec<u8>> {
     // Minimum: 10 header + 8 trailer = 18
     if data.len() < 18 {
         return None;
@@ -74,7 +75,7 @@ pub fn gzip_decompress(data: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let deflated = &data[10..data.len() - 8];
-    miniz_oxide::inflate::decompress_to_vec(deflated).ok()
+    miniz_oxide::inflate::decompress_to_vec_with_limit(deflated, max_decompressed_size).ok()
 }
 
 #[cfg(test)]
@@ -154,6 +155,32 @@ mod tests {
             compressed[trailer_start + 7],
         ]);
         assert_eq!(stored_size, 0);
+    }
+
+    #[test]
+    fn gzip_decompress_roundtrip() {
+        let original = b"<html><body><h1>Hello World</h1></body></html>";
+        let compressed = gzip_compress(original);
+        let decompressed = gzip_decompress(&compressed, 1024).unwrap();
+        assert_eq!(&decompressed, original);
+    }
+
+    #[test]
+    fn gzip_decompress_rejects_oversized() {
+        let original = b"<html><body><h1>Hello World</h1></body></html>";
+        let compressed = gzip_compress(original);
+        // Limit smaller than actual decompressed size should return None
+        assert!(gzip_decompress(&compressed, 10).is_none());
+    }
+
+    #[test]
+    fn gzip_decompress_exact_limit() {
+        let original = b"hello";
+        let compressed = gzip_compress(original);
+        // Exactly at the limit should succeed
+        assert!(gzip_decompress(&compressed, 5).is_some());
+        // One byte under should fail
+        assert!(gzip_decompress(&compressed, 4).is_none());
     }
 
     #[test]

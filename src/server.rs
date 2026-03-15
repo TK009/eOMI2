@@ -824,7 +824,7 @@ pub fn start_http_server(
                     send_response(req, 200, "OK", &headers, data);
                 } else {
                     // Client doesn't accept gzip — decompress on the fly
-                    match compress::gzip_decompress(data) {
+                    match compress::gzip_decompress(data, 64 * 1024) {
                         Some(plain) => {
                             let headers = [("Content-Type", "text/html")];
                             send_response(req, 200, "OK", &headers, &plain);

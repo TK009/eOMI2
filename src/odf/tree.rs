@@ -302,7 +302,9 @@ impl ObjectTree {
         }
 
         // Walk/create objects for all segments except the last (which is the InfoItem)
-        let item_name = segments.last().unwrap().to_string();
+        let item_name = segments.last()
+            .ok_or_else(|| TreeError::InvalidPath("empty segments".into()))?
+            .to_string();
         let obj_segments = &segments[..segments.len() - 1];
 
         let mut created = false;
@@ -315,14 +317,18 @@ impl ObjectTree {
         }
 
         // Walk into nested objects, creating as needed
-        let mut current = self.objects.get_mut(&first).unwrap();
+        let mut current = self.objects.get_mut(&first).ok_or_else(|| {
+            TreeError::NotFound(format!("Object '{}' not found", first))
+        })?;
         for &seg in &obj_segments[1..] {
             let has_child = current.get_child(seg).is_some();
             if !has_child {
                 current.add_child(Object::new(seg));
                 created = true;
             }
-            current = current.get_child_mut(seg).unwrap();
+            current = current.get_child_mut(seg).ok_or_else(|| {
+                TreeError::NotFound(format!("Child '{}' not found after insert", seg))
+            })?;
         }
 
         // Now current is the parent object. Add or get the InfoItem.
@@ -332,7 +338,9 @@ impl ObjectTree {
             created = true;
         }
 
-        let item = current.get_item_mut(&item_name).unwrap();
+        let item = current.get_item_mut(&item_name).ok_or_else(|| {
+            TreeError::NotFound(format!("Item '{}' not found after insert", item_name))
+        })?;
         item.add_value(v, t);
 
         Ok(created)
@@ -364,13 +372,17 @@ impl ObjectTree {
             self.objects.insert(first.clone(), Object::new(&first));
         }
 
-        let mut current = self.objects.get_mut(&first).unwrap();
+        let mut current = self.objects.get_mut(&first).ok_or_else(|| {
+            TreeError::NotFound(format!("Object '{}' not found", first))
+        })?;
         for &seg in &segments[1..] {
             let has_child = current.get_child(seg).is_some();
             if !has_child {
                 current.add_child(Object::new(seg));
             }
-            current = current.get_child_mut(seg).unwrap();
+            current = current.get_child_mut(seg).ok_or_else(|| {
+                TreeError::NotFound(format!("Child '{}' not found after insert", seg))
+            })?;
         }
 
         // Merge children into the target object
@@ -401,7 +413,9 @@ impl ObjectTree {
         }
 
         // Walk to the parent object
-        let target_name = segments.last().unwrap().to_string();
+        let target_name = segments.last()
+            .ok_or_else(|| TreeError::InvalidPath("empty segments".into()))?
+            .to_string();
         let parent_segments = &segments[..segments.len() - 1];
 
         let first = parent_segments[0].to_string();

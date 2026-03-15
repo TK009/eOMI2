@@ -39,7 +39,7 @@ experimental = ["esp-idf-svc/experimental"]
 log = "0.4"
 esp-idf-svc = { version = "0.51", features = ["critical-section"], optional = true }
 embedded-svc = { version = "0.28", default-features = false, optional = true }
-miniz_oxide = "0.8"
+miniz_oxide = { version = "0.8", optional = true }
 
 [build-dependencies]
 embuild = { version = "0.33", features = ["espidf"], optional = true }

@@ -1,19 +1,84 @@
 // Gzip compression and streaming decompression.
 //
-// Pure functions — no ESP deps — testable on host.
-// Uses miniz_oxide for DEFLATE and a simple CRC32 implementation
-// to produce valid gzip output for Content-Encoding: gzip.
+// On ESP targets, uses the ESP-IDF built-in miniz ROM functions via FFI,
+// avoiding a duplicate DEFLATE implementation in the binary.
+// On host (tests), uses miniz_oxide as a pure-Rust fallback.
 // Streaming decompressor for OTA firmware updates (FR-011..FR-014).
 
 extern crate alloc;
-use alloc::boxed::Box;
 use alloc::vec::Vec;
+
+#[cfg(not(any(feature = "esp", feature = "miniz_oxide")))]
+compile_error!(
+    "Either 'esp' or 'miniz_oxide' feature must be enabled for compression support"
+);
+
+// --- ESP-IDF miniz FFI (ROM functions on ESP32-S2) ---
+
+#[cfg(feature = "esp")]
+mod miniz_ffi {
+    use core::ffi::{c_int, c_uchar, c_uint, c_ulong, c_void};
+
+    pub const MZ_OK: c_int = 0;
+    pub const MZ_STREAM_END: c_int = 1;
+    pub const MZ_NO_FLUSH: c_int = 0;
+    pub const MZ_FINISH: c_int = 4;
+    pub const MZ_DEFLATED: c_int = 8;
+    pub const MZ_DEFAULT_STRATEGY: c_int = 0;
+    /// Negative window bits = raw DEFLATE (no zlib/gzip wrapper).
+    pub const MZ_RAW_WINDOW_BITS: c_int = -15;
+
+    /// Mirrors the C `mz_stream` struct from miniz.h.
+    /// Layout verified for ILP32 (ESP32/Xtensa).
+    #[repr(C)]
+    pub struct MzStream {
+        pub next_in: *const c_uchar,
+        pub avail_in: c_uint,
+        pub total_in: c_ulong,
+        pub next_out: *mut c_uchar,
+        pub avail_out: c_uint,
+        pub total_out: c_ulong,
+        pub msg: *const u8,
+        pub state: *mut c_void,
+        pub zalloc: Option<unsafe extern "C" fn(*mut c_void, usize, usize) -> *mut c_void>,
+        pub zfree: Option<unsafe extern "C" fn(*mut c_void, *mut c_void)>,
+        pub opaque: *mut c_void,
+        pub data_type: c_int,
+        pub adler: c_ulong,
+        pub reserved: c_ulong,
+    }
+
+    impl MzStream {
+        pub fn zeroed() -> Self {
+            // Safety: all-zeros is valid (null pointers, zero integers, None fn ptrs).
+            unsafe { core::mem::zeroed() }
+        }
+    }
+
+    extern "C" {
+        pub fn mz_deflateInit2(
+            stream: *mut MzStream,
+            level: c_int,
+            method: c_int,
+            window_bits: c_int,
+            mem_level: c_int,
+            strategy: c_int,
+        ) -> c_int;
+        pub fn mz_deflate(stream: *mut MzStream, flush: c_int) -> c_int;
+        pub fn mz_deflateEnd(stream: *mut MzStream) -> c_int;
+
+        pub fn mz_inflateInit2(stream: *mut MzStream, window_bits: c_int) -> c_int;
+        pub fn mz_inflate(stream: *mut MzStream, flush: c_int) -> c_int;
+        pub fn mz_inflateEnd(stream: *mut MzStream) -> c_int;
+
+        pub fn mz_compressBound(source_len: c_ulong) -> c_ulong;
+    }
+}
 
 /// Minimum free heap (bytes) required before attempting gzip compression.
 #[cfg(feature = "esp")]
-/// The miniz_oxide compressor state (`CompressorOxide`) is ~300 KB; on
-/// ESP32-S2 with only 320 KB total SRAM this will OOM and abort unless we
-/// gate on available memory first.
+/// The deflate compressor state is ~300 KB; on ESP32-S2 with only 320 KB
+/// total SRAM this will OOM and abort unless we gate on available memory first.
 const GZIP_MIN_FREE_HEAP: usize = 350_000;
 
 /// Compress data into gzip format (RFC 1952).
@@ -33,8 +98,7 @@ pub fn gzip_compress(data: &[u8]) -> Option<Vec<u8>> {
         }
     }
 
-    // DEFLATE compress (raw, not zlib-wrapped).
-    let deflated = miniz_oxide::deflate::compress_to_vec(data, 6);
+    let deflated = deflate_raw(data)?;
 
     let crc = crc32(data);
     let size = data.len() as u32;
@@ -59,6 +123,51 @@ pub fn gzip_compress(data: &[u8]) -> Option<Vec<u8>> {
     out.extend_from_slice(&size.to_le_bytes());
 
     Some(out)
+}
+
+/// Raw DEFLATE compression (no zlib/gzip header).
+#[cfg(feature = "esp")]
+fn deflate_raw(data: &[u8]) -> Option<Vec<u8>> {
+    use miniz_ffi::*;
+
+    let bound = unsafe { mz_compressBound(data.len() as _) } as usize;
+    let mut deflated = Vec::with_capacity(bound);
+
+    let mut stream = MzStream::zeroed();
+    let ret = unsafe {
+        mz_deflateInit2(
+            &mut stream,
+            6,
+            MZ_DEFLATED,
+            MZ_RAW_WINDOW_BITS,
+            9,
+            MZ_DEFAULT_STRATEGY,
+        )
+    };
+    if ret != MZ_OK {
+        return None;
+    }
+
+    stream.next_in = data.as_ptr();
+    stream.avail_in = data.len() as _;
+    stream.next_out = deflated.as_mut_ptr();
+    stream.avail_out = bound as _;
+
+    let ret = unsafe { mz_deflate(&mut stream, MZ_FINISH) };
+    let written = stream.total_out as usize;
+    unsafe { mz_deflateEnd(&mut stream) };
+
+    if ret != MZ_STREAM_END {
+        return None;
+    }
+    unsafe { deflated.set_len(written) };
+    Some(deflated)
+}
+
+/// Raw DEFLATE compression (no zlib/gzip header) — host/test path.
+#[cfg(all(feature = "miniz_oxide", not(feature = "esp")))]
+fn deflate_raw(data: &[u8]) -> Option<Vec<u8>> {
+    Some(miniz_oxide::deflate::compress_to_vec(data, 6))
 }
 
 /// CRC32 (ISO 3309 / ITU-T V.42) — bit-at-a-time implementation.
@@ -111,9 +220,7 @@ pub fn gzip_decompress(data: &[u8], max_decompressed_size: usize) -> Option<Vec<
     ]);
 
     let deflated = &data[10..trailer_start];
-    let decompressed =
-        miniz_oxide::inflate::decompress_to_vec_with_limit(deflated, max_decompressed_size)
-            .ok()?;
+    let decompressed = inflate_raw_bounded(deflated, max_decompressed_size)?;
 
     // Validate CRC32 and decompressed length against trailer
     if crc32(&decompressed) != stored_crc {
@@ -124,6 +231,40 @@ pub fn gzip_decompress(data: &[u8], max_decompressed_size: usize) -> Option<Vec<
     }
 
     Some(decompressed)
+}
+
+/// One-shot raw DEFLATE decompression with size limit.
+#[cfg(feature = "esp")]
+fn inflate_raw_bounded(deflated: &[u8], max_size: usize) -> Option<Vec<u8>> {
+    use miniz_ffi::*;
+
+    let mut stream = MzStream::zeroed();
+    let ret = unsafe { mz_inflateInit2(&mut stream, MZ_RAW_WINDOW_BITS) };
+    if ret != MZ_OK {
+        return None;
+    }
+
+    let mut decompressed = Vec::with_capacity(max_size);
+    stream.next_in = deflated.as_ptr();
+    stream.avail_in = deflated.len() as _;
+    stream.next_out = decompressed.as_mut_ptr();
+    stream.avail_out = max_size as _;
+
+    let ret = unsafe { mz_inflate(&mut stream, MZ_FINISH) };
+    let written = stream.total_out as usize;
+    unsafe { mz_inflateEnd(&mut stream) };
+
+    if ret != MZ_STREAM_END {
+        return None;
+    }
+    unsafe { decompressed.set_len(written) };
+    Some(decompressed)
+}
+
+/// One-shot raw DEFLATE decompression with size limit — host/test path.
+#[cfg(all(feature = "miniz_oxide", not(feature = "esp")))]
+fn inflate_raw_bounded(deflated: &[u8], max_size: usize) -> Option<Vec<u8>> {
+    miniz_oxide::inflate::decompress_to_vec_with_limit(deflated, max_size).ok()
 }
 
 // --- Streaming gzip decompressor (FR-011..FR-014) ---
@@ -159,7 +300,7 @@ enum Phase {
     Comment,
     /// Skipping 2-byte header CRC16 (FHCRC set).
     HeaderCrc,
-    /// Streaming DEFLATE decompression via InflateState.
+    /// Streaming DEFLATE decompression.
     Deflate,
     /// Collecting the 8-byte trailer (CRC32 + ISIZE).
     Trailer,
@@ -171,12 +312,18 @@ enum Phase {
 
 /// Streaming gzip decompressor for OTA firmware updates.
 ///
-/// State machine: header parsing → DEFLATE via `InflateState` → trailer
+/// State machine: header parsing → DEFLATE decompression → trailer
 /// CRC32+ISIZE verification. Computes a running CRC32 over all decompressed
 /// output. Designed for chunk-by-chunk feeding from HTTP body reads.
+///
+/// On ESP, uses the built-in miniz ROM functions via FFI.
+/// On host, uses miniz_oxide as a pure-Rust fallback.
 pub struct GzipStreamDecompressor {
     phase: Phase,
-    inflate_state: Box<miniz_oxide::inflate::stream::InflateState>,
+    #[cfg(feature = "esp")]
+    stream: miniz_ffi::MzStream,
+    #[cfg(all(feature = "miniz_oxide", not(feature = "esp")))]
+    inflate_state: alloc::boxed::Box<miniz_oxide::inflate::stream::InflateState>,
     // Header
     header_buf: [u8; 10],
     header_pos: u8,
@@ -198,7 +345,39 @@ pub struct GzipStreamDecompressor {
     out_buf: Vec<u8>,
 }
 
+#[cfg(feature = "esp")]
+impl Drop for GzipStreamDecompressor {
+    fn drop(&mut self) {
+        unsafe { miniz_ffi::mz_inflateEnd(&mut self.stream) };
+    }
+}
+
 impl GzipStreamDecompressor {
+    #[cfg(feature = "esp")]
+    pub fn new() -> Self {
+        let mut stream = miniz_ffi::MzStream::zeroed();
+        // Init for raw DEFLATE (no zlib header). Safe to call inflateEnd even
+        // if this fails — miniz handles the null-state case.
+        unsafe { miniz_ffi::mz_inflateInit2(&mut stream, miniz_ffi::MZ_RAW_WINDOW_BITS) };
+        Self {
+            phase: Phase::Header,
+            stream,
+            header_buf: [0; 10],
+            header_pos: 0,
+            flg: 0,
+            extra_len_buf: [0; 2],
+            extra_len_pos: 0,
+            hcrc_pos: 0,
+            crc: 0xFFFF_FFFF,
+            total_out: 0,
+            trailer_buf: [0; 8],
+            trailer_pos: 0,
+            inflate_buf: [0; GZIP_STREAM_OUT_SIZE],
+            out_buf: Vec::new(),
+        }
+    }
+
+    #[cfg(all(feature = "miniz_oxide", not(feature = "esp")))]
     pub fn new() -> Self {
         Self {
             phase: Phase::Header,
@@ -385,9 +564,70 @@ impl GzipStreamDecompressor {
 
     // --- DEFLATE streaming ---
 
+    /// Update running CRC32 over newly decompressed bytes and append to output.
+    fn process_inflated(&mut self, written: usize) {
+        if written == 0 {
+            return;
+        }
+        for i in 0..written {
+            let byte = self.inflate_buf[i];
+            self.crc ^= byte as u32;
+            for _ in 0..8 {
+                if self.crc & 1 != 0 {
+                    self.crc = (self.crc >> 1) ^ 0xEDB8_8320;
+                } else {
+                    self.crc >>= 1;
+                }
+            }
+        }
+        self.total_out = self.total_out.wrapping_add(written as u32);
+        self.out_buf.extend_from_slice(&self.inflate_buf[..written]);
+    }
+
     /// Inflate as much of `data` as possible, looping until all input is
     /// consumed or the DEFLATE stream ends. Decompressed bytes are appended
     /// to `self.out_buf` via the fixed-size `inflate_buf` scratch buffer.
+    #[cfg(feature = "esp")]
+    fn inflate_all(&mut self, data: &[u8]) -> Result<usize, GzipStreamError> {
+        let mut total_consumed = 0;
+
+        loop {
+            let remaining = &data[total_consumed..];
+
+            self.stream.next_in = remaining.as_ptr();
+            self.stream.avail_in = remaining.len() as _;
+            self.stream.next_out = self.inflate_buf.as_mut_ptr();
+            self.stream.avail_out = self.inflate_buf.len() as _;
+
+            let ret = unsafe { miniz_ffi::mz_inflate(&mut self.stream, miniz_ffi::MZ_NO_FLUSH) };
+
+            let consumed = remaining.len() - self.stream.avail_in as usize;
+            let written = self.inflate_buf.len() - self.stream.avail_out as usize;
+
+            self.process_inflated(written);
+            total_consumed += consumed;
+
+            match ret {
+                miniz_ffi::MZ_OK => {
+                    if total_consumed >= data.len() || (consumed == 0 && written == 0) {
+                        break;
+                    }
+                }
+                miniz_ffi::MZ_STREAM_END => {
+                    self.phase = Phase::Trailer;
+                    break;
+                }
+                _ => {
+                    self.phase = Phase::Failed;
+                    return Err(GzipStreamError::DecompressFailed);
+                }
+            }
+        }
+
+        Ok(total_consumed)
+    }
+
+    #[cfg(all(feature = "miniz_oxide", not(feature = "esp")))]
     fn inflate_all(&mut self, data: &[u8]) -> Result<usize, GzipStreamError> {
         let mut total_consumed = 0;
 
@@ -402,23 +642,7 @@ impl GzipStreamDecompressor {
             );
 
             let written = result.bytes_written;
-            if written > 0 {
-                // Update running CRC32 over decompressed output
-                for i in 0..written {
-                    let byte = self.inflate_buf[i];
-                    self.crc ^= byte as u32;
-                    for _ in 0..8 {
-                        if self.crc & 1 != 0 {
-                            self.crc = (self.crc >> 1) ^ 0xEDB8_8320;
-                        } else {
-                            self.crc >>= 1;
-                        }
-                    }
-                }
-                self.total_out = self.total_out.wrapping_add(written as u32);
-                self.out_buf.extend_from_slice(&self.inflate_buf[..written]);
-            }
-
+            self.process_inflated(written);
             total_consumed += result.bytes_consumed;
 
             match result.status {
@@ -554,16 +778,11 @@ mod tests {
 
     #[test]
     fn gzip_decompressible() {
-        // Verify the output can be decompressed by miniz_oxide
+        // Verify compress → decompress roundtrip
         let original = b"<h1>Test</h1><p>Content here</p>";
         let compressed = gzip_compress(original).unwrap();
-
-        // Skip 10-byte header, strip 8-byte trailer
-        let deflated = &compressed[10..compressed.len() - 8];
-        let decompressed =
-            miniz_oxide::inflate::decompress_to_vec(deflated)
-                .expect("decompression should succeed");
-        assert_eq!(&decompressed, original);
+        let decompressed = gzip_decompress(&compressed, 1024).expect("should decompress");
+        assert_eq!(&decompressed[..], original);
     }
 
     #[test]

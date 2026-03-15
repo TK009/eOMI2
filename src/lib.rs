@@ -43,7 +43,6 @@ pub mod callback_url;
 pub mod callback;
 #[cfg(feature = "esp")]
 pub mod temp_sensor;
-#[cfg(feature = "esp")]
 pub mod time_sync;
 #[cfg(feature = "esp")]
 pub mod server;

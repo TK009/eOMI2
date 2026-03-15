@@ -441,6 +441,12 @@ fn main() -> Result<()> {
 
         // WiFi reconnection via state machine
         if !wifi.is_connected().unwrap_or(false) && *wifi_sm.state() == WifiState::Connected {
+            // Stop SNTP immediately on disconnect — avoids leaking stale handles
+            // across reconnection cycles and ensures a fresh sync on reconnect.
+            if time_sync.take().is_some() {
+                info!("SNTP time sync stopped (WiFi disconnected)");
+            }
+
             let action = wifi_sm.handle_event(WifiEvent::ConnectionLost);
             handle_reconnect_action(
                 &mut wifi_sm, &mut wifi, &creds, action, &mut wifi_rl,

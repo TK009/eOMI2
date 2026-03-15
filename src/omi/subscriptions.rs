@@ -369,12 +369,7 @@ impl SubscriptionRegistry {
         let mut deliveries = Vec::new();
         let mut expired = Vec::new();
 
-        loop {
-            // Peek at front of queue
-            let rid = match self.interval_queue.front() {
-                Some(r) => r.clone(),
-                None => break,
-            };
+        while let Some(rid) = self.interval_queue.front().cloned() {
 
             let trigger_time = match self.subscriptions.get(&rid) {
                 Some(sub) => sub.trigger_time,

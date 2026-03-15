@@ -122,9 +122,7 @@ pub fn parse_query_params(query: &str) -> Vec<(&str, &str)> {
     query
         .split('&')
         .filter_map(|pair| {
-            let mut it = pair.splitn(2, '=');
-            let key = it.next()?;
-            let val = it.next()?;
+            let (key, val) = pair.split_once('=')?;
             if key.is_empty() { return None; }
             Some((key, val))
         })

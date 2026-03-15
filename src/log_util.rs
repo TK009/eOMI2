@@ -23,12 +23,18 @@ fn hash_msg(msg: &str) -> u64 {
     h
 }
 
-impl RateLimiter {
-    pub fn new() -> Self {
+impl Default for RateLimiter {
+    fn default() -> Self {
         Self {
             window_secs: DEFAULT_WINDOW_SECS,
             entries: HashMap::new(),
         }
+    }
+}
+
+impl RateLimiter {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn with_window(window_secs: u64) -> Self {

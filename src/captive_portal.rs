@@ -214,10 +214,8 @@ pub fn parse_provision_form(body: &str, max_aps: usize, is_first_setup: bool) ->
             }
         } else if key == "api_key_action" {
             api_key_action_raw = Some(value);
-        } else if key == "api_key" {
-            if !value.is_empty() {
-                api_key_value = Some(value);
-            }
+        } else if key == "api_key" && !value.is_empty() {
+            api_key_value = Some(value);
         }
     }
 
@@ -363,7 +361,7 @@ pub fn render_provisioning_form(
         if !saved.is_empty() {
             html.push_str(" placeholder=\"(unchanged if left empty)\"");
         }
-        html.push_str(">");
+        html.push('>');
         if !saved.is_empty() {
             html.push_str("<div class=\"saved-hint\">Password saved. Leave empty to keep.</div>");
         }

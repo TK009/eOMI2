@@ -129,7 +129,7 @@ impl RingBuffer {
         let mut result: Vec<Value> = self
             .iter_oldest_to_newest()
             .filter(|v| {
-                v.t.map_or(false, |t| t >= begin && t <= end)
+                v.t.is_some_and(|t| t >= begin && t <= end)
             })
             .cloned()
             .collect();

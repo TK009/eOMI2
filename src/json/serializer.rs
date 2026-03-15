@@ -15,6 +15,7 @@ use crate::odf::value::{RingBuffer, Value};
 /// Handles comma placement automatically via a nesting stack. The caller
 /// is responsible for matching `begin_object`/`end_object` and
 /// `begin_array`/`end_array` pairs.
+#[derive(Default)]
 pub struct JsonWriter {
     buf: Vec<u8>,
     /// Stack tracking whether the current container has emitted its first element.
@@ -26,11 +27,7 @@ pub struct JsonWriter {
 
 impl JsonWriter {
     pub fn new() -> Self {
-        Self {
-            buf: Vec::new(),
-            first: Vec::new(),
-            after_key: false,
-        }
+        Self::default()
     }
 
     pub fn with_capacity(cap: usize) -> Self {
@@ -655,6 +652,7 @@ pub fn write_omi_envelope(
 }
 
 /// Write a read operation body.
+#[allow(clippy::too_many_arguments)]
 pub fn write_read_op(
     w: &mut JsonWriter,
     path: Option<&str>,

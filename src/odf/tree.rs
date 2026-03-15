@@ -135,7 +135,7 @@ impl ObjectTree {
     #[cfg(feature = "scripting")]
     pub fn collect_onread_scripts(&self) -> Vec<(String, String)> {
         let mut result = Vec::new();
-        for (_, obj) in &self.objects {
+        for obj in self.objects.values() {
             Self::collect_onread_from_object(obj, &format!("/{}", obj.id), &mut result);
         }
         result

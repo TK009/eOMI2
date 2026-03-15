@@ -2,7 +2,6 @@
 ///
 /// Subscription callbacks can target either HTTP endpoints or local
 /// `javascript://` URLs that route to the embedded script engine.
-
 /// Recognised callback URL schemes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CallbackScheme {

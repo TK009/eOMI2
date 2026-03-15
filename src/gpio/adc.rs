@@ -90,6 +90,7 @@ impl<'d, P: ADCPin> AdcPin<'d, P> {
 ///
 /// Tracks allocated GPIO pins to prevent conflicts and provides batch sampling
 /// across all registered channels.
+#[derive(Default)]
 pub struct AdcChannelSet {
     channels: Vec<Box<dyn AdcSampler>>,
     allocated_pins: HashMap<u8, String>,
@@ -97,10 +98,7 @@ pub struct AdcChannelSet {
 
 impl AdcChannelSet {
     pub fn new() -> Self {
-        Self {
-            channels: Vec::new(),
-            allocated_pins: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Register an ADC channel. Returns `Err` if the pin is already allocated.

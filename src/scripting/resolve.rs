@@ -106,8 +106,7 @@ fn is_metadata_path(path: &str) -> bool {
 
     // Check if any non-last segment is "MetaData"
     segments[..segments.len() - 1]
-        .iter()
-        .any(|&s| s == METADATA_SEGMENT)
+        .contains(&METADATA_SEGMENT)
 }
 
 /// Resolve a `javascript://` URL to script text from a MetaData InfoItem.

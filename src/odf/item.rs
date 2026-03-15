@@ -40,7 +40,7 @@ impl InfoItem {
         self.meta
             .as_ref()
             .and_then(|m| m.get("writable"))
-            .map_or(false, |v| matches!(v, OmiValue::Bool(true)))
+            .is_some_and(|v| matches!(v, OmiValue::Bool(true)))
     }
 
     /// Check if this InfoItem is readable. Defaults to true.

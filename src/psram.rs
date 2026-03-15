@@ -299,6 +299,7 @@ unsafe impl Sync for PsramString {}
 
 impl PsramString {
     /// Create a new PSRAM-backed string from a `&str`.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         if s.is_empty() {
             return Self {

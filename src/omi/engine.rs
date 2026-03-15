@@ -722,10 +722,7 @@ impl Engine {
         };
 
         // Temporarily take the script engine out of self
-        let mut script_engine = match self.script_engine.take() {
-            Some(se) => se,
-            None => return None,
-        };
+        let mut script_engine = self.script_engine.take()?;
         let mjs = script_engine.raw();
 
         let mut pending_writes: Vec<PendingWrite> = Vec::new();

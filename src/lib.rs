@@ -45,7 +45,6 @@ pub mod wifi_cfg;
 pub mod mem_stats;
 pub mod wifi_sm;
 pub mod callback_url;
-#[cfg(feature = "esp")]
 pub mod callback;
 #[cfg(feature = "esp")]
 pub mod temp_sensor;

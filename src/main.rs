@@ -18,6 +18,7 @@ use reconfigurable_device::device::{PATH_FREE_FLASH, PATH_FREE_ODF_STORAGE};
 use reconfigurable_device::device::PATH_FREE_PSRAM;
 use reconfigurable_device::dns::DnsServer;
 use reconfigurable_device::mdns::{MdnsConfig, MdnsResponder};
+use reconfigurable_device::time_sync::TimeSync;
 use reconfigurable_device::nvs::{load_writable_items, open_nvs, save_writable_items};
 use reconfigurable_device::odf::OmiValue;
 use reconfigurable_device::http::now_secs;
@@ -131,6 +132,7 @@ fn main() -> Result<()> {
     let mut ap_active = false;
     let mut dns_server: Option<DnsServer> = None;
     let mut mdns_responder: Option<MdnsResponder> = None;
+    let mut time_sync: Option<TimeSync> = None;
     let mut last_sta_ip: Option<String> = None;
 
     // Determine initial server mode based on WiFi state
@@ -471,6 +473,11 @@ fn main() -> Result<()> {
                     }
                 }
 
+                // Start SNTP time sync after mDNS (non-blocking, syncs in background)
+                if time_sync.is_none() {
+                    time_sync = TimeSync::start();
+                }
+
                 // Check for IP change (DHCP renewal)
                 if let Ok(ip_info) = wifi.wifi().sta_netif().get_ip_info() {
                     let current_ip = ip_info.ip.to_string();
@@ -491,6 +498,10 @@ fn main() -> Result<()> {
                     info!("Stopping mDNS responder (state: {:?})", wifi_sm.state());
                     resp.stop();
                     last_sta_ip = None;
+                }
+                // Stop SNTP when WiFi disconnects (no network for time sync)
+                if time_sync.take().is_some() {
+                    info!("SNTP time sync stopped (WiFi disconnected)");
                 }
             }
         }

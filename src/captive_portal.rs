@@ -61,17 +61,10 @@ pub fn redirect_to_form(portal_ip: &str) -> (u16, [(&str, String); 1], &'static 
 
 /// A visible WiFi network from a scan.
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize))]
 pub struct ScannedNetwork {
     pub ssid: String,
     pub rssi: i32,
     pub auth: String,
-}
-
-/// Serialize scan results to JSON.
-#[cfg(feature = "json")]
-pub fn scan_results_json(networks: &[ScannedNetwork]) -> Result<String, serde_json::Error> {
-    serde_json::to_string(networks)
 }
 
 /// Serialize scan results to JSON using lite-json (no serde dependency).
@@ -92,29 +85,18 @@ pub fn scan_results_json_lite(networks: &[ScannedNetwork]) -> String {
 
 /// Connection attempt status reported to the client after form submission.
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize))]
 pub struct ConnectionStatus {
     pub state: ConnectionState,
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
     pub message: Option<String>,
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
     pub ip: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize))]
-#[cfg_attr(feature = "json", serde(rename_all = "snake_case"))]
 pub enum ConnectionState {
     Idle,
     Connecting,
     Connected,
     Failed,
-}
-
-/// Serialize connection status to JSON.
-#[cfg(feature = "json")]
-pub fn connection_status_json(status: &ConnectionStatus) -> Result<String, serde_json::Error> {
-    serde_json::to_string(status)
 }
 
 /// Serialize connection status to JSON using lite-json (no serde dependency).
@@ -950,62 +932,6 @@ mod tests {
         let html = render_provision_success(None, "eOMI", 1);
         assert!(html.contains("fetch('/status')"));
         assert!(html.contains("Connecting..."));
-    }
-
-    // --- ConnectionStatus / ScannedNetwork JSON ---
-
-    #[cfg(feature = "json")]
-    #[test]
-    fn scan_results_json_basic() {
-        let networks = vec![
-            ScannedNetwork { ssid: "Home".into(), rssi: -45, auth: "WPA2".into() },
-            ScannedNetwork { ssid: "Guest".into(), rssi: -72, auth: "Open".into() },
-        ];
-        let json = scan_results_json(&networks).unwrap();
-        assert!(json.contains("\"Home\""));
-        assert!(json.contains("-45"));
-        assert!(json.contains("\"Guest\""));
-        assert!(json.contains("\"Open\""));
-    }
-
-    #[cfg(feature = "json")]
-    #[test]
-    fn connection_status_json_connected() {
-        let status = ConnectionStatus {
-            state: ConnectionState::Connected,
-            message: None,
-            ip: Some("192.168.1.100".into()),
-        };
-        let json = connection_status_json(&status).unwrap();
-        assert!(json.contains("\"connected\""));
-        assert!(json.contains("192.168.1.100"));
-        assert!(!json.contains("message"));
-    }
-
-    #[cfg(feature = "json")]
-    #[test]
-    fn connection_status_json_failed() {
-        let status = ConnectionStatus {
-            state: ConnectionState::Failed,
-            message: Some("Wrong password".into()),
-            ip: None,
-        };
-        let json = connection_status_json(&status).unwrap();
-        assert!(json.contains("\"failed\""));
-        assert!(json.contains("Wrong password"));
-        assert!(!json.contains("\"ip\""));
-    }
-
-    #[cfg(feature = "json")]
-    #[test]
-    fn connection_status_json_idle() {
-        let status = ConnectionStatus {
-            state: ConnectionState::Idle,
-            message: None,
-            ip: None,
-        };
-        let json = connection_status_json(&status).unwrap();
-        assert!(json.contains("\"idle\""));
     }
 
     // --- redirect_to_form ---

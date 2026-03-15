@@ -1,4 +1,4 @@
-#![cfg(any(feature = "json", feature = "lite-json"))]
+#![cfg(feature = "lite-json")]
 //! Integration tests for the scripting engine + ODF interaction.
 //!
 //! These exercise the full JSON round-trip for onwrite scripts:
@@ -85,12 +85,6 @@ fn script_reads_written_value() {
     let values = extract_values(&resp);
     assert_eq!(values[0].v, OmiValue::Number(42.0));
 
-    // JSON round-trip
-    #[cfg(feature = "json")]
-    {
-        let rt = roundtrip_response_json(&resp);
-        assert_eq!(rt["result"]["values"][0]["v"], 42.0);
-    }
 }
 
 // ===========================================================================
@@ -134,12 +128,6 @@ fn script_triggers_cascading_write() {
     let values = extract_values(&resp);
     assert_eq!(values[0].v, OmiValue::Number(212.0));
 
-    // JSON round-trip
-    #[cfg(feature = "json")]
-    {
-        let rt = roundtrip_response_json(&resp);
-        assert_eq!(rt["result"]["values"][0]["v"], 212.0);
-    }
 }
 
 // ===========================================================================
@@ -175,12 +163,6 @@ fn script_error_does_not_block_write() {
     let values = extract_values(&resp);
     assert_eq!(values[0].v, OmiValue::Number(7.0));
 
-    // JSON round-trip
-    #[cfg(feature = "json")]
-    {
-        let rt = roundtrip_response_json(&resp);
-        assert_eq!(rt["result"]["values"][0]["v"], 7.0);
-    }
 }
 
 // ===========================================================================

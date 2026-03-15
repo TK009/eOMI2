@@ -136,10 +136,6 @@ impl Engine {
             TreeError::NotFound(msg) => Self::error_response(StatusCode::NotFound, msg),
             TreeError::Forbidden(msg) => Self::error_response(StatusCode::Forbidden, msg),
             TreeError::InvalidPath(msg) => Self::error_response(StatusCode::BadRequest, msg),
-            #[cfg(feature = "json")]
-            TreeError::SerializationError(msg) => {
-                Self::error_response(StatusCode::InternalError, msg)
-            }
         }
     }
 
@@ -148,8 +144,6 @@ impl Engine {
             TreeError::NotFound(msg) => (StatusCode::NotFound, msg),
             TreeError::Forbidden(msg) => (StatusCode::Forbidden, msg),
             TreeError::InvalidPath(msg) => (StatusCode::BadRequest, msg),
-            #[cfg(feature = "json")]
-            TreeError::SerializationError(msg) => (StatusCode::InternalError, msg),
         };
         ItemStatus {
             path: path.into(),
@@ -202,13 +196,6 @@ impl Engine {
                     }
                 }
                 OmiResponse::ok_read_result(path.to_string(), values)
-            }
-            #[cfg(feature = "json")]
-            Ok(PathTarget::Object(_)) | Ok(PathTarget::Root(_)) => {
-                match self.tree.read(path, op.depth.map(|d| d as usize)) {
-                    Ok(val) => OmiResponse::ok(val),
-                    Err(e) => Self::tree_error_to_response(e),
-                }
             }
             #[cfg(feature = "lite-json")]
             Ok(PathTarget::Object(obj)) => {
@@ -1300,50 +1287,6 @@ mod tests {
                 assert_eq!(values[0].v, OmiValue::Number(21.0));
             }
             _ => panic!("expected Single(ReadValues)"),
-        }
-    }
-
-    #[cfg(feature = "json")]
-    #[test]
-    fn read_object() {
-        let mut e = setup();
-        let resp = e.process(read_msg("/Sensor1"), 0.0, None);
-        assert_eq!(status(&resp), 200);
-        match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(ResultPayload::Json(val)) => {
-                assert_eq!(val["id"], "Sensor1");
-                assert!(val["items"]["Temperature"].is_object());
-            }
-            _ => panic!("expected Single(Json)"),
-        }
-    }
-
-    #[cfg(feature = "json")]
-    #[test]
-    fn read_root() {
-        let mut e = setup();
-        let resp = e.process(read_msg("/"), 0.0, None);
-        assert_eq!(status(&resp), 200);
-        match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(ResultPayload::Json(val)) => {
-                assert!(val["Sensor1"].is_object());
-            }
-            _ => panic!("expected Single(Json)"),
-        }
-    }
-
-    #[cfg(feature = "json")]
-    #[test]
-    fn read_with_depth() {
-        let mut e = setup();
-        let resp = e.process(read_with("/Sensor1", None, None, None, None, Some(0)), 0.0, None);
-        assert_eq!(status(&resp), 200);
-        match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(ResultPayload::Json(val)) => {
-                assert_eq!(val["id"], "Sensor1");
-                assert!(val.get("items").is_none());
-            }
-            _ => panic!("expected Single(Json)"),
         }
     }
 

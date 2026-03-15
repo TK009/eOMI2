@@ -97,11 +97,9 @@ pub fn build_sensor_tree() -> BTreeMap<String, Object> {
 
 /// A single writable item's latest value, for NVS persistence.
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
 pub struct SavedItem {
     pub path: String,
     pub v: OmiValue,
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
     pub t: Option<f64>,
 }
 

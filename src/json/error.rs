@@ -109,7 +109,7 @@ impl std::error::Error for LiteParseError {}
 
 // Convert lite-json parse errors into OMI-level ParseError.
 // Available when the omi module is compiled (std + json or lite-json).
-#[cfg(all(feature = "std", any(feature = "json", feature = "lite-json")))]
+#[cfg(all(feature = "std", feature = "lite-json"))]
 impl From<LiteParseError> for crate::omi::error::ParseError {
     fn from(e: LiteParseError) -> Self {
         use crate::omi::error::ParseError;
@@ -219,7 +219,7 @@ mod tests {
 
     // -- From<LiteParseError> for ParseError conversion tests --
 
-    #[cfg(all(feature = "std", any(feature = "json", feature = "lite-json")))]
+    #[cfg(all(feature = "std", feature = "lite-json"))]
     mod from_parse_error {
         use super::*;
         use crate::omi::error::ParseError;

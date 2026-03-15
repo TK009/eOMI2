@@ -84,6 +84,22 @@ pub fn init_board(
         hostname,
     )?;
 
+    // If the board has an onboard WS2812/NeoPixel LED, drive its data pin
+    // low to prevent it from interpreting noise as pixel data (which can
+    // cause full-white or random colours at boot).
+    #[cfg(has_board_config)]
+    if let Some(pin_num) = crate::board::neopixel_pin() {
+        use esp_idf_svc::hal::gpio::{AnyIOPin, PinDriver, Output};
+        let pin = unsafe { AnyIOPin::new(pin_num as i32) };
+        let mut driver = PinDriver::<_, Output>::output(pin)
+            .map_err(|e| anyhow::anyhow!("neopixel pin GPIO{} init failed: {}", pin_num, e))?;
+        driver.set_low().ok();
+        // Leak the driver so the pin stays driven low for the lifetime of the
+        // firmware. The WS2812 data line must not float.
+        core::mem::forget(driver);
+        info!("Neopixel: GPIO{} driven low (WS2812 disabled)", pin_num);
+    }
+
     Ok(BoardPeripherals {
         modem: peripherals.modem,
         gpio_manager,

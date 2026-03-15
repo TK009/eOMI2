@@ -32,6 +32,10 @@ mod board_config {
         pub chip: String,
         #[serde(default)]
         pub has_temp_sensor: bool,
+        /// GPIO pin connected to an onboard WS2812/NeoPixel LED, if any.
+        /// Firmware drives this pin low at boot to prevent the LED from
+        /// interpreting noise or PWM signals as pixel data.
+        pub neopixel_pin: Option<u8>,
     }
 
     #[derive(Deserialize)]
@@ -163,9 +167,16 @@ mod board_config {
             board.board.chip
         ));
         code.push_str(&format!(
-            "pub const HAS_TEMP_SENSOR: bool = {};\n\n",
+            "pub const HAS_TEMP_SENSOR: bool = {};\n",
             board.board.has_temp_sensor
         ));
+        match board.board.neopixel_pin {
+            Some(pin) => code.push_str(&format!(
+                "pub const NEOPIXEL_PIN: Option<u8> = Some({});\n\n",
+                pin
+            )),
+            None => code.push_str("pub const NEOPIXEL_PIN: Option<u8> = None;\n\n"),
+        }
 
         // GPIO config: &[(pin, mode, name)]
         code.push_str("/// Build-time GPIO pin configurations.\n");

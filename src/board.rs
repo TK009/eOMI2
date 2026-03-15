@@ -49,6 +49,15 @@ pub fn has_temp_sensor() -> bool {
     { false }
 }
 
+/// GPIO pin connected to an onboard WS2812/NeoPixel LED, if any.
+/// Returns None if no board config was loaded or the board has no neopixel.
+pub fn neopixel_pin() -> Option<u8> {
+    #[cfg(has_board_config)]
+    { generated::NEOPIXEL_PIN }
+    #[cfg(not(has_board_config))]
+    { None }
+}
+
 #[cfg(any(has_board_config, test))]
 fn parse_mode(s: &str) -> Option<GpioMode> {
     match s {

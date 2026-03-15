@@ -1,4 +1,4 @@
-#![cfg(any(feature = "json", feature = "lite-json"))]
+#![cfg(feature = "lite-json")]
 //! Edge-case and error-handling tests for javascript:// callback subscriptions.
 //!
 //! Covers SC-004/SC-007 from spec-008:

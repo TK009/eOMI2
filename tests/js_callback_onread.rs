@@ -1,4 +1,4 @@
-#![cfg(any(feature = "json", feature = "lite-json"))]
+#![cfg(feature = "lite-json")]
 //! Tests for onread behavior with javascript:// subscription callbacks (spec-008).
 //!
 //! FR-010: Interval javascript:// subscriptions run onread scripts on subscribed

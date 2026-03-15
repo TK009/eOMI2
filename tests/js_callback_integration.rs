@@ -1,4 +1,4 @@
-#![cfg(any(feature = "json", feature = "lite-json"))]
+#![cfg(feature = "lite-json")]
 //! Integration tests for core javascript:// callback subscription flows.
 //!
 //! These exercise the full JSON round-trip through the Engine for

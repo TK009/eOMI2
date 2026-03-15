@@ -732,6 +732,165 @@ mod tests {
             assert_eq!(restored[0].path, long_path);
         }
 
+        // --- Adversarial / error-path tests ---
+
+        #[test]
+        fn deserialize_future_version_tag() {
+            // Version 0x02 — a hypothetical future version should be rejected gracefully
+            assert!(deserialize_saved_items(&[0x02, 0, 0]).unwrap_err().contains("unsupported version"));
+            // Version 0x00 — below current
+            assert!(deserialize_saved_items(&[0x00, 0, 0]).unwrap_err().contains("unsupported version"));
+            // High version byte
+            assert!(deserialize_saved_items(&[0x7F, 0, 0]).unwrap_err().contains("unsupported version"));
+        }
+
+        #[test]
+        fn deserialize_truncated_mid_path_length() {
+            // Valid header (version + count=1) but path_len is truncated (only 1 byte of u16)
+            let data = [0x01, 1, 0, 0x05]; // version=1, count=1, path_len starts but only 1 byte
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_truncated_mid_path_data() {
+            // version=1, count=1, path_len=10, but only 3 bytes of path follow
+            let mut data = vec![0x01, 1, 0]; // version + count=1
+            data.extend_from_slice(&10u16.to_le_bytes()); // path_len=10
+            data.extend_from_slice(b"abc"); // only 3 bytes of path
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_truncated_before_type_tag() {
+            // version=1, count=1, valid path, then EOF before type tag
+            let mut data = vec![0x01, 1, 0]; // version + count=1
+            data.extend_from_slice(&2u16.to_le_bytes()); // path_len=2
+            data.extend_from_slice(b"/A"); // path
+            // Missing type tag
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_truncated_mid_f64_value() {
+            // version=1, count=1, path="/A", type=Number(3), then only 4 of 8 f64 bytes
+            let mut data = vec![0x01, 1, 0]; // version + count=1
+            data.extend_from_slice(&2u16.to_le_bytes()); // path_len=2
+            data.extend_from_slice(b"/A"); // path
+            data.push(3); // type_tag = Number
+            data.extend_from_slice(&[0u8; 4]); // only 4 bytes of f64 (need 8)
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_truncated_mid_string_length() {
+            // type=Str(4), then only 1 byte of string length u16
+            let mut data = vec![0x01, 1, 0];
+            data.extend_from_slice(&2u16.to_le_bytes());
+            data.extend_from_slice(b"/A");
+            data.push(4); // type_tag = Str
+            data.push(0x05); // only 1 byte of string length
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_truncated_mid_string_data() {
+            // type=Str, string_len=10, but only 3 bytes of string data
+            let mut data = vec![0x01, 1, 0];
+            data.extend_from_slice(&2u16.to_le_bytes());
+            data.extend_from_slice(b"/A");
+            data.push(4); // type_tag = Str
+            data.extend_from_slice(&10u16.to_le_bytes()); // string_len=10
+            data.extend_from_slice(b"abc"); // only 3 bytes
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_truncated_before_has_t() {
+            // Complete value but EOF before has_t byte
+            let mut data = vec![0x01, 1, 0];
+            data.extend_from_slice(&2u16.to_le_bytes());
+            data.extend_from_slice(b"/A");
+            data.push(0); // type_tag = Null
+            // Missing has_t byte
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_truncated_mid_timestamp() {
+            // has_t=1 but only 4 of 8 timestamp bytes
+            let mut data = vec![0x01, 1, 0];
+            data.extend_from_slice(&2u16.to_le_bytes());
+            data.extend_from_slice(b"/A");
+            data.push(0); // Null
+            data.push(1); // has_t = true
+            data.extend_from_slice(&[0u8; 4]); // only 4 bytes of f64
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_unknown_type_tag() {
+            // type_tag = 5 (unknown — only 0-4 are valid)
+            let mut data = vec![0x01, 1, 0];
+            data.extend_from_slice(&2u16.to_le_bytes());
+            data.extend_from_slice(b"/A");
+            data.push(5); // unknown type tag
+            let err = deserialize_saved_items(&data).unwrap_err();
+            assert!(err.contains("unknown type tag"), "got: {}", err);
+        }
+
+        #[test]
+        fn deserialize_unknown_type_tag_high() {
+            // type_tag = 0xFF
+            let mut data = vec![0x01, 1, 0];
+            data.extend_from_slice(&2u16.to_le_bytes());
+            data.extend_from_slice(b"/A");
+            data.push(0xFF);
+            assert!(deserialize_saved_items(&data).unwrap_err().contains("unknown type tag"));
+        }
+
+        #[test]
+        fn deserialize_count_exceeds_data() {
+            // Claims 1000 items but has no item data
+            let mut data = vec![0x01];
+            data.extend_from_slice(&1000u16.to_le_bytes());
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_invalid_utf8_path() {
+            // Path contains invalid UTF-8
+            let mut data = vec![0x01, 1, 0]; // version + count=1
+            data.extend_from_slice(&3u16.to_le_bytes()); // path_len=3
+            data.extend_from_slice(&[0xFF, 0xFE, 0xFD]); // invalid UTF-8
+            data.push(0); // type_tag = Null
+            data.push(0); // has_t = false
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_invalid_utf8_string_value() {
+            // String value contains invalid UTF-8
+            let mut data = vec![0x01, 1, 0];
+            data.extend_from_slice(&2u16.to_le_bytes());
+            data.extend_from_slice(b"/A"); // valid path
+            data.push(4); // type_tag = Str
+            data.extend_from_slice(&3u16.to_le_bytes()); // string_len=3
+            data.extend_from_slice(&[0xFF, 0xFE, 0xFD]); // invalid UTF-8
+            data.push(0); // has_t = false
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_corrupt_first_item_valid_second() {
+            // Two items claimed, but first has corrupt type tag — should fail on first
+            let mut data = vec![0x01, 2, 0]; // version + count=2
+            data.extend_from_slice(&2u16.to_le_bytes());
+            data.extend_from_slice(b"/A");
+            data.push(99); // bad type tag on first item
+            // Second item would be valid but we never reach it
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
         #[test]
         fn binary_is_compact() {
             // Verify binary is more compact than equivalent JSON would be

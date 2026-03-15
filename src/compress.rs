@@ -220,6 +220,102 @@ mod tests {
         assert!(gzip_decompress(&compressed, 1024).is_some());
     }
 
+    // --- Adversarial / error-path tests ---
+
+    #[test]
+    fn gzip_decompress_rejects_truncated_no_trailer() {
+        // Valid header but no trailer (only 10 bytes)
+        let compressed = gzip_compress(b"hello");
+        let truncated = &compressed[..10]; // header only, no deflate data or trailer
+        assert!(gzip_decompress(truncated, 1024).is_none());
+    }
+
+    #[test]
+    fn gzip_decompress_rejects_truncated_mid_deflate() {
+        let compressed = gzip_compress(b"hello world, this is some data to compress");
+        // Cut in the middle of the deflate stream (keep header + partial payload)
+        let mid = 10 + (compressed.len() - 18) / 2; // halfway through deflate
+        let truncated = &compressed[..mid];
+        assert!(gzip_decompress(truncated, 1024).is_none());
+    }
+
+    #[test]
+    fn gzip_decompress_rejects_too_short() {
+        // Less than 18 bytes (minimum gzip)
+        assert!(gzip_decompress(&[0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff], 1024).is_none());
+        assert!(gzip_decompress(&[], 1024).is_none());
+        assert!(gzip_decompress(&[0x1f], 1024).is_none());
+    }
+
+    #[test]
+    fn gzip_decompress_rejects_bad_magic() {
+        let mut compressed = gzip_compress(b"hello");
+        compressed[0] = 0x00; // corrupt ID1
+        assert!(gzip_decompress(&compressed, 1024).is_none());
+
+        let mut compressed = gzip_compress(b"hello");
+        compressed[1] = 0x00; // corrupt ID2
+        assert!(gzip_decompress(&compressed, 1024).is_none());
+    }
+
+    #[test]
+    fn gzip_decompress_rejects_bit_flipped_deflate() {
+        let mut compressed = gzip_compress(b"hello world");
+        // Flip bits in the deflate payload (byte 12, middle of compressed data)
+        if compressed.len() > 14 {
+            compressed[12] ^= 0xFF;
+        }
+        assert!(gzip_decompress(&compressed, 1024).is_none());
+    }
+
+    #[test]
+    fn gzip_decompress_rejects_all_zeros_payload() {
+        // Valid magic + zeroed out body — not valid deflate
+        let mut bad = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff];
+        bad.extend_from_slice(&[0u8; 20]); // garbage deflate + fake trailer
+        assert!(gzip_decompress(&bad, 1024).is_none());
+    }
+
+    #[test]
+    fn gzip_decompress_bomb_rejected_by_limit() {
+        // Compress a large block of zeros (compresses very well)
+        let bomb_data = vec![0u8; 100_000];
+        let compressed = gzip_compress(&bomb_data);
+        // The compressed form should be much smaller than 100KB
+        assert!(compressed.len() < 1000, "zeros should compress very well");
+        // Decompress with a small limit — must be rejected
+        assert!(gzip_decompress(&compressed, 1024).is_none());
+        // Decompress with a limit just under the real size — must be rejected
+        assert!(gzip_decompress(&compressed, 99_999).is_none());
+        // Decompress with the exact size — should succeed
+        assert!(gzip_decompress(&compressed, 100_000).is_some());
+    }
+
+    #[test]
+    fn gzip_decompress_bomb_large_ratio() {
+        // 1MB of zeros — extreme compression ratio
+        let bomb_data = vec![0u8; 1_000_000];
+        let compressed = gzip_compress(&bomb_data);
+        // Should be tiny compressed
+        assert!(compressed.len() < 2000);
+        // With a reasonable limit, the bomb is defused
+        assert!(gzip_decompress(&compressed, 65536).is_none());
+    }
+
+    #[test]
+    fn gzip_decompress_swapped_trailer_fields() {
+        // Swap CRC32 and ISIZE in the trailer
+        let original = b"test data here";
+        let mut compressed = gzip_compress(original);
+        let len = compressed.len();
+        // Swap last 8 bytes: CRC32(4) <-> ISIZE(4)
+        let crc_bytes: [u8; 4] = compressed[len - 8..len - 4].try_into().unwrap();
+        let isize_bytes: [u8; 4] = compressed[len - 4..len].try_into().unwrap();
+        compressed[len - 8..len - 4].copy_from_slice(&isize_bytes);
+        compressed[len - 4..len].copy_from_slice(&crc_bytes);
+        assert!(gzip_decompress(&compressed, 1024).is_none());
+    }
+
     #[test]
     fn gzip_compresses_html() {
         // Realistic HTML content should compress well

@@ -10,7 +10,7 @@
 //! The companion script `scripts/measure-lite-json.sh` runs this automatically
 //! under both feature sets and compares the results.
 
-#![cfg(any(feature = "json", feature = "lite-json"))]
+#![cfg(feature = "lite-json")]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};

@@ -26,7 +26,6 @@ default = ["std", "esp", "lite-json", "scripting"]
 std = []
 esp = ["dep:esp-idf-svc", "dep:embedded-svc", "dep:embuild"]
 gpio = ["dep:toml", "dep:serde"]
-json = ["dep:serde", "dep:serde_json"]
 lite-json = []
 scripting = ["std", "dep:cc"]
 psram = []
@@ -41,8 +40,6 @@ log = "0.4"
 esp-idf-svc = { version = "0.51", features = ["critical-section"], optional = true }
 embedded-svc = { version = "0.28", default-features = false, optional = true }
 anyhow = "1"
-serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
 miniz_oxide = "0.8"
 
 [build-dependencies]

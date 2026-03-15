@@ -20,7 +20,6 @@ pub const DEFAULT_HOSTNAME: &str = env!("EOMI_HOSTNAME");
 
 /// WiFi configuration stored in NVS.
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
 pub struct WifiConfig {
     /// SSID/password pairs, up to MAX_WIFI_APS entries.
     pub ssids: Vec<(String, String)>,

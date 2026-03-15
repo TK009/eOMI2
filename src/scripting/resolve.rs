@@ -132,8 +132,6 @@ pub fn resolve_script_url(tree: &ObjectTree, url: &str) -> Result<String, Script
         TreeError::NotFound(msg) => ScriptResolveError::PathNotFound(msg),
         TreeError::InvalidPath(msg) => ScriptResolveError::InvalidUrl(msg),
         TreeError::Forbidden(msg) => ScriptResolveError::PathNotFound(msg),
-        #[cfg(feature = "json")]
-        TreeError::SerializationError(msg) => ScriptResolveError::PathNotFound(msg),
     })?;
 
     // Must resolve to an InfoItem

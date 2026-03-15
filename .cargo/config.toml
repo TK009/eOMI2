@@ -2,7 +2,7 @@
 # Run library tests on the host (no ESP toolchain needed).
 # Adjust the target triple if developing on a different architecture
 # (e.g. aarch64-unknown-linux-gnu, aarch64-apple-darwin).
-test-host = "test --target x86_64-unknown-linux-gnu --no-default-features --features std,json,scripting --config unstable.build-std=[]"
+test-host = "test --target x86_64-unknown-linux-gnu --no-default-features --features std,lite-json,scripting --config unstable.build-std=[]"
 
 [build]
 # Default target: ESP32-S2 (development board)

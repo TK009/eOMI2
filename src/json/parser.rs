@@ -1751,41 +1751,4 @@ mod tests {
         ));
     }
 
-    // Parity tests: compare lite-json parser with serde parser
-    #[cfg(feature = "json")]
-    mod parity {
-        use super::*;
-
-        fn assert_parity(json: &str) {
-            let serde_result = OmiMessage::parse(json);
-            let lite_result = parse_omi_message(json);
-            match (serde_result, lite_result) {
-                (Ok(a), Ok(b)) => {
-                    assert_eq!(a.version, b.version);
-                    assert_eq!(a.ttl, b.ttl);
-                    assert_eq!(std::mem::discriminant(&a.operation), std::mem::discriminant(&b.operation));
-                }
-                (Err(_), Err(_)) => {}
-                (Ok(_), Err(e)) => panic!("serde accepted but lite rejected: {}", e),
-                (Err(e), Ok(_)) => panic!("serde rejected but lite accepted: {}", e),
-            }
-        }
-
-        #[test]
-        fn parity_read() { assert_parity(r#"{"omi":"1.0","ttl":0,"read":{"path":"/A"}}"#); }
-        #[test]
-        fn parity_write() { assert_parity(r#"{"omi":"1.0","ttl":10,"write":{"path":"/A","v":1}}"#); }
-        #[test]
-        fn parity_delete() { assert_parity(r#"{"omi":"1.0","ttl":0,"delete":{"path":"/A"}}"#); }
-        #[test]
-        fn parity_cancel() { assert_parity(r#"{"omi":"1.0","ttl":0,"cancel":{"rid":["r1"]}}"#); }
-        #[test]
-        fn parity_reject_missing_omi() { assert_parity(r#"{"ttl":0,"read":{"path":"/A"}}"#); }
-        #[test]
-        fn parity_reject_zero_ops() { assert_parity(r#"{"omi":"1.0","ttl":0}"#); }
-        #[test]
-        fn parity_reject_invalid() { assert_parity("not json"); }
-        #[test]
-        fn parity_unknown_fields() { assert_parity(r#"{"omi":"1.0","ttl":0,"x":1,"read":{"path":"/A"}}"#); }
-    }
 }

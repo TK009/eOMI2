@@ -1,4 +1,4 @@
-#[cfg(any(feature = "json", feature = "lite-json"))]
+#[cfg(feature = "lite-json")]
 pub mod engine;
 pub mod error;
 pub mod read;
@@ -6,16 +6,11 @@ pub mod write;
 pub mod delete;
 pub mod cancel;
 pub mod response;
-#[cfg(any(feature = "json", feature = "lite-json"))]
+#[cfg(feature = "lite-json")]
 pub mod subscriptions;
 
-#[cfg(any(feature = "json", feature = "lite-json"))]
+#[cfg(feature = "lite-json")]
 pub use self::engine::Engine;
-
-#[cfg(feature = "json")]
-use serde::{Serialize, Serializer};
-#[cfg(feature = "json")]
-use serde::ser::SerializeMap;
 
 use self::error::ParseError;
 pub use self::read::{ReadKind, ReadOp};
@@ -25,7 +20,7 @@ use self::cancel::CancelOp;
 use self::response::ResponseBody;
 pub use self::write::WriteItem;
 pub use self::response::{StatusCode, ResponseResult, ResultPayload, ItemStatus, OmiResponse};
-#[cfg(any(feature = "json", feature = "lite-json"))]
+#[cfg(feature = "lite-json")]
 pub use self::subscriptions::{Delivery, SessionId};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -44,70 +39,6 @@ pub enum Operation {
     Response(ResponseBody),
 }
 
-#[cfg(feature = "json")]
-mod serde_parse {
-    use super::*;
-    use serde::Deserialize;
-
-    #[derive(Deserialize)]
-    struct RawEnvelope {
-        omi: Option<String>,
-        ttl: Option<i64>,
-        read: Option<serde_json::Value>,
-        write: Option<serde_json::Value>,
-        delete: Option<serde_json::Value>,
-        cancel: Option<serde_json::Value>,
-        response: Option<serde_json::Value>,
-    }
-
-    impl OmiMessage {
-        pub fn parse(json: &str) -> Result<Self, ParseError> {
-            let raw: RawEnvelope =
-                serde_json::from_str(json).map_err(|e| ParseError::InvalidJson(e.to_string()))?;
-
-            // Validate version
-            let version = raw.omi.ok_or(ParseError::MissingField("omi"))?;
-            if version != "1.0" {
-                return Err(ParseError::UnsupportedVersion(version));
-            }
-
-            // Validate ttl
-            let ttl = raw.ttl.ok_or(ParseError::MissingField("ttl"))?;
-
-            // Exactly one operation
-            let op_count = raw.read.is_some() as usize
-                + raw.write.is_some() as usize
-                + raw.delete.is_some() as usize
-                + raw.cancel.is_some() as usize
-                + raw.response.is_some() as usize;
-
-            if op_count != 1 {
-                return Err(ParseError::InvalidOperationCount(op_count));
-            }
-
-            let operation = if let Some(v) = raw.read {
-                Operation::Read(ReadOp::from_value(v)?)
-            } else if let Some(v) = raw.write {
-                Operation::Write(WriteOp::from_value(v)?)
-            } else if let Some(v) = raw.delete {
-                Operation::Delete(DeleteOp::from_value(v)?)
-            } else if let Some(v) = raw.cancel {
-                Operation::Cancel(CancelOp::from_value(v)?)
-            } else if let Some(v) = raw.response {
-                Operation::Response(ResponseBody::from_value(v)?)
-            } else {
-                unreachable!()
-            };
-
-            Ok(OmiMessage {
-                version,
-                ttl,
-                operation,
-            })
-        }
-    }
-}
-
 #[cfg(feature = "lite-json")]
 mod lite_parse {
     use super::*;
@@ -119,28 +50,11 @@ mod lite_parse {
     }
 }
 
-#[cfg(feature = "json")]
-impl Serialize for OmiMessage {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_map(Some(3))?;
-        map.serialize_entry("omi", &self.version)?;
-        map.serialize_entry("ttl", &self.ttl)?;
-        match &self.operation {
-            Operation::Read(op) => map.serialize_entry("read", op)?,
-            Operation::Write(op) => map.serialize_entry("write", op)?,
-            Operation::Delete(op) => map.serialize_entry("delete", op)?,
-            Operation::Cancel(op) => map.serialize_entry("cancel", op)?,
-            Operation::Response(body) => map.serialize_entry("response", body)?,
-        }
-        map.end()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[cfg(any(feature = "json", feature = "lite-json"))]
+    #[cfg(feature = "lite-json")]
     mod json {
         use super::*;
 
@@ -291,166 +205,6 @@ mod tests {
             }"#;
             let msg = OmiMessage::parse(json).unwrap();
             assert_eq!(msg.ttl, -1);
-        }
-
-        // --- Serialization ---
-
-        #[cfg(feature = "json")]
-        #[test]
-        fn serialize_read_message() {
-            let msg = OmiMessage {
-                version: "1.0".into(),
-                ttl: 0,
-                operation: Operation::Read(ReadOp {
-                    path: Some("/A/B".into()),
-                    rid: None,
-                    newest: Some(5),
-                    oldest: None,
-                    begin: None,
-                    end: None,
-                    depth: None,
-                    interval: None,
-                    callback: None,
-                }),
-            };
-            let json = serde_json::to_value(&msg).unwrap();
-            assert_eq!(json["omi"], "1.0");
-            assert_eq!(json["ttl"], 0);
-            assert_eq!(json["read"]["path"], "/A/B");
-            assert_eq!(json["read"]["newest"], 5);
-        }
-
-        #[cfg(feature = "json")]
-        #[test]
-        fn serialize_write_message() {
-            let msg = OmiMessage {
-                version: "1.0".into(),
-                ttl: 10,
-                operation: Operation::Write(crate::omi::write::WriteOp::Single {
-                    path: "/A/B".into(),
-                    v: crate::odf::OmiValue::Number(42.0),
-                    t: None,
-                }),
-            };
-            let json = serde_json::to_value(&msg).unwrap();
-            assert_eq!(json["omi"], "1.0");
-            assert_eq!(json["ttl"], 10);
-            assert_eq!(json["write"]["path"], "/A/B");
-            assert_eq!(json["write"]["v"], 42.0);
-        }
-
-        #[cfg(feature = "json")]
-        #[test]
-        fn serialize_delete_message() {
-            let msg = OmiMessage {
-                version: "1.0".into(),
-                ttl: 0,
-                operation: Operation::Delete(DeleteOp {
-                    path: "/DeviceA".into(),
-                }),
-            };
-            let json = serde_json::to_value(&msg).unwrap();
-            assert_eq!(json["delete"]["path"], "/DeviceA");
-        }
-
-        #[cfg(feature = "json")]
-        #[test]
-        fn serialize_cancel_message() {
-            let msg = OmiMessage {
-                version: "1.0".into(),
-                ttl: 0,
-                operation: Operation::Cancel(CancelOp {
-                    rid: vec!["req-1".into()],
-                }),
-            };
-            let json = serde_json::to_value(&msg).unwrap();
-            assert_eq!(json["cancel"]["rid"][0], "req-1");
-        }
-
-        // --- Round-trip tests ---
-
-        #[cfg(feature = "json")]
-        #[test]
-        fn roundtrip_read() {
-            let msg = OmiMessage {
-                version: "1.0".into(),
-                ttl: 5,
-                operation: Operation::Read(ReadOp {
-                    path: Some("/DeviceA/Temperature".into()),
-                    rid: None,
-                    newest: Some(10),
-                    oldest: None,
-                    begin: None,
-                    end: Some(2000.0),
-                    depth: Some(3),
-                    interval: None,
-                    callback: None,
-                }),
-            };
-            let json_str = serde_json::to_string(&msg).unwrap();
-            let msg2 = OmiMessage::parse(&json_str).unwrap();
-            assert_eq!(msg, msg2);
-        }
-
-        #[cfg(feature = "json")]
-        #[test]
-        fn roundtrip_write_single() {
-            let msg = OmiMessage {
-                version: "1.0".into(),
-                ttl: 0,
-                operation: Operation::Write(crate::omi::write::WriteOp::Single {
-                    path: "/A/B".into(),
-                    v: crate::odf::OmiValue::Str("hello".into()),
-                    t: Some(1000.0),
-                }),
-            };
-            let json_str = serde_json::to_string(&msg).unwrap();
-            let msg2 = OmiMessage::parse(&json_str).unwrap();
-            assert_eq!(msg, msg2);
-        }
-
-        #[cfg(feature = "json")]
-        #[test]
-        fn roundtrip_delete() {
-            let msg = OmiMessage {
-                version: "1.0".into(),
-                ttl: 0,
-                operation: Operation::Delete(DeleteOp {
-                    path: "/DeviceA/Temp".into(),
-                }),
-            };
-            let json_str = serde_json::to_string(&msg).unwrap();
-            let msg2 = OmiMessage::parse(&json_str).unwrap();
-            assert_eq!(msg, msg2);
-        }
-
-        #[cfg(feature = "json")]
-        #[test]
-        fn roundtrip_cancel() {
-            let msg = OmiMessage {
-                version: "1.0".into(),
-                ttl: 0,
-                operation: Operation::Cancel(CancelOp {
-                    rid: vec!["a".into(), "b".into()],
-                }),
-            };
-            let json_str = serde_json::to_string(&msg).unwrap();
-            let msg2 = OmiMessage::parse(&json_str).unwrap();
-            assert_eq!(msg, msg2);
-        }
-
-        #[cfg(feature = "json")]
-        #[test]
-        fn roundtrip_response() {
-            let msg = OmiResponse::ok(serde_json::json!({"x": 1}));
-            let json_str = serde_json::to_string(&msg).unwrap();
-            let msg2 = OmiMessage::parse(&json_str).unwrap();
-            assert_eq!(msg2.version, "1.0");
-            assert_eq!(msg2.ttl, 0);
-            match msg2.operation {
-                Operation::Response(body) => assert_eq!(body.status, 200),
-                _ => panic!("expected Response"),
-            }
         }
 
         // --- Spec-style example messages ---

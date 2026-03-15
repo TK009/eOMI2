@@ -10,8 +10,6 @@ pub enum TreeError {
     NotFound(String),
     Forbidden(String),
     InvalidPath(String),
-    #[cfg(feature = "json")]
-    SerializationError(String),
 }
 
 impl fmt::Display for TreeError {
@@ -20,8 +18,6 @@ impl fmt::Display for TreeError {
             TreeError::NotFound(msg) => write!(f, "Not found: {}", msg),
             TreeError::Forbidden(msg) => write!(f, "Forbidden: {}", msg),
             TreeError::InvalidPath(msg) => write!(f, "Invalid path: {}", msg),
-            #[cfg(feature = "json")]
-            TreeError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
         }
     }
 }
@@ -457,44 +453,6 @@ impl ObjectTree {
         Ok(current)
     }
 
-    /// Read a subtree as JSON with an optional depth limit.
-    #[cfg(feature = "json")]
-    pub fn read(
-        &self,
-        path: &str,
-        depth: Option<usize>,
-    ) -> Result<serde_json::Value, TreeError> {
-        let target = self.resolve(path)?;
-
-        match target {
-            PathTarget::Root(objects) => {
-                let mut map = serde_json::Map::new();
-                for (id, obj) in objects {
-                    let val = match depth {
-                        Some(d) => obj.serialize_with_depth(d)
-                            .map_err(|e| TreeError::SerializationError(e.to_string()))?,
-                        None => serde_json::to_value(obj)
-                            .map_err(|e| TreeError::SerializationError(e.to_string()))?,
-                    };
-                    map.insert(id.clone(), val);
-                }
-                Ok(serde_json::Value::Object(map))
-            }
-            PathTarget::Object(obj) => {
-                let val = match depth {
-                    Some(d) => obj.serialize_with_depth(d)
-                        .map_err(|e| TreeError::SerializationError(e.to_string()))?,
-                    None => serde_json::to_value(obj)
-                        .map_err(|e| TreeError::SerializationError(e.to_string()))?,
-                };
-                Ok(val)
-            }
-            PathTarget::InfoItem(item) => {
-                serde_json::to_value(item)
-                    .map_err(|e| TreeError::SerializationError(e.to_string()))
-            }
-        }
-    }
 }
 
 impl Default for ObjectTree {
@@ -786,59 +744,6 @@ mod tests {
             tree.delete("/DeviceA/Missing").unwrap_err(),
             TreeError::NotFound("'Missing' not found in 'DeviceA'".into())
         );
-    }
-
-    // --- Read tests ---
-
-    #[cfg(feature = "json")]
-    mod json {
-        use super::*;
-
-        #[test]
-        fn read_root() {
-            let tree = sample_tree();
-            let val = tree.read("/", None).unwrap();
-            assert!(val["DeviceA"].is_object());
-        }
-
-        #[test]
-        fn read_object() {
-            let tree = sample_tree();
-            let val = tree.read("/DeviceA", None).unwrap();
-            assert_eq!(val["id"], "DeviceA");
-        }
-
-        #[test]
-        fn read_info_item() {
-            let tree = sample_tree();
-            let val = tree.read("/DeviceA/Temperature", None).unwrap();
-            let values = val["values"].as_array().unwrap();
-            assert_eq!(values.len(), 1);
-            assert_eq!(values[0]["v"], 22.5);
-        }
-
-        #[test]
-        fn read_with_depth_limit() {
-            let tree = sample_tree();
-            let val = tree.read("/DeviceA", Some(0)).unwrap();
-            assert_eq!(val["id"], "DeviceA");
-            assert!(val.get("items").is_none());
-            assert!(val.get("objects").is_none());
-        }
-
-        #[test]
-        fn full_scenario_read() {
-            let mut tree = ObjectTree::new();
-            tree.write_value("/Sensor1/Temperature", OmiValue::Number(20.0), Some(100.0))
-                .unwrap();
-            tree.write_value("/Sensor1/Humidity", OmiValue::Number(45.0), Some(100.0))
-                .unwrap();
-
-            let obj_json = tree.read("/Sensor1", None).unwrap();
-            assert_eq!(obj_json["id"], "Sensor1");
-            assert!(obj_json["items"]["Temperature"].is_object());
-            assert!(obj_json["items"]["Humidity"].is_object());
-        }
     }
 
     // --- Full scenario test ---

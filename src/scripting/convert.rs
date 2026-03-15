@@ -1,6 +1,6 @@
 //! Bidirectional conversion between `OmiValue` and mJS values.
 
-use crate::odf::{OmiValue, InfoItem};
+use crate::odf::{OmiValue, InfoItem, Value};
 use super::ffi;
 use super::ffi::mjs_name;
 
@@ -94,6 +94,58 @@ pub unsafe fn omi_to_mjs_element(mjs: *mut ffi::mjs, item: &InfoItem) -> ffi::mj
     ffi::mjs_set(mjs, obj, vals_name, vals_len, arr);
 
     obj
+}
+
+/// Build a JS event object for subscription delivery:
+/// `{ values: [{value, path, timestamp}, ...] }`.
+///
+/// Each entry in the `values` array corresponds to a `Value` from the
+/// delivery. The `path` is the same for all entries (single InfoItem
+/// subscriptions) — callers with Object subscriptions should invoke this
+/// once per InfoItem with the appropriate path.
+///
+/// - `value`: the `OmiValue` converted to JS (null if the ring buffer was empty)
+/// - `path`: the O-DF path string
+/// - `timestamp`: the timestamp as a number, or null if absent
+///
+/// # Safety
+/// `mjs` must be a valid mJS instance pointer.
+pub unsafe fn delivery_to_mjs_event(
+    mjs: *mut ffi::mjs,
+    path: &str,
+    values: &[Value],
+) -> ffi::mjs_val_t {
+    let event = ffi::mjs_mk_object(mjs);
+    let arr = ffi::mjs_mk_array(mjs);
+
+    for entry in values {
+        let entry_obj = ffi::mjs_mk_object(mjs);
+
+        // value
+        let js_val = omi_to_mjs(mjs, &entry.v);
+        let (n, l) = mjs_name!("value");
+        ffi::mjs_set(mjs, entry_obj, n, l, js_val);
+
+        // path
+        let js_path = ffi::mjs_mk_string(mjs, path.as_ptr() as *const _, path.len(), 1);
+        let (n, l) = mjs_name!("path");
+        ffi::mjs_set(mjs, entry_obj, n, l, js_path);
+
+        // timestamp
+        let js_ts = match entry.t {
+            Some(t) => ffi::mjs_mk_number(mjs, t),
+            None => ffi::mjs_mk_null(),
+        };
+        let (n, l) = mjs_name!("timestamp");
+        ffi::mjs_set(mjs, entry_obj, n, l, js_ts);
+
+        ffi::mjs_array_push(mjs, arr, entry_obj);
+    }
+
+    let (n, l) = mjs_name!("values");
+    ffi::mjs_set(mjs, event, n, l, arr);
+
+    event
 }
 
 #[cfg(test)]
@@ -386,6 +438,181 @@ mod tests {
                 let s = "héllo wörld";
                 let val = ffi::mjs_mk_string(mjs, s.as_ptr() as *const _, s.len(), 1);
                 assert_eq!(mjs_to_omi(mjs, val), OmiValue::Str("héllo wörld".into()));
+            });
+        }
+    }
+
+    // ── delivery_to_mjs_event ──
+
+    #[test]
+    fn delivery_event_single_value() {
+        unsafe {
+            with_mjs(|mjs| {
+                let values = vec![Value::new(OmiValue::Number(22.5), Some(1000.0))];
+                let event = delivery_to_mjs_event(mjs, "/Dev/Temp", &values);
+                assert_ne!(ffi::mjs_is_object(event), 0);
+
+                // event.values should be an array
+                let (n, l) = mjs_name!("values");
+                let arr = ffi::mjs_get(mjs, event, n, l);
+                assert_ne!(ffi::mjs_is_object(arr), 0);
+
+                // Set as global and verify via script execution
+                let global = ffi::mjs_get_global(mjs);
+                let (n, l) = mjs_name!("ev");
+                ffi::mjs_set(mjs, global, n, l, event);
+
+                // Check values[0].value
+                let mut res: ffi::mjs_val_t = 0;
+                let src = std::ffi::CString::new("ev.values[0].value").unwrap();
+                ffi::mjs_exec(mjs, src.as_ptr(), &mut res);
+                assert_eq!(ffi::mjs_get_double(mjs, res), 22.5);
+
+                // Check values[0].path
+                let src = std::ffi::CString::new("ev.values[0].path").unwrap();
+                ffi::mjs_exec(mjs, src.as_ptr(), &mut res);
+                assert_ne!(ffi::mjs_is_string(res), 0);
+                let omi = mjs_to_omi(mjs, res);
+                assert_eq!(omi, OmiValue::Str("/Dev/Temp".into()));
+
+                // Check values[0].timestamp
+                let src = std::ffi::CString::new("ev.values[0].timestamp").unwrap();
+                ffi::mjs_exec(mjs, src.as_ptr(), &mut res);
+                assert_eq!(ffi::mjs_get_double(mjs, res), 1000.0);
+            });
+        }
+    }
+
+    #[test]
+    fn delivery_event_multiple_values() {
+        unsafe {
+            with_mjs(|mjs| {
+                let values = vec![
+                    Value::new(OmiValue::Number(22.5), Some(1000.0)),
+                    Value::new(OmiValue::Number(23.0), Some(1001.0)),
+                    Value::new(OmiValue::Number(23.5), Some(1002.0)),
+                ];
+                let event = delivery_to_mjs_event(mjs, "/Dev/Temp", &values);
+
+                let global = ffi::mjs_get_global(mjs);
+                let (n, l) = mjs_name!("ev");
+                ffi::mjs_set(mjs, global, n, l, event);
+
+                // Check array length via script
+                let mut res: ffi::mjs_val_t = 0;
+                let src = std::ffi::CString::new("ev.values.length").unwrap();
+                ffi::mjs_exec(mjs, src.as_ptr(), &mut res);
+                assert_eq!(ffi::mjs_get_double(mjs, res), 3.0);
+
+                // Check last element
+                let src = std::ffi::CString::new("ev.values[2].value").unwrap();
+                ffi::mjs_exec(mjs, src.as_ptr(), &mut res);
+                assert_eq!(ffi::mjs_get_double(mjs, res), 23.5);
+            });
+        }
+    }
+
+    #[test]
+    fn delivery_event_empty_values() {
+        unsafe {
+            with_mjs(|mjs| {
+                let values: Vec<Value> = vec![];
+                let event = delivery_to_mjs_event(mjs, "/Dev/Temp", &values);
+                assert_ne!(ffi::mjs_is_object(event), 0);
+
+                let global = ffi::mjs_get_global(mjs);
+                let (n, l) = mjs_name!("ev");
+                ffi::mjs_set(mjs, global, n, l, event);
+
+                let mut res: ffi::mjs_val_t = 0;
+                let src = std::ffi::CString::new("ev.values.length").unwrap();
+                ffi::mjs_exec(mjs, src.as_ptr(), &mut res);
+                assert_eq!(ffi::mjs_get_double(mjs, res), 0.0);
+            });
+        }
+    }
+
+    #[test]
+    fn delivery_event_null_value() {
+        unsafe {
+            with_mjs(|mjs| {
+                let values = vec![Value::new(OmiValue::Null, Some(500.0))];
+                let event = delivery_to_mjs_event(mjs, "/Dev/Empty", &values);
+
+                let global = ffi::mjs_get_global(mjs);
+                let (n, l) = mjs_name!("ev");
+                ffi::mjs_set(mjs, global, n, l, event);
+
+                let mut res: ffi::mjs_val_t = 0;
+                let src = std::ffi::CString::new("ev.values[0].value").unwrap();
+                ffi::mjs_exec(mjs, src.as_ptr(), &mut res);
+                assert_ne!(ffi::mjs_is_null(res), 0);
+
+                let src = std::ffi::CString::new("ev.values[0].path").unwrap();
+                ffi::mjs_exec(mjs, src.as_ptr(), &mut res);
+                let omi = mjs_to_omi(mjs, res);
+                assert_eq!(omi, OmiValue::Str("/Dev/Empty".into()));
+            });
+        }
+    }
+
+    #[test]
+    fn delivery_event_no_timestamp() {
+        unsafe {
+            with_mjs(|mjs| {
+                let values = vec![Value::new(OmiValue::Number(42.0), None)];
+                let event = delivery_to_mjs_event(mjs, "/Dev/X", &values);
+
+                let global = ffi::mjs_get_global(mjs);
+                let (n, l) = mjs_name!("ev");
+                ffi::mjs_set(mjs, global, n, l, event);
+
+                let mut res: ffi::mjs_val_t = 0;
+                let src = std::ffi::CString::new("ev.values[0].timestamp").unwrap();
+                ffi::mjs_exec(mjs, src.as_ptr(), &mut res);
+                assert_ne!(ffi::mjs_is_null(res), 0);
+            });
+        }
+    }
+
+    #[test]
+    fn delivery_event_mixed_types() {
+        unsafe {
+            with_mjs(|mjs| {
+                let values = vec![
+                    Value::new(OmiValue::Number(1.0), Some(100.0)),
+                    Value::new(OmiValue::Str("hello".into()), Some(101.0)),
+                    Value::new(OmiValue::Bool(true), None),
+                ];
+                let event = delivery_to_mjs_event(mjs, "/Dev/Mixed", &values);
+
+                let global = ffi::mjs_get_global(mjs);
+                let (n, l) = mjs_name!("ev");
+                ffi::mjs_set(mjs, global, n, l, event);
+
+                let mut res: ffi::mjs_val_t = 0;
+
+                // First: number
+                let src = std::ffi::CString::new("ev.values[0].value").unwrap();
+                ffi::mjs_exec(mjs, src.as_ptr(), &mut res);
+                assert_eq!(ffi::mjs_get_double(mjs, res), 1.0);
+
+                // Second: string
+                let src = std::ffi::CString::new("ev.values[1].value").unwrap();
+                ffi::mjs_exec(mjs, src.as_ptr(), &mut res);
+                assert_ne!(ffi::mjs_is_string(res), 0);
+                assert_eq!(mjs_to_omi(mjs, res), OmiValue::Str("hello".into()));
+
+                // Third: boolean
+                let src = std::ffi::CString::new("ev.values[2].value").unwrap();
+                ffi::mjs_exec(mjs, src.as_ptr(), &mut res);
+                assert_ne!(ffi::mjs_is_boolean(res), 0);
+                assert_ne!(ffi::mjs_get_bool(mjs, res), 0);
+
+                // Third: null timestamp
+                let src = std::ffi::CString::new("ev.values[2].timestamp").unwrap();
+                ffi::mjs_exec(mjs, src.as_ptr(), &mut res);
+                assert_ne!(ffi::mjs_is_null(res), 0);
             });
         }
     }

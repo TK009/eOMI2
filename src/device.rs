@@ -27,11 +27,17 @@ pub const PATH_FREE_PSRAM: &str = "/System/FreePsram";
 /// O-DF path for the temperature sensor reading.
 pub const PATH_TEMPERATURE: &str = "/System/Temperature";
 
+/// O-DF path for the firmware version InfoItem (FR-023).
+pub const PATH_FIRMWARE_VERSION: &str = "/System/FirmwareVersion";
+
 /// O-DF path prefix for the discovery subtree.
 pub const PATH_DISCOVERY: &str = "/System/discovery";
 
 /// Capacity for sensor InfoItem ring buffers.
 const SENSOR_CAPACITY: usize = 20;
+
+/// Compile-time firmware version string (FR-024).
+const FIRMWARE_VERSION: &str = env!("FIRMWARE_VERSION");
 
 /// Build the sensor object tree for internal system metrics.
 ///
@@ -80,6 +86,12 @@ pub fn build_sensor_tree() -> BTreeMap<String, Object> {
         psram.meta = Some(psram_meta);
         sys.add_item("FreePsram".into(), psram);
     }
+
+    // FR-023: read-only firmware version InfoItem.
+    let mut fw = InfoItem::new(1);
+    fw.type_uri = Some("omi:device:firmwareversion".into());
+    fw.add_value(OmiValue::Str(FIRMWARE_VERSION.into()), None);
+    sys.add_item("FirmwareVersion".into(), fw);
 
     if crate::board::has_temp_sensor() {
         let mut temp = InfoItem::new(SENSOR_CAPACITY);
@@ -582,6 +594,27 @@ mod tests {
         ot.write_tree("/", tree).unwrap();
 
         assert!(matches!(ot.resolve(PATH_FREE_HEAP), Ok(PathTarget::InfoItem(_))));
+    }
+
+    #[test]
+    fn sensor_tree_has_firmware_version() {
+        let tree = build_sensor_tree();
+        let sys = &tree["System"];
+        let fw = sys.get_item("FirmwareVersion").expect("FirmwareVersion missing");
+        assert_eq!(fw.type_uri.as_deref(), Some("omi:device:firmwareversion"));
+        assert!(!fw.is_writable(), "FirmwareVersion should not be writable");
+        // Should have exactly one value pre-populated
+        let vals = fw.query_values(Some(1), None, None, None);
+        assert_eq!(vals.len(), 1);
+        assert!(matches!(&vals[0].v, OmiValue::Str(_)));
+    }
+
+    #[test]
+    fn firmware_version_path_resolves() {
+        let tree = build_sensor_tree();
+        let mut ot = ObjectTree::new();
+        ot.write_tree("/", tree).unwrap();
+        assert!(matches!(ot.resolve(PATH_FIRMWARE_VERSION), Ok(PathTarget::InfoItem(_))));
     }
 
     // --- serialize/deserialize_saved_items (compact binary format) ---

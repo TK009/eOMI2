@@ -315,6 +315,14 @@ fn main() {
     // --- Build-configurable constants (available in all build profiles) ---
     println!("cargo:rerun-if-env-changed=MAX_WIFI_APS");
     println!("cargo:rerun-if-env-changed=EOMI_HOSTNAME");
+    println!("cargo:rerun-if-env-changed=FIRMWARE_VERSION");
+
+    // FR-024: FIRMWARE_VERSION defaults to CARGO_PKG_VERSION, overridable via env var.
+    let firmware_version = std::env::var("FIRMWARE_VERSION")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| std::env::var("CARGO_PKG_VERSION").unwrap());
+    println!("cargo:rustc-env=FIRMWARE_VERSION={}", firmware_version);
     println!("cargo:rerun-if-env-changed=PERIPHERALS");
 
     // MAX_WIFI_APS: default 3

@@ -10,7 +10,7 @@
 //! to register pins with the [`GpioManager`] and [`PeripheralManager`].
 
 use crate::gpio::GpioPinConfig;
-#[cfg(any(has_board_config, test))]
+#[cfg(any(has_board_config, test, feature = "esp"))]
 use crate::gpio::GpioMode;
 use crate::gpio::peripheral::{PeripheralConfig, PeripheralProtocol};
 

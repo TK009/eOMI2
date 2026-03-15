@@ -361,6 +361,10 @@ impl Engine {
             Err(e) => return (Self::tree_error_to_response(e), Vec::new()),
         }
 
+        // Clamp numeric values if the InfoItem has a max_duty metadata constraint (PWM pins).
+        let v = self.clamp_if_constrained(path, v);
+        // Default to server timestamp when the client omits one.
+        let t = t.or(Some(now));
         let saved_value = v.clone();
         match self.tree.write_value(path, v, t) {
             Ok(created) => {
@@ -386,6 +390,24 @@ impl Engine {
             }
             Err(e) => (Self::tree_error_to_response(e), Vec::new()),
         }
+    }
+
+    /// Clamp a numeric value if the target InfoItem has a `max_duty` metadata
+    /// constraint (used by PWM pins). Values below 0 are clamped to 0.
+    fn clamp_if_constrained(&self, path: &str, v: OmiValue) -> OmiValue {
+        if let OmiValue::Number(n) = &v {
+            if let Ok(PathTarget::InfoItem(item)) = self.tree.resolve(path) {
+                if let Some(meta) = &item.meta {
+                    if let Some(OmiValue::Number(max)) = meta.get("max_duty") {
+                        let clamped = n.clamp(0.0, *max);
+                        if (clamped - n).abs() > f64::EPSILON {
+                            return OmiValue::Number(clamped);
+                        }
+                    }
+                }
+            }
+        }
+        v
     }
 
     fn process_write_batch(&mut self, items: Vec<WriteItem>, now: f64) -> (OmiMessage, Vec<Delivery>) {

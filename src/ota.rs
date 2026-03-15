@@ -44,10 +44,10 @@ impl Drop for OtaLockGuard {
     }
 }
 
-type Req<'a> =
-    esp_idf_svc::http::server::Request<&'a mut esp_idf_svc::http::server::EspHttpConnection>;
+type Req<'a, 'b> =
+    esp_idf_svc::http::server::Request<&'a mut esp_idf_svc::http::server::EspHttpConnection<'b>>;
 
-fn send_json(req: Req<'_>, status: u16, reason: &str, body: &[u8]) {
+fn send_json(req: Req<'_, '_>, status: u16, reason: &str, body: &[u8]) {
     let headers = [("Content-Type", "application/json")];
     match req.into_response(status, Some(reason), &headers) {
         Ok(mut resp) => {
@@ -93,7 +93,7 @@ fn write_decompressed(
 ///
 /// Steps: (1) auth, (2) OTA lock, (3) Content-Length check, (4) gzip magic,
 /// (5-7) streaming read→decompress→write, (8) validate, (9) set boot, (10) reboot.
-pub fn handle_ota(mut req: Req<'_>, api_token: &str) {
+pub fn handle_ota(mut req: Req<'_, '_>, api_token: &str) {
     // (2) Auth check
     if !check_bearer_auth(req.header("authorization"), api_token) {
         send_json(req, 401, "Unauthorized", &json_err("Authentication required"));

@@ -210,7 +210,7 @@ fn main() -> Result<()> {
     // Populate sensor tree
     {
         let mut eng = lock_or_recover(&engine, "engine");
-        eng.tree.write_tree("/", build_sensor_tree()).unwrap();
+        eng.tree.write_tree("/", build_sensor_tree())?;
         info!("Sensor tree populated: System/{{FreeHeap,FreeFlash,FreePsram,FreeOdfStorage,Temperature}}");
 
         // Register PWM InfoItems as writable entries in the O-DF tree (FR-004)

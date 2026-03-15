@@ -63,8 +63,9 @@ fn crc32(data: &[u8]) -> u32 {
 /// Decompress gzip data (RFC 1952) back to the original bytes.
 ///
 /// Expects a valid gzip stream: 10-byte header + DEFLATE payload + 8-byte
-/// trailer. Returns `None` if the data is too short or decompression fails.
-pub fn gzip_decompress(data: &[u8]) -> Option<Vec<u8>> {
+/// trailer. Returns `None` if the data is too short, decompression fails,
+/// or the decompressed output exceeds `max_decompressed_size`.
+pub fn gzip_decompress(data: &[u8], max_decompressed_size: usize) -> Option<Vec<u8>> {
     // Minimum: 10 header + 8 trailer = 18
     if data.len() < 18 {
         return None;
@@ -89,7 +90,9 @@ pub fn gzip_decompress(data: &[u8]) -> Option<Vec<u8>> {
     ]);
 
     let deflated = &data[10..trailer_start];
-    let decompressed = miniz_oxide::inflate::decompress_to_vec(deflated).ok()?;
+    let decompressed =
+        miniz_oxide::inflate::decompress_to_vec_with_limit(deflated, max_decompressed_size)
+            .ok()?;
 
     // Validate CRC32 and decompressed length against trailer
     if crc32(&decompressed) != stored_crc {
@@ -187,7 +190,7 @@ mod tests {
         let trailer_start = compressed.len() - 8;
         // Corrupt the CRC32
         compressed[trailer_start] ^= 0xff;
-        assert!(gzip_decompress(&compressed).is_none());
+        assert!(gzip_decompress(&compressed, 1024).is_none());
     }
 
     #[test]
@@ -196,15 +199,25 @@ mod tests {
         let len = compressed.len();
         // Corrupt the ISIZE (last 4 bytes)
         compressed[len - 1] ^= 0xff;
-        assert!(gzip_decompress(&compressed).is_none());
+        assert!(gzip_decompress(&compressed, 1024).is_none());
     }
 
     #[test]
     fn gzip_decompress_roundtrip() {
         let original = b"<html><body>test</body></html>";
         let compressed = gzip_compress(original);
-        let decompressed = gzip_decompress(&compressed).expect("should decompress");
+        let decompressed = gzip_decompress(&compressed, 1024).expect("should decompress");
         assert_eq!(&decompressed, original);
+    }
+
+    #[test]
+    fn gzip_decompress_rejects_oversized_output() {
+        let original = vec![0u8; 1024];
+        let compressed = gzip_compress(&original);
+        // Limit smaller than the decompressed size — should be rejected
+        assert!(gzip_decompress(&compressed, 512).is_none());
+        // Exact limit should succeed
+        assert!(gzip_decompress(&compressed, 1024).is_some());
     }
 
     #[test]

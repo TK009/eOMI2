@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 use crate::psram::PsramBytes;
 
 const DEFAULT_MAX_TOTAL: usize = 100 * 1024; // 100 KB
-const MAX_SINGLE_PAGE: usize = 64 * 1024; // 64 KB
+pub(crate) const MAX_SINGLE_PAGE: usize = 64 * 1024; // 64 KB
 
 #[derive(Debug, PartialEq)]
 pub enum PageError {

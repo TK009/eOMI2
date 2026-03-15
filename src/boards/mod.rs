@@ -51,7 +51,7 @@ pub struct BoardPeripherals {
 pub fn init_board(
     peripherals: Peripherals,
     hostname: &str,
-) -> anyhow::Result<BoardPeripherals> {
+) -> crate::error::Result<BoardPeripherals> {
     use log::info;
 
     let mut gpio_manager = GpioManager::new();

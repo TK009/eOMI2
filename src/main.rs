@@ -1,4 +1,4 @@
-use anyhow::Result;
+use reconfigurable_device::error::Result;
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     hal::prelude::Peripherals,
@@ -931,8 +931,8 @@ fn handle_portal_reconnect(
 
 fn try_connect(wifi: &mut BlockingWifi<EspWifi<'static>>, ssid: &str, pass: &str) -> Result<()> {
     wifi.set_configuration(&Configuration::Client(ClientConfiguration {
-        ssid: ssid.try_into().map_err(|_| anyhow::anyhow!("SSID too long"))?,
-        password: pass.try_into().map_err(|_| anyhow::anyhow!("Password too long"))?,
+        ssid: ssid.try_into().map_err(|_| reconfigurable_device::error::Error::Msg("SSID too long"))?,
+        password: pass.try_into().map_err(|_| reconfigurable_device::error::Error::Msg("Password too long"))?,
         ..Default::default()
     }))?;
 

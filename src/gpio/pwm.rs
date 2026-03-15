@@ -168,15 +168,14 @@ impl GpioManager {
         channel: impl Peripheral<P = C> + 'static,
         timer: impl Peripheral<P = T> + 'static,
         pin: impl Peripheral<P = P> + 'static,
-    ) -> Result<(), anyhow::Error>
+    ) -> crate::error::Result<()>
     where
         C: LedcChannel<SpeedMode = <T as LedcTimer>::SpeedMode>,
         T: LedcTimer + 'static,
         P: OutputPin,
     {
         self.pin_registry
-            .register(pin_num, format!("PWM ({})", path))
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+            .register(pin_num, format!("PWM ({})", path))?;
 
         let timer_config = TimerConfig::new()
             .frequency(Hertz(DEFAULT_FREQ_HZ))
@@ -333,14 +332,13 @@ impl GpioManager {
         pin_num: u8,
         pin: AnyIOPin,
         edge_type: EdgeType,
-    ) -> Result<(), anyhow::Error> {
+    ) -> crate::error::Result<()> {
         let mode_label = match edge_type {
             EdgeType::Low => "low_edge_trigger",
             EdgeType::High => "high_edge_trigger",
         };
         self.pin_registry
-            .register(pin_num, format!("{} ({})", mode_label, path))
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+            .register(pin_num, format!("{} ({})", mode_label, path))?;
 
         let interrupt_type = match edge_type {
             EdgeType::Low => InterruptType::NegEdge,
@@ -415,10 +413,9 @@ impl GpioManager {
         pin_num: u8,
         pin: impl Peripheral<P = P> + 'static,
         adc_driver: Rc<AdcDriver<'static, P::Adc>>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> crate::error::Result<()> {
         self.pin_registry
-            .register(pin_num, format!("analog_in ({})", path))
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+            .register(pin_num, format!("analog_in ({})", path))?;
 
         let config = AdcChannelConfig {
             attenuation: DB_11,
@@ -466,10 +463,9 @@ impl GpioManager {
         path: String,
         pin_num: u8,
         pin: AnyIOPin,
-    ) -> Result<(), anyhow::Error> {
+    ) -> crate::error::Result<()> {
         self.pin_registry
-            .register(pin_num, format!("digital_in ({})", path))
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+            .register(pin_num, format!("digital_in ({})", path))?;
 
         let input = DigitalInputPin::new(path.clone(), pin_num, pin)?;
         info!("Digital input registered: {} (GPIO{})", path, pin_num);
@@ -483,10 +479,9 @@ impl GpioManager {
         path: String,
         pin_num: u8,
         pin: AnyIOPin,
-    ) -> Result<(), anyhow::Error> {
+    ) -> crate::error::Result<()> {
         self.pin_registry
-            .register(pin_num, format!("digital_out ({})", path))
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+            .register(pin_num, format!("digital_out ({})", path))?;
 
         let output = DigitalOutputPin::new(path.clone(), pin_num, pin)?;
         info!("Digital output registered: {} (GPIO{})", path, pin_num);

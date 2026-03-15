@@ -34,13 +34,13 @@ mod esp_impl {
     };
     use log::info;
 
-    fn ap_config(hostname: &str) -> anyhow::Result<AccessPointConfiguration> {
+    fn ap_config(hostname: &str) -> crate::error::Result<AccessPointConfiguration> {
         let ssid = ap_ssid(hostname);
         Ok(AccessPointConfiguration {
             ssid: ssid
                 .as_str()
                 .try_into()
-                .map_err(|_| anyhow::anyhow!("AP SSID too long"))?,
+                .map_err(|_| crate::error::Error::Msg("AP SSID too long"))?,
             auth_method: AuthMethod::None,
             channel: 1,
             max_connections: 4,
@@ -56,7 +56,7 @@ mod esp_impl {
     pub fn start_ap(
         wifi: &mut BlockingWifi<EspWifi<'static>>,
         hostname: &str,
-    ) -> anyhow::Result<()> {
+    ) -> crate::error::Result<()> {
         info!("Starting soft-AP: SSID={}", ap_ssid(hostname));
 
         wifi.set_configuration(&Configuration::Mixed(
@@ -75,7 +75,7 @@ mod esp_impl {
     ///
     /// After calling this the AP interface is no longer active and connected
     /// clients are dropped.
-    pub fn stop_ap(wifi: &mut BlockingWifi<EspWifi<'static>>) -> anyhow::Result<()> {
+    pub fn stop_ap(wifi: &mut BlockingWifi<EspWifi<'static>>) -> crate::error::Result<()> {
         info!("Stopping soft-AP");
         wifi.set_configuration(&Configuration::Client(ClientConfiguration::default()))?;
         wifi.start()?;
@@ -89,7 +89,7 @@ mod esp_impl {
     /// Safe to call periodically — non-destructive to the AP.
     pub fn scan_networks(
         wifi: &mut BlockingWifi<EspWifi<'static>>,
-    ) -> anyhow::Result<Vec<crate::captive_portal::ScannedNetwork>> {
+    ) -> crate::error::Result<Vec<crate::captive_portal::ScannedNetwork>> {
         use esp_idf_svc::wifi::AuthMethod;
 
         let scan = wifi.scan()?;
@@ -127,14 +127,14 @@ mod esp_impl {
         ssid: &str,
         password: &str,
         ap_hostname: &str,
-    ) -> anyhow::Result<()> {
+    ) -> crate::error::Result<()> {
         let sta_config = ClientConfiguration {
             ssid: ssid
                 .try_into()
-                .map_err(|_| anyhow::anyhow!("SSID too long"))?,
+                .map_err(|_| crate::error::Error::Msg("SSID too long"))?,
             password: password
                 .try_into()
-                .map_err(|_| anyhow::anyhow!("Password too long"))?,
+                .map_err(|_| crate::error::Error::Msg("Password too long"))?,
             ..Default::default()
         };
 

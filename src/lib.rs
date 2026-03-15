@@ -10,6 +10,8 @@
 /// Defaults to CARGO_PKG_VERSION; overridable via FIRMWARE_VERSION env var.
 pub const FIRMWARE_VERSION: &str = env!("FIRMWARE_VERSION");
 
+#[cfg(feature = "std")]
+pub mod error;
 pub mod board;
 #[cfg(feature = "esp")]
 pub mod boards;

@@ -173,7 +173,7 @@ pub fn peripheral_pin_configs() -> Vec<PeripheralPinConfig> {
 pub fn init_gpio(
     gpio_manager: &mut crate::gpio::pwm::GpioManager,
     hostname: &str,
-) -> Result<(), anyhow::Error> {
+) -> crate::error::Result<()> {
     use crate::gpio::pwm::EdgeType;
     use esp_idf_svc::hal::gpio::AnyIOPin;
     use log::{info, warn};

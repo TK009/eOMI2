@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 use std::sync::{Arc, Mutex};
 
-use anyhow::Result;
+use crate::error::Result;
 use esp_idf_svc::{
     http::server::{Configuration as HttpConfig, EspHttpServer, ws::EspHttpWsDetachedSender},
     http::Method,
@@ -621,7 +621,7 @@ pub fn start_http_server(
     let ws = ws_senders.clone();
     let fd_map = fd_to_session.clone();
     let p = portal.clone();
-    server.ws_handler("/omi/ws", move |conn| -> anyhow::Result<()> {
+    server.ws_handler("/omi/ws", move |conn| -> core::result::Result<(), crate::error::Error> {
         if conn.is_new() {
             if is_api_denied(&p) {
                 // Can't send HTTP error on WS upgrade, just close

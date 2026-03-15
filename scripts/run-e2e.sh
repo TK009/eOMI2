@@ -82,6 +82,13 @@ else
     echo "── Skipping build (--skip-build) ──"
 fi
 
+# ── 2b. Memory budget check ──────────────────────────────────────────────
+echo "── Memory budget check ──"
+if ! (cd "$PROJECT_ROOT" && cargo test --target x86_64-unknown-linux-gnu --no-default-features --features std,json,scripting --test memory_budget -- --nocapture); then
+    echo "ERROR: memory budget exceeded — aborting before flash" >&2
+    exit 1
+fi
+
 # ── 3. Flash device and start serial capture ────────────────────────────
 FIRMWARE="$PROJECT_ROOT/target/xtensa-esp32s2-espidf/debug/reconfigurable-device"
 echo "── Flashing device on $DEVICE_PORT ──"

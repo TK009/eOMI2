@@ -522,6 +522,17 @@ pub fn start_http_server(
         Ok(())
     })?;
 
+    // POST /ota — OTA firmware update (FR-005..FR-010b, FR-015..FR-019)
+    let p = portal.clone();
+    server.fn_handler::<Infallible, _>("/ota", Method::Post, move |req| {
+        if is_api_denied(&p) {
+            send_response(req, 503, "Service Unavailable", &[], b"API disabled during provisioning");
+            return Ok(());
+        }
+        crate::ota::handle_ota(req, api_token);
+        Ok(())
+    })?;
+
     // POST /omi — OMI message endpoint
     let eng = engine.clone();
     let dirty = nvs_dirty.clone();

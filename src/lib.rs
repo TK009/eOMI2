@@ -49,6 +49,8 @@ pub mod callback;
 pub mod temp_sensor;
 pub mod time_sync;
 #[cfg(feature = "esp")]
+pub mod ota;
+#[cfg(feature = "esp")]
 pub mod server;
 #[cfg(feature = "std")]
 pub mod wifi_ap;

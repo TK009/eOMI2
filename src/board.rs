@@ -9,7 +9,9 @@
 //! On ESP targets, [`init_gpio`] and [`init_peripherals`] use the board config
 //! to register pins with the [`GpioManager`] and [`PeripheralManager`].
 
-use crate::gpio::{GpioMode, GpioPinConfig};
+use crate::gpio::GpioPinConfig;
+#[cfg(any(has_board_config, test))]
+use crate::gpio::GpioMode;
 use crate::gpio::peripheral::{PeripheralConfig, PeripheralProtocol};
 
 #[cfg(has_board_config)]

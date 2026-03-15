@@ -1939,7 +1939,7 @@ mod tests {
             e.process(write_msg("/Dev/Reader", OmiValue::Number(0.0)), 0.0, None);
             set_onread(&mut e, "/Dev/Reader",
                 "odf.readItem('/Dev/Src/value')");
-            let result = e.run_onread_script(
+            let _result = e.run_onread_script(
                 "/Dev/Reader",
                 &OmiValue::Number(0.0),
                 Some(1000.0),

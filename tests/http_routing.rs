@@ -18,7 +18,7 @@ use reconfigurable_device::pages::PageStore;
 
 #[cfg(feature = "json")]
 use common::extract_json_result;
-use common::{engine_with_sensor_tree, extract_single_result, extract_values, response_status};
+use common::{engine_with_sensor_tree, extract_values, response_status};
 
 /// Chain the full REST GET flow: URI → parse → build read op → engine.process.
 fn get_omi(engine: &mut Engine, uri: &str) -> OmiMessage {

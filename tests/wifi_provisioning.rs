@@ -6,7 +6,7 @@
 // credential management, and API key lifecycle.
 
 use reconfigurable_device::captive_portal::{
-    parse_provision_form, ApiKeyAction, FormError, ProvisionForm,
+    parse_provision_form, ApiKeyAction, FormError,
 };
 use reconfigurable_device::wifi_cfg::{
     deserialize_wifi_config, serialize_wifi_config, WifiConfig, MAX_WIFI_APS,

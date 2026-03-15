@@ -209,6 +209,18 @@ fn main() -> Result<()> {
         start_http_server(nvs_dirty.clone(), api_token, portal.clone())?;
     info!("HTTP server listening on port 80");
 
+    // FR-020: Confirm running firmware as valid to cancel OTA rollback.
+    // Without this call, ESP-IDF's rollback mechanism reboots into the
+    // previous OTA slot on watchdog timeout (FR-021).
+    unsafe {
+        let err = esp_idf_svc::sys::esp_ota_mark_app_valid_cancel_rollback();
+        if err != esp_idf_svc::sys::ESP_OK {
+            warn!("esp_ota_mark_app_valid_cancel_rollback failed: {}", err);
+        } else {
+            info!("OTA: running firmware confirmed valid (rollback cancelled)");
+        }
+    }
+
     // Populate sensor tree
     {
         let mut eng = lock_or_recover(&engine, "engine");

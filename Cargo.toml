@@ -24,7 +24,7 @@ opt-level = "z"
 [features]
 default = ["std", "esp", "lite-json", "scripting"]
 std = []
-esp = ["dep:esp-idf-svc", "dep:embedded-svc", "dep:embuild", "lite-json"]
+esp = ["dep:esp-idf-svc", "dep:embedded-svc", "dep:embuild"]
 gpio = ["dep:toml", "dep:serde"]
 json = ["dep:serde", "dep:serde_json"]
 lite-json = []

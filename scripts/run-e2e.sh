@@ -74,7 +74,7 @@ echo "Claimed $DEVICE_PORT (fd: $DEVICE_FD)"
 # ── 2. Build firmware ───────────────────────────────────────────────────
 if [[ "$SKIP_BUILD" == false ]]; then
     echo "── Building firmware ──"
-    if ! (cd "$PROJECT_ROOT" && cargo build --features mem-stats); then
+    if ! (cd "$PROJECT_ROOT" && cargo build --no-default-features --features std,esp,lite-json,scripting,mem-stats); then
         echo "ERROR: firmware build failed" >&2
         exit 1
     fi

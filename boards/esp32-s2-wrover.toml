@@ -22,11 +22,11 @@ pin = 5
 mode = "digital_in"
 
 [[gpio]]
-pin = 34
+pin = 3
 mode = "analog_in"
 
 [[gpio]]
-pin = 25
+pin = 18
 mode = "pwm"
 
 # Peripheral protocol buses.
@@ -34,8 +34,8 @@ mode = "pwm"
 
 [[peripheral]]
 protocol = "I2C"
-sda = 21
-scl = 22
+sda = 8
+scl = 9
 
 [[peripheral]]
 protocol = "UART"

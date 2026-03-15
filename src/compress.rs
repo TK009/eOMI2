@@ -9,12 +9,31 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
+/// Minimum free heap (bytes) required before attempting gzip compression.
+#[cfg(feature = "esp")]
+/// The miniz_oxide compressor state (`CompressorOxide`) is ~300 KB; on
+/// ESP32-S2 with only 320 KB total SRAM this will OOM and abort unless we
+/// gate on available memory first.
+const GZIP_MIN_FREE_HEAP: usize = 350_000;
+
 /// Compress data into gzip format (RFC 1952).
 ///
 /// Produces a valid gzip stream: 10-byte header + DEFLATE payload + 8-byte
 /// trailer (CRC32 + original size). Suitable for HTTP Content-Encoding: gzip.
-pub fn gzip_compress(data: &[u8]) -> Vec<u8> {
-    // DEFLATE compress (raw, not zlib-wrapped)
+///
+/// Returns `None` when insufficient heap is available (ESP32) or compression
+/// otherwise cannot proceed safely.
+pub fn gzip_compress(data: &[u8]) -> Option<Vec<u8>> {
+    // On ESP32, check free heap before attempting the ~300 KB allocation.
+    #[cfg(feature = "esp")]
+    {
+        let free = unsafe { esp_idf_svc::sys::esp_get_free_heap_size() } as usize;
+        if free < GZIP_MIN_FREE_HEAP {
+            return None;
+        }
+    }
+
+    // DEFLATE compress (raw, not zlib-wrapped).
     let deflated = miniz_oxide::deflate::compress_to_vec(data, 6);
 
     let crc = crc32(data);
@@ -39,7 +58,7 @@ pub fn gzip_compress(data: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&crc.to_le_bytes());
     out.extend_from_slice(&size.to_le_bytes());
 
-    out
+    Some(out)
 }
 
 /// CRC32 (ISO 3309 / ITU-T V.42) — bit-at-a-time implementation.
@@ -499,7 +518,7 @@ mod tests {
 
     #[test]
     fn gzip_valid_header() {
-        let compressed = gzip_compress(b"hello");
+        let compressed = gzip_compress(b"hello").unwrap();
         assert!(compressed.len() >= 18); // 10 header + min 1 byte data + 8 trailer
         assert_eq!(compressed[0], 0x1f); // ID1
         assert_eq!(compressed[1], 0x8b); // ID2
@@ -509,7 +528,7 @@ mod tests {
     #[test]
     fn gzip_roundtrip() {
         let original = b"<html><body><h1>Hello World</h1></body></html>";
-        let compressed = gzip_compress(original);
+        let compressed = gzip_compress(original).unwrap();
 
         // Compressed should be smaller than original for repetitive HTML
         // (or at least produce valid output)
@@ -537,7 +556,7 @@ mod tests {
     fn gzip_decompressible() {
         // Verify the output can be decompressed by miniz_oxide
         let original = b"<h1>Test</h1><p>Content here</p>";
-        let compressed = gzip_compress(original);
+        let compressed = gzip_compress(original).unwrap();
 
         // Skip 10-byte header, strip 8-byte trailer
         let deflated = &compressed[10..compressed.len() - 8];
@@ -549,7 +568,7 @@ mod tests {
 
     #[test]
     fn gzip_empty_input() {
-        let compressed = gzip_compress(b"");
+        let compressed = gzip_compress(b"").unwrap();
         assert!(compressed.len() >= 18);
         let trailer_start = compressed.len() - 8;
         let stored_size = u32::from_le_bytes([
@@ -563,7 +582,7 @@ mod tests {
 
     #[test]
     fn gzip_decompress_rejects_bad_crc() {
-        let mut compressed = gzip_compress(b"hello");
+        let mut compressed = gzip_compress(b"hello").unwrap();
         let trailer_start = compressed.len() - 8;
         // Corrupt the CRC32
         compressed[trailer_start] ^= 0xff;
@@ -572,7 +591,7 @@ mod tests {
 
     #[test]
     fn gzip_decompress_rejects_bad_isize() {
-        let mut compressed = gzip_compress(b"hello");
+        let mut compressed = gzip_compress(b"hello").unwrap();
         let len = compressed.len();
         // Corrupt the ISIZE (last 4 bytes)
         compressed[len - 1] ^= 0xff;
@@ -582,7 +601,7 @@ mod tests {
     #[test]
     fn gzip_decompress_roundtrip() {
         let original = b"<html><body>test</body></html>";
-        let compressed = gzip_compress(original);
+        let compressed = gzip_compress(original).unwrap();
         let decompressed = gzip_decompress(&compressed, 1024).expect("should decompress");
         assert_eq!(&decompressed, original);
     }
@@ -590,7 +609,7 @@ mod tests {
     #[test]
     fn gzip_decompress_rejects_oversized_output() {
         let original = vec![0u8; 1024];
-        let compressed = gzip_compress(&original);
+        let compressed = gzip_compress(&original).unwrap();
         // Limit smaller than the decompressed size — should be rejected
         assert!(gzip_decompress(&compressed, 512).is_none());
         // Exact limit should succeed
@@ -602,14 +621,14 @@ mod tests {
     #[test]
     fn gzip_decompress_rejects_truncated_no_trailer() {
         // Valid header but no trailer (only 10 bytes)
-        let compressed = gzip_compress(b"hello");
+        let compressed = gzip_compress(b"hello").unwrap();
         let truncated = &compressed[..10]; // header only, no deflate data or trailer
         assert!(gzip_decompress(truncated, 1024).is_none());
     }
 
     #[test]
     fn gzip_decompress_rejects_truncated_mid_deflate() {
-        let compressed = gzip_compress(b"hello world, this is some data to compress");
+        let compressed = gzip_compress(b"hello world, this is some data to compress").unwrap();
         // Cut in the middle of the deflate stream (keep header + partial payload)
         let mid = 10 + (compressed.len() - 18) / 2; // halfway through deflate
         let truncated = &compressed[..mid];
@@ -626,18 +645,18 @@ mod tests {
 
     #[test]
     fn gzip_decompress_rejects_bad_magic() {
-        let mut compressed = gzip_compress(b"hello");
+        let mut compressed = gzip_compress(b"hello").unwrap();
         compressed[0] = 0x00; // corrupt ID1
         assert!(gzip_decompress(&compressed, 1024).is_none());
 
-        let mut compressed = gzip_compress(b"hello");
+        let mut compressed = gzip_compress(b"hello").unwrap();
         compressed[1] = 0x00; // corrupt ID2
         assert!(gzip_decompress(&compressed, 1024).is_none());
     }
 
     #[test]
     fn gzip_decompress_rejects_bit_flipped_deflate() {
-        let mut compressed = gzip_compress(b"hello world");
+        let mut compressed = gzip_compress(b"hello world").unwrap();
         // Flip bits in the deflate payload (byte 12, middle of compressed data)
         if compressed.len() > 14 {
             compressed[12] ^= 0xFF;
@@ -657,7 +676,7 @@ mod tests {
     fn gzip_decompress_bomb_rejected_by_limit() {
         // Compress a large block of zeros (compresses very well)
         let bomb_data = vec![0u8; 100_000];
-        let compressed = gzip_compress(&bomb_data);
+        let compressed = gzip_compress(&bomb_data).unwrap();
         // The compressed form should be much smaller than 100KB
         assert!(compressed.len() < 1000, "zeros should compress very well");
         // Decompress with a small limit — must be rejected
@@ -672,7 +691,7 @@ mod tests {
     fn gzip_decompress_bomb_large_ratio() {
         // 1MB of zeros — extreme compression ratio
         let bomb_data = vec![0u8; 1_000_000];
-        let compressed = gzip_compress(&bomb_data);
+        let compressed = gzip_compress(&bomb_data).unwrap();
         // Should be tiny compressed
         assert!(compressed.len() < 2000);
         // With a reasonable limit, the bomb is defused
@@ -683,7 +702,7 @@ mod tests {
     fn gzip_decompress_swapped_trailer_fields() {
         // Swap CRC32 and ISIZE in the trailer
         let original = b"test data here";
-        let mut compressed = gzip_compress(original);
+        let mut compressed = gzip_compress(original).unwrap();
         let len = compressed.len();
         // Swap last 8 bytes: CRC32(4) <-> ISIZE(4)
         let crc_bytes: [u8; 4] = compressed[len - 8..len - 4].try_into().unwrap();
@@ -703,7 +722,7 @@ mod tests {
             <h1>Device Setup</h1>\
             <p>Configure your device settings below.</p>\
             </body></html>";
-        let compressed = gzip_compress(html.as_bytes());
+        let compressed = gzip_compress(html.as_bytes()).unwrap();
         // HTML should compress significantly (at least 20% savings)
         assert!(
             compressed.len() < html.len(),

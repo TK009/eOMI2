@@ -229,7 +229,7 @@ fn init_peripherals(
                     let sda = unsafe { AnyIOPin::new(sda as i32) };
                     let scl = unsafe { AnyIOPin::new(scl as i32) };
                     let config = I2cConfig2::new(pcfg.name.clone());
-                    let bus = I2cBus::new(i2c0, sda, scl, &device_path, config)?;
+                    let bus = I2cBus::new(&device_path, &config, i2c0, sda, scl)?;
                     peripheral_manager.add_i2c(bus);
                     i2c_used = true;
                     info!("I2C bus initialized: {}", pcfg.name);
@@ -250,7 +250,7 @@ fn init_peripherals(
                     let rx = unsafe { AnyIOPin::new(rx as i32) };
                     let tx = unsafe { AnyIOPin::new(tx as i32) };
                     let config = UartConfig::new(pcfg.name.clone());
-                    let bus = UartBus::new(uart1, tx, rx, &device_path, config)?;
+                    let bus = UartBus::new(&device_path, &config, uart1, tx, rx)?;
                     peripheral_manager.add_uart(bus);
                     uart_used = true;
                     info!("UART bus initialized: {}", pcfg.name);

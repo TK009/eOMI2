@@ -41,8 +41,8 @@ impl StatusCode {
 pub enum ResultPayload {
     /// Null/empty result (e.g., write acknowledgments).
     Null,
-    /// Read result: path + values (for InfoItem reads and subscription events).
-    ReadValues { path: String, values: Vec<Value> },
+    /// Read result: path + values + optional metadata (for InfoItem reads and subscription events).
+    ReadValues { path: String, values: Vec<Value>, meta: Option<std::collections::BTreeMap<String, crate::odf::OmiValue>> },
     /// Pre-rendered JSON string (only available with lite-json, for object subtree reads).
     #[cfg(feature = "lite-json")]
     JsonString(String),
@@ -93,11 +93,15 @@ impl OmiResponse {
 
     /// OK response with a read result (path + values).
     pub fn ok_read_result(path: String, values: Vec<Value>) -> OmiMessage {
+        Self::ok_read_result_with_meta(path, values, None)
+    }
+
+    pub fn ok_read_result_with_meta(path: String, values: Vec<Value>, meta: Option<std::collections::BTreeMap<String, crate::odf::OmiValue>>) -> OmiMessage {
         Self::wrap(ResponseBody {
             status: StatusCode::Ok.as_u16(),
             rid: None,
             desc: None,
-            result: Some(ResponseResult::Single(ResultPayload::ReadValues { path, values })),
+            result: Some(ResponseResult::Single(ResultPayload::ReadValues { path, values, meta })),
         })
     }
 
@@ -232,6 +236,7 @@ impl OmiResponse {
             result: Some(ResponseResult::Single(ResultPayload::ReadValues {
                 path: path.to_string(),
                 values: values.to_vec(),
+                meta: None,
             })),
         })
     }
@@ -291,7 +296,7 @@ mod tests {
             Operation::Response(body) => {
                 assert_eq!(body.status, 200);
                 match &body.result {
-                    Some(ResponseResult::Single(ResultPayload::ReadValues { path, values })) => {
+                    Some(ResponseResult::Single(ResultPayload::ReadValues { path, values, .. })) => {
                         assert_eq!(path, "/Device/Temp");
                         assert_eq!(values.len(), 1);
                     }
@@ -487,7 +492,7 @@ mod tests {
                 assert_eq!(body.rid.as_deref(), Some("sub-1"));
                 assert!(body.desc.is_none());
                 match &body.result {
-                    Some(ResponseResult::Single(ResultPayload::ReadValues { path, values })) => {
+                    Some(ResponseResult::Single(ResultPayload::ReadValues { path, values, .. })) => {
                         assert_eq!(path, "/Device/Sensor");
                         assert_eq!(values.len(), 2);
                     }

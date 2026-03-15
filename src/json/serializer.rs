@@ -397,9 +397,20 @@ impl ToJson for ResultPayload {
     fn write_json(&self, w: &mut JsonWriter) {
         match self {
             ResultPayload::Null => w.null(),
-            ResultPayload::ReadValues { path, values } => {
+            ResultPayload::ReadValues { path, values, meta } => {
                 w.begin_object();
                 w.field_str("path", path);
+                if let Some(meta_map) = meta {
+                    if !meta_map.is_empty() {
+                        w.key("meta");
+                        w.begin_object();
+                        for (k, v) in meta_map {
+                            w.key(k);
+                            v.write_json(w);
+                        }
+                        w.end_object();
+                    }
+                }
                 w.key("values");
                 w.begin_array();
                 for v in values {

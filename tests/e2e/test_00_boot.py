@@ -4,20 +4,18 @@ These tests gate every other e2e section: if the device has not booted,
 connected to Wi-Fi, and started its HTTP server, nothing else can run.
 """
 
-import requests
-
-from helpers import omi_read, REQUEST_TIMEOUT
+from helpers import device_get, omi_read
 
 
 def test_device_boots(base_url):
     """Device is reachable over HTTP (booted + Wi-Fi + HTTP server)."""
-    resp = requests.get(base_url, timeout=REQUEST_TIMEOUT)
+    resp = device_get(base_url)
     assert resp.status_code == 200
 
 
 def test_landing_page(base_url):
     """Landing page renders the expected HTML structure."""
-    resp = requests.get(base_url, timeout=REQUEST_TIMEOUT)
+    resp = device_get(base_url)
     assert resp.status_code == 200
     assert "text/html" in resp.headers.get("Content-Type", "")
     body = resp.text

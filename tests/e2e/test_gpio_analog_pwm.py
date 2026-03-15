@@ -16,7 +16,7 @@ Environment variables (override defaults from board config):
 import os
 import time
 
-from helpers import omi_read, omi_write, omi_status, omi_result
+from helpers import omi_read, omi_write, omi_status, omi_result, wait_for_values
 
 
 ANALOG_IN_PATH = os.environ.get("ANALOG_IN_PATH", "/GPIO34")
@@ -81,10 +81,9 @@ def test_analog_in_read_numeric(base_url):
 
 def test_analog_in_value_has_timestamp(base_url):
     """analog_in values include a timestamp (FR-007)."""
-    data = omi_read(base_url, ANALOG_IN_PATH, newest=1)
-    assert omi_status(data) == 200
-    values = omi_result(data)["values"]
-    assert len(values) >= 1
+    # Wait for at least one ADC poll cycle to produce a timestamped value
+    # (initial value from tree registration has no timestamp).
+    values = wait_for_values(base_url, path=ANALOG_IN_PATH, min_count=1)
     assert "t" in values[0], "value entry should include timestamp 't'"
 
 

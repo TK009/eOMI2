@@ -10,6 +10,20 @@ import requests
 REQUEST_TIMEOUT = 10  # seconds – avoid hanging on unresponsive devices
 TREE_WRITE_TIMEOUT = 30  # seconds – tree writes with metadata need more time
 WS_TIMEOUT = 10  # seconds – WebSocket operation timeout
+DEVICE_RETRIES = 3  # retry count for transient connection resets (ESP32 has limited sockets)
+
+
+def device_get(url, **kwargs):
+    """GET with retry — ESP32 HTTP server has limited sockets and may reset connections."""
+    kwargs.setdefault("timeout", REQUEST_TIMEOUT)
+    last_err = None
+    for attempt in range(DEVICE_RETRIES):
+        try:
+            return requests.get(url, **kwargs)
+        except requests.ConnectionError as e:
+            last_err = e
+            time.sleep(1)
+    raise last_err
 
 
 def run_async(coro):
@@ -77,15 +91,23 @@ def _omi_post(base_url, payload, token=None, timeout=None, check=True):
     ``check=False`` when the test expects a non-200 HTTP status.
     """
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    resp = requests.post(
-        f"{base_url}/omi",
-        json=payload,
-        headers=headers,
-        timeout=REQUEST_TIMEOUT if timeout is None else timeout,
-    )
-    if check:
-        resp.raise_for_status()
-    return resp.json()
+    t = REQUEST_TIMEOUT if timeout is None else timeout
+    last_err = None
+    for _attempt in range(DEVICE_RETRIES):
+        try:
+            resp = requests.post(
+                f"{base_url}/omi",
+                json=payload,
+                headers=headers,
+                timeout=t,
+            )
+            if check:
+                resp.raise_for_status()
+            return resp.json()
+        except requests.ConnectionError as e:
+            last_err = e
+            time.sleep(1)
+    raise last_err
 
 
 def omi_read(base_url, path="/", token=None, timeout=None, **read_params):

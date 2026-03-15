@@ -200,6 +200,7 @@ fn send_response(
 }
 
 /// Send an HTML response, gzip-compressed if the client accepts it.
+/// Falls back to uncompressed if gzip allocation fails (ESP32 has limited RAM).
 fn send_html(
     req: esp_idf_svc::http::server::Request<&mut esp_idf_svc::http::server::EspHttpConnection>,
     status: u16,
@@ -208,16 +209,18 @@ fn send_html(
 ) {
     let accept = req.header("accept-encoding").unwrap_or("");
     if accept.contains("gzip") {
-        let compressed = compress::gzip_compress(html);
-        let headers = [
-            ("Content-Type", "text/html"),
-            ("Content-Encoding", "gzip"),
-        ];
-        send_response(req, status, reason, &headers, &compressed);
-    } else {
-        let headers = [("Content-Type", "text/html")];
-        send_response(req, status, reason, &headers, html);
+        if let Some(compressed) = compress::gzip_compress(html) {
+            let headers = [
+                ("Content-Type", "text/html"),
+                ("Content-Encoding", "gzip"),
+            ];
+            send_response(req, status, reason, &headers, &compressed);
+            return;
+        }
+        warn!("gzip compression failed (OOM?), serving uncompressed");
     }
+    let headers = [("Content-Type", "text/html")];
+    send_response(req, status, reason, &headers, html);
 }
 
 /// Map a `BodyError` to an HTTP error response.

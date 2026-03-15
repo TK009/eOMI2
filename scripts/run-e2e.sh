@@ -71,10 +71,20 @@ CLAIM_TIMEOUT=240
 . "$SCRIPT_DIR/_claim-wait.sh"
 echo "Claimed $DEVICE_PORT (fd: $DEVICE_FD)"
 
+# ── 1b. Source build-time env vars from .env ──────────────────────────────
+# EOMI_BOARD is needed at build time by build.rs to select board config.
+for _envfile in "$PROJECT_ROOT/.env" "$REPO_ROOT/.env" "${RIG_ROOT:-}/.env"; do
+    if [[ -f "$_envfile" ]] && [[ -z "${EOMI_BOARD:-}" ]]; then
+        _val=$(grep -E '^EOMI_BOARD=' "$_envfile" | head -1 | cut -d= -f2- | tr -d "'\"") || true
+        if [[ -n "$_val" ]]; then export EOMI_BOARD="$_val"; fi
+    fi
+done
+unset _envfile _val
+
 # ── 2. Build firmware ───────────────────────────────────────────────────
 if [[ "$SKIP_BUILD" == false ]]; then
     echo "── Building firmware ──"
-    if ! (cd "$PROJECT_ROOT" && cargo build --no-default-features --features std,esp,lite-json,scripting,mem-stats); then
+    if ! (cd "$PROJECT_ROOT" && cargo build --no-default-features --features std,esp,gpio,lite-json,scripting,mem-stats); then
         echo "ERROR: firmware build failed" >&2
         exit 1
     fi
@@ -84,7 +94,7 @@ fi
 
 # ── 2b. Memory budget check ──────────────────────────────────────────────
 echo "── Memory budget check ──"
-if ! (cd "$PROJECT_ROOT" && cargo test --target x86_64-unknown-linux-gnu --no-default-features --features std,json,scripting --test memory_budget -- --nocapture); then
+if ! (cd "$PROJECT_ROOT" && cargo test --target x86_64-unknown-linux-gnu --no-default-features --features std,lite-json,scripting --test memory_budget -- --nocapture); then
     echo "ERROR: memory budget exceeded — aborting before flash" >&2
     exit 1
 fi
@@ -174,7 +184,7 @@ _env_val() {
 }
 
 # Export WIFI_SSID, WIFI_PASS, API_TOKEN from .env if not already set.
-for _key in WIFI_SSID WIFI_PASS API_TOKEN; do
+for _key in WIFI_SSID WIFI_PASS API_TOKEN GPIO_OUT_PATH GPIO_IN_PATH ANALOG_IN_PATH PWM_PATH; do
     if [[ -z "${!_key:-}" ]]; then
         if _val=$(_env_val "$_key"); then
             export "$_key=$_val"

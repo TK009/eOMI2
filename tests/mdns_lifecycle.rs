@@ -1,10 +1,14 @@
-// Host-side unit tests for mDNS responder lifecycle.
+// Host-side unit tests for mDNS responder lifecycle and periodic browsing.
 //
 // Tests the mDNS responder stub in combination with the WiFi state machine
 // to verify correct start/stop behaviour across WiFi state transitions.
+// Also tests MdnsBrowser integration with the discovery tree.
 
 use reconfigurable_device::mdns::{
     MdnsConfig, MdnsResponder, DEFAULT_ODF_PATH, DEFAULT_PORT, SERVICE_PROTO, SERVICE_TYPE,
+};
+use reconfigurable_device::mdns_discovery::{
+    BrowseConfig, MdnsBrowser, Peer, clear_peers, inject_peers,
 };
 use reconfigurable_device::wifi_sm::{WifiEvent, WifiSm, WifiSmConfig, WifiState};
 
@@ -391,4 +395,117 @@ fn mdns_stop_when_none_is_noop() {
     // Stopping when no responder exists should not panic
     let resp = mdns_for_state(&WifiState::Portal, None, "test");
     assert!(resp.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// FR-008: Periodic DNS-SD browsing via MdnsBrowser
+// ---------------------------------------------------------------------------
+
+#[test]
+fn browser_only_active_when_connected() {
+    // MdnsBrowser should only be ticked when in Connected state.
+    // This mirrors the main.rs pattern: create browser on connect, drop on disconnect.
+    let mut sm = WifiSm::new(1, test_sm_config());
+
+    // Not connected yet — no browser
+    let browser: Option<MdnsBrowser> = None;
+    assert!(browser.is_none());
+
+    // Connect
+    sm.handle_event(WifiEvent::ConnectSuccess);
+    assert_eq!(*sm.state(), WifiState::Connected);
+    let mut browser = Some(MdnsBrowser::new(BrowseConfig::default()));
+
+    // Browser fires on first tick
+    clear_peers();
+    let result = browser.as_mut().unwrap().tick(0);
+    assert!(result.is_some());
+
+    // Disconnect — drop browser
+    sm.handle_event(WifiEvent::ConnectionLost);
+    drop(browser);
+
+    // Reconnect — new browser
+    sm.handle_event(WifiEvent::ConnectSuccess);
+    let browser = MdnsBrowser::new(BrowseConfig::default());
+    assert_eq!(browser.cycle_count(), 0);
+}
+
+#[test]
+fn browser_discovers_peers_on_tick() {
+    clear_peers();
+    inject_peers(vec![
+        Peer { hostname: "kitchen".into(), ip: "192.168.1.10".into(), port: 80 },
+        Peer { hostname: "garage".into(), ip: "192.168.1.11".into(), port: 8080 },
+    ]);
+
+    let mut browser = MdnsBrowser::new(BrowseConfig::with_interval_ms(10_000));
+    let result = browser.tick(0).unwrap(); // initial trigger
+    assert_eq!(result.peers.len(), 2);
+    assert_eq!(result.peers[0].hostname, "kitchen");
+    assert_eq!(result.peers[1].hostname, "garage");
+
+    clear_peers();
+}
+
+#[test]
+fn browser_interval_respects_config() {
+    clear_peers();
+    let mut browser = MdnsBrowser::new(BrowseConfig::with_interval_ms(60_000));
+    assert_eq!(browser.interval_ms(), 60_000);
+
+    browser.tick(0); // initial
+    // 30s is not enough for 60s interval
+    assert!(browser.tick(30_000).is_none());
+    // 30s more = 60s total
+    assert!(browser.tick(30_000).is_some());
+}
+
+#[test]
+fn browser_lifecycle_with_wifi_transitions() {
+    // Simulates: connect → browse → disconnect → reconnect → browse
+    let mut sm = WifiSm::new(1, test_sm_config());
+
+    clear_peers();
+    inject_peers(vec![
+        Peer { hostname: "bedroom".into(), ip: "10.0.0.5".into(), port: 80 },
+    ]);
+
+    // Connect and start browsing
+    sm.handle_event(WifiEvent::ConnectSuccess);
+    let mut browser = MdnsBrowser::new(BrowseConfig::with_interval_ms(5_000));
+    let r1 = browser.tick(0).unwrap();
+    assert_eq!(r1.peers.len(), 1);
+    assert_eq!(r1.cycle_count, 1);
+
+    // Disconnect — stop browsing
+    sm.handle_event(WifiEvent::ConnectionLost);
+    drop(browser);
+
+    // Reconnect — new browser, cycle count resets
+    sm.handle_event(WifiEvent::ConnectSuccess);
+    let mut browser = MdnsBrowser::new(BrowseConfig::with_interval_ms(5_000));
+    let r2 = browser.tick(0).unwrap();
+    assert_eq!(r2.cycle_count, 1); // fresh browser
+
+    clear_peers();
+}
+
+#[test]
+fn browser_not_started_in_portal_mode() {
+    let mut sm = WifiSm::new(1, test_sm_config());
+    // Exhaust rotations to reach Portal
+    sm.handle_event(WifiEvent::ConnectFailed);
+    sm.handle_event(WifiEvent::BackoffComplete);
+    sm.handle_event(WifiEvent::ConnectFailed);
+    sm.handle_event(WifiEvent::BackoffComplete);
+    sm.handle_event(WifiEvent::ConnectFailed);
+    assert_eq!(*sm.state(), WifiState::Portal);
+
+    // Browser should NOT be created in portal mode (FR-007)
+    let browser: Option<MdnsBrowser> = match sm.state() {
+        WifiState::Connected => Some(MdnsBrowser::new(BrowseConfig::default())),
+        _ => None,
+    };
+    assert!(browser.is_none());
 }

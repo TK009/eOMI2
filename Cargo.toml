@@ -12,7 +12,7 @@ harness = false # do not use the built-in cargo test harness -> resolve rust-ana
 required-features = ["esp"]
 
 [profile.release]
-opt-level = "s"
+opt-level = "z"
 panic = "abort"
 lto = true
 codegen-units = 1

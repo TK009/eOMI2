@@ -872,6 +872,197 @@ impl Engine {
         result_value
     }
 
+    /// Execute a `javascript://` callback script for a subscription delivery.
+    ///
+    /// Resolves the script source from the URL, builds the event object from
+    /// delivery values, executes with `odf.writeItem`/`odf.readItem` bindings,
+    /// and processes any pending writes with cascading. Script return value is
+    /// ignored. On error/timeout, logs a warning but does not cancel the
+    /// subscription (FR-002/FR-012/FR-013).
+    #[cfg(feature = "scripting")]
+    pub fn run_callback_script(
+        &mut self,
+        url: &str,
+        path: &str,
+        values: &[crate::odf::Value],
+        now: f64,
+    ) -> Vec<Delivery> {
+        use crate::scripting::bindings::{PendingWrite, ScriptCallbackCtx,
+                                          js_odf_write_item, js_odf_read_item};
+        use crate::scripting::ffi;
+        use crate::scripting::ffi::mjs_name;
+        use crate::scripting::convert::delivery_to_mjs_event;
+        use crate::scripting::resolve_script_url;
+
+        // Resolve script source from the javascript:// URL
+        let script_src = match resolve_script_url(&self.tree, url) {
+            Ok(src) => src,
+            Err(e) => {
+                let log_msg = format!("callback script resolve failed for '{}': {}", url, e);
+                if self.script_rl.should_emit(&log_msg) {
+                    warn!("{}", log_msg);
+                }
+                return Vec::new();
+            }
+        };
+
+        // Take the script engine
+        let mut script_engine = match self.script_engine.take() {
+            Some(se) => se,
+            None => return Vec::new(),
+        };
+        let mjs = script_engine.raw();
+
+        let mut pending_writes: Vec<PendingWrite> = Vec::new();
+
+        // Safety: mjs is valid for the duration of this block. The callback
+        // writes to `pending_writes` through the ctx pointer — no Engine aliasing.
+        unsafe {
+            // Build event object from delivery values
+            let event = delivery_to_mjs_event(mjs, path, values);
+
+            let global = ffi::mjs_get_global(mjs);
+            let (n, l) = mjs_name!("event");
+            ffi::mjs_set(mjs, global, n, l, event);
+
+            // Set up `odf.writeItem` and `odf.readItem` bindings
+            let odf = ffi::mjs_mk_object(mjs);
+            let write_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_write_item));
+            let (n, l) = mjs_name!("writeItem");
+            ffi::mjs_set(mjs, odf, n, l, write_fn);
+            let read_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_read_item));
+            let (n, l) = mjs_name!("readItem");
+            ffi::mjs_set(mjs, odf, n, l, read_fn);
+            let (n, l) = mjs_name!("odf");
+            ffi::mjs_set(mjs, global, n, l, odf);
+
+            // Set up callback context
+            let mut ctx = ScriptCallbackCtx {
+                pending_writes: &mut pending_writes,
+                depth: 0,
+                tree: &self.tree as *const _,
+                onread_path_ptr: std::ptr::null(),
+                onread_path_len: 0,
+                onread_fns: std::ptr::null(),
+            };
+            let ctx_foreign = ffi::mjs_mk_foreign(mjs, &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void);
+            let (n, l) = mjs_name!("__ctx");
+            ffi::mjs_set(mjs, global, n, l, ctx_foreign);
+
+            // Execute the script
+            let c_src = match std::ffi::CString::new(script_src.as_str()) {
+                Ok(c) => c,
+                Err(_) => {
+                    warn!("callback script at '{}' contains NUL byte", url);
+                    let null_val = ffi::mjs_mk_null();
+                    let (n, l) = mjs_name!("__ctx");
+                    ffi::mjs_set(mjs, global, n, l, null_val);
+                    self.script_engine = Some(script_engine);
+                    return Vec::new();
+                }
+            };
+            let mut res: ffi::mjs_val_t = 0;
+            ffi::mjs_reset_ops_count(mjs);
+            let deadline = std::time::Instant::now();
+            let err = ffi::mjs_exec(mjs, c_src.as_ptr(), &mut res);
+            let elapsed = deadline.elapsed();
+
+            // Detect resource-limit errors
+            let time_limit = std::time::Duration::from_millis(
+                crate::scripting::engine::MAX_SCRIPT_EXEC_MS,
+            );
+            if elapsed >= time_limit {
+                let log_msg = format!(
+                    "callback script at '{}' exceeded time limit ({}ms)",
+                    url, elapsed.as_millis(),
+                );
+                if self.script_rl.should_emit(&log_msg) {
+                    warn!("{}", log_msg);
+                }
+            } else if err == ffi::MJS_OP_LIMIT_ERROR {
+                let log_msg = format!(
+                    "callback script at '{}' exceeded operation limit ({}ms elapsed)",
+                    url, elapsed.as_millis(),
+                );
+                if self.script_rl.should_emit(&log_msg) {
+                    warn!("{}", log_msg);
+                }
+            } else if err != ffi::MJS_OK {
+                let err_ptr = ffi::mjs_strerror(mjs, err);
+                let msg = if err_ptr.is_null() {
+                    "unknown error"
+                } else {
+                    std::ffi::CStr::from_ptr(err_ptr).to_str().unwrap_or("unknown error")
+                };
+                let log_msg = format!("callback script error at '{}': {}", url, msg);
+                if self.script_rl.should_emit(&log_msg) {
+                    warn!("{}", log_msg);
+                }
+            }
+            // Return value is ignored (FR-002)
+
+            // Clear all script globals
+            let null_val = ffi::mjs_mk_null();
+            let (n, l) = mjs_name!("__ctx");
+            ffi::mjs_set(mjs, global, n, l, null_val);
+            let (n, l) = mjs_name!("event");
+            ffi::mjs_set(mjs, global, n, l, null_val);
+            let (n, l) = mjs_name!("odf");
+            ffi::mjs_set(mjs, global, n, l, null_val);
+        }
+
+        // Put the script engine back before processing writes
+        self.script_engine = Some(script_engine);
+
+        // Process collected writes — each may trigger onwrite scripts at depth 1
+        let mut deliveries = Vec::new();
+        for pw in pending_writes {
+            let value = match pw.encoding {
+                Some(enc) => {
+                    let data_enc = enc.to_data_encoding();
+                    match &pw.value {
+                        OmiValue::Str(s) => match data_enc.decode(s) {
+                            Ok(bytes) => OmiValue::Str(
+                                std::string::String::from_utf8(bytes)
+                                    .unwrap_or_else(|e| {
+                                        std::string::String::from_utf8_lossy(e.as_bytes()).into_owned()
+                                    }),
+                            ),
+                            Err(e) => {
+                                log::warn!(
+                                    "encoding decode error for '{}' ({:?}): {}",
+                                    pw.path, enc, e
+                                );
+                                pw.value
+                            }
+                        },
+                        _ => pw.value,
+                    }
+                }
+                None => pw.value,
+            };
+            let (_resp, d) = self.write_single_inner(&pw.path, value, None, now, 1);
+            deliveries.extend(d);
+
+            if let Some(enc) = pw.encoding {
+                if let Ok(PathTargetMut::InfoItem(item)) = self.tree.resolve_mut(&pw.path) {
+                    let meta = item.meta.get_or_insert_with(BTreeMap::new);
+                    meta.insert(
+                        "tx_encoding".into(),
+                        OmiValue::Str(enc.to_data_encoding().as_str().into()),
+                    );
+                }
+            }
+        }
+
+        // Run GC after cascade completes
+        if let Some(se) = self.script_engine.as_mut() {
+            se.gc();
+        }
+
+        deliveries
+    }
+
     // --- Delete ---
 
     fn process_delete(&mut self, op: DeleteOp) -> OmiMessage {

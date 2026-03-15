@@ -260,6 +260,9 @@ fn check_auth(
 }
 
 /// Dispatch subscription deliveries: send WebSocket frames, POST callbacks, skip poll.
+///
+/// Callback deliveries with `javascript://` URLs are routed to the embedded
+/// script engine instead of HTTP POST — no network traffic is generated.
 pub fn dispatch_deliveries(
     deliveries: &[Delivery],
     ws_senders: &WsSenders,
@@ -271,6 +274,8 @@ pub fn dispatch_deliveries(
     }
     let mut failed_sessions: Vec<SessionId> = Vec::new();
     let mut pending_callbacks: Vec<(String, String, String)> = Vec::new();
+    // Script callbacks need the raw delivery values (not serialised JSON).
+    let mut script_callbacks: Vec<(String, String, Vec<crate::odf::Value>)> = Vec::new();
     {
         let mut senders = lock_or_recover(ws_senders, "ws_senders");
         for d in deliveries {
@@ -288,9 +293,13 @@ pub fn dispatch_deliveries(
                     }
                 }
                 DeliveryTarget::Callback(url) => {
-                    let resp = OmiResponse::subscription_event(&d.rid, &d.path, &d.values);
-                    let json = resp.to_json_string();
-                    pending_callbacks.push((url.clone(), json, d.rid.clone()));
+                    if crate::callback_url::is_javascript_callback(url) {
+                        script_callbacks.push((url.clone(), d.path.clone(), d.values.clone()));
+                    } else {
+                        let resp = OmiResponse::subscription_event(&d.rid, &d.path, &d.values);
+                        let json = resp.to_json_string();
+                        pending_callbacks.push((url.clone(), json, d.rid.clone()));
+                    }
                 }
                 DeliveryTarget::Poll => {}
             }
@@ -301,6 +310,35 @@ pub fn dispatch_deliveries(
     }
     for (url, json, rid) in &pending_callbacks {
         crate::callback::deliver_callback(url, json.as_bytes(), rid);
+    }
+    // Execute javascript:// callbacks via the script engine. Any writes
+    // produced by the scripts generate cascading deliveries which are
+    // dispatched recursively.
+    if !script_callbacks.is_empty() {
+        let mut eng = lock_or_recover(engine, "engine");
+        let now = crate::http::now_secs();
+        for (url, path, values) in &script_callbacks {
+            #[cfg(feature = "scripting")]
+            {
+                let cascaded = eng.run_callback_script(url, path, values, now);
+                if !cascaded.is_empty() {
+                    // Drop the engine lock before recursing to maintain lock ordering.
+                    drop(eng);
+                    dispatch_deliveries(&cascaded, ws_senders, engine, rate_limiter);
+                    eng = lock_or_recover(engine, "engine");
+                }
+            }
+            #[cfg(not(feature = "scripting"))]
+            {
+                let log_msg = format!(
+                    "javascript:// callback '{}' ignored: scripting feature not enabled",
+                    url,
+                );
+                if rate_limiter.should_emit(&log_msg) {
+                    warn!("{}", log_msg);
+                }
+            }
+        }
     }
     if !failed_sessions.is_empty() {
         let mut eng = lock_or_recover(engine, "engine");

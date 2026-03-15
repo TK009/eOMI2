@@ -178,6 +178,9 @@ impl<'a> JsonParser<'a> {
     }
 
     /// Parse an [`OmiValue`] (null, bool, number, or string).
+    ///
+    /// Arrays and objects are not representable as `OmiValue`, so they are
+    /// skipped (with depth tracking) and mapped to `OmiValue::Null`.
     pub fn parse_omi_value(&mut self) -> Result<OmiValue, LiteParseError> {
         match self.lex.next_token()? {
             Some(Token::Null) => Ok(OmiValue::Null),
@@ -185,11 +188,73 @@ impl<'a> JsonParser<'a> {
             Some(Token::String(s)) => Ok(OmiValue::Str(s)),
             Some(Token::Number(n)) => Ok(OmiValue::Number(n)),
             Some(Token::Integer(i)) => Ok(OmiValue::Number(i as f64)),
+            Some(Token::ArrayStart) => {
+                self.enter()?;
+                self.skip_rest_of_array()?;
+                Ok(OmiValue::Null)
+            }
+            Some(Token::ObjectStart) => {
+                self.enter()?;
+                self.skip_rest_of_object()?;
+                Ok(OmiValue::Null)
+            }
             Some(_) => Err(LiteParseError::ExpectedToken {
                 expected: "value (null, bool, number, or string)",
                 pos: self.pos(),
             }),
             None => Err(LiteParseError::UnexpectedEof { pos: self.pos() }),
+        }
+    }
+
+    /// Skip the remainder of an array after the opening `[` has been consumed.
+    /// Assumes `enter()` has already been called.
+    fn skip_rest_of_array(&mut self) -> Result<(), LiteParseError> {
+        if self.peek_is(&Token::ArrayEnd)? {
+            self.lex.next_token()?;
+            self.leave();
+            return Ok(());
+        }
+        loop {
+            self.skip_value()?;
+            if self.peek_is(&Token::Comma)? {
+                self.lex.next_token()?;
+            } else if self.peek_is(&Token::ArrayEnd)? {
+                self.lex.next_token()?;
+                self.leave();
+                return Ok(());
+            } else {
+                return Err(LiteParseError::ExpectedToken {
+                    expected: "',' or ']'",
+                    pos: self.pos(),
+                });
+            }
+        }
+    }
+
+    /// Skip the remainder of an object after the opening `{` has been consumed.
+    /// Assumes `enter()` has already been called.
+    fn skip_rest_of_object(&mut self) -> Result<(), LiteParseError> {
+        if self.peek_is(&Token::ObjectEnd)? {
+            self.lex.next_token()?;
+            self.leave();
+            return Ok(());
+        }
+        loop {
+            self.expect_string()?;
+            self.lex.expect_token(&Token::Colon)?;
+            self.skip_value()?;
+            if self.peek_is(&Token::Comma)? {
+                self.lex.next_token()?;
+            } else if self.peek_is(&Token::ObjectEnd)? {
+                self.lex.next_token()?;
+                self.leave();
+                return Ok(());
+            } else {
+                return Err(LiteParseError::ExpectedToken {
+                    expected: "',' or '}'",
+                    pos: self.pos(),
+                });
+            }
         }
     }
 
@@ -847,7 +912,7 @@ fn parse_delete_op(p: &mut JsonParser) -> Result<DeleteOp, ParseError> {
     })?;
 
     let op = DeleteOp {
-        path: path.ok_or(ParseError::MissingField("path"))?,
+        path: path.ok_or_else(|| ParseError::InvalidJson("missing field: path".into()))?,
     };
     op.validate()?;
     Ok(op)
@@ -901,7 +966,7 @@ fn parse_response_body(p: &mut JsonParser) -> Result<ResponseBody, ParseError> {
     })?;
 
     Ok(ResponseBody {
-        status: status.ok_or(ParseError::MissingField("status"))?,
+        status: status.ok_or_else(|| ParseError::InvalidJson("missing field: status".into()))?,
         rid,
         desc,
         result,

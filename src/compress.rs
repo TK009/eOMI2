@@ -73,8 +73,33 @@ pub fn gzip_decompress(data: &[u8]) -> Option<Vec<u8>> {
     if data[0] != 0x1f || data[1] != 0x8b {
         return None;
     }
-    let deflated = &data[10..data.len() - 8];
-    miniz_oxide::inflate::decompress_to_vec(deflated).ok()
+
+    let trailer_start = data.len() - 8;
+    let stored_crc = u32::from_le_bytes([
+        data[trailer_start],
+        data[trailer_start + 1],
+        data[trailer_start + 2],
+        data[trailer_start + 3],
+    ]);
+    let stored_size = u32::from_le_bytes([
+        data[trailer_start + 4],
+        data[trailer_start + 5],
+        data[trailer_start + 6],
+        data[trailer_start + 7],
+    ]);
+
+    let deflated = &data[10..trailer_start];
+    let decompressed = miniz_oxide::inflate::decompress_to_vec(deflated).ok()?;
+
+    // Validate CRC32 and decompressed length against trailer
+    if crc32(&decompressed) != stored_crc {
+        return None;
+    }
+    if decompressed.len() as u32 != stored_size {
+        return None;
+    }
+
+    Some(decompressed)
 }
 
 #[cfg(test)]
@@ -154,6 +179,32 @@ mod tests {
             compressed[trailer_start + 7],
         ]);
         assert_eq!(stored_size, 0);
+    }
+
+    #[test]
+    fn gzip_decompress_rejects_bad_crc() {
+        let mut compressed = gzip_compress(b"hello");
+        let trailer_start = compressed.len() - 8;
+        // Corrupt the CRC32
+        compressed[trailer_start] ^= 0xff;
+        assert!(gzip_decompress(&compressed).is_none());
+    }
+
+    #[test]
+    fn gzip_decompress_rejects_bad_isize() {
+        let mut compressed = gzip_compress(b"hello");
+        let len = compressed.len();
+        // Corrupt the ISIZE (last 4 bytes)
+        compressed[len - 1] ^= 0xff;
+        assert!(gzip_decompress(&compressed).is_none());
+    }
+
+    #[test]
+    fn gzip_decompress_roundtrip() {
+        let original = b"<html><body>test</body></html>";
+        let compressed = gzip_compress(original);
+        let decompressed = gzip_decompress(&compressed).expect("should decompress");
+        assert_eq!(&decompressed, original);
     }
 
     #[test]

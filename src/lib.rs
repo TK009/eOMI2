@@ -6,6 +6,10 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+/// Firmware version injected at build time (FR-024).
+/// Defaults to CARGO_PKG_VERSION; overridable via FIRMWARE_VERSION env var.
+pub const FIRMWARE_VERSION: &str = env!("FIRMWARE_VERSION");
+
 pub mod board;
 #[cfg(feature = "esp")]
 pub mod boards;

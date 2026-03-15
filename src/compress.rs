@@ -759,7 +759,7 @@ mod tests {
     #[test]
     fn stream_roundtrip_single_feed() {
         let original = b"hello world";
-        let compressed = gzip_compress(original);
+        let compressed = gzip_compress(original).unwrap();
         let result = stream_decompress_all(&compressed).expect("should decompress");
         assert_eq!(result, original);
     }
@@ -768,7 +768,7 @@ mod tests {
     fn stream_roundtrip_chunked_small() {
         // Feed byte-by-byte — exercises all state transitions
         let original = b"streaming gzip decompression test data";
-        let compressed = gzip_compress(original);
+        let compressed = gzip_compress(original).unwrap();
         let result = stream_decompress_chunked(&compressed, 1).expect("should decompress");
         assert_eq!(result, original);
     }
@@ -777,21 +777,21 @@ mod tests {
     fn stream_roundtrip_chunked_medium() {
         // Typical OTA chunk size
         let original = vec![0xAB; 16384];
-        let compressed = gzip_compress(&original);
+        let compressed = gzip_compress(&original).unwrap();
         let result = stream_decompress_chunked(&compressed, 4096).expect("should decompress");
         assert_eq!(result, original);
     }
 
     #[test]
     fn stream_roundtrip_empty() {
-        let compressed = gzip_compress(b"");
+        let compressed = gzip_compress(b"").unwrap();
         let result = stream_decompress_all(&compressed).expect("should decompress");
         assert!(result.is_empty());
     }
 
     #[test]
     fn stream_rejects_bad_magic() {
-        let mut compressed = gzip_compress(b"hello");
+        let mut compressed = gzip_compress(b"hello").unwrap();
         compressed[0] = 0x00;
         let mut dec = GzipStreamDecompressor::new();
         // After feeding the bad header, next feed should fail
@@ -801,7 +801,7 @@ mod tests {
 
     #[test]
     fn stream_rejects_bad_crc() {
-        let mut compressed = gzip_compress(b"hello");
+        let mut compressed = gzip_compress(b"hello").unwrap();
         let trailer_start = compressed.len() - 8;
         compressed[trailer_start] ^= 0xff; // corrupt CRC32
         let result = stream_decompress_all(&compressed);
@@ -810,7 +810,7 @@ mod tests {
 
     #[test]
     fn stream_rejects_bad_isize() {
-        let mut compressed = gzip_compress(b"hello");
+        let mut compressed = gzip_compress(b"hello").unwrap();
         let len = compressed.len();
         compressed[len - 1] ^= 0xff; // corrupt ISIZE
         let result = stream_decompress_all(&compressed);
@@ -819,7 +819,7 @@ mod tests {
 
     #[test]
     fn stream_rejects_truncated_header() {
-        let compressed = gzip_compress(b"hello");
+        let compressed = gzip_compress(b"hello").unwrap();
         // Only feed 5 bytes of header
         let mut dec = GzipStreamDecompressor::new();
         let _ = dec.feed(&compressed[..5]);
@@ -828,7 +828,7 @@ mod tests {
 
     #[test]
     fn stream_rejects_truncated_deflate() {
-        let compressed = gzip_compress(b"hello world, this is some test data");
+        let compressed = gzip_compress(b"hello world, this is some test data").unwrap();
         let mid = compressed.len() / 2;
         let mut dec = GzipStreamDecompressor::new();
         let _ = dec.feed(&compressed[..mid]);
@@ -837,7 +837,7 @@ mod tests {
 
     #[test]
     fn stream_rejects_truncated_trailer() {
-        let compressed = gzip_compress(b"hello");
+        let compressed = gzip_compress(b"hello").unwrap();
         // Feed everything except the last 3 bytes of trailer
         let mut dec = GzipStreamDecompressor::new();
         let _ = dec.feed(&compressed[..compressed.len() - 3]);
@@ -846,7 +846,7 @@ mod tests {
 
     #[test]
     fn stream_rejects_corrupted_deflate() {
-        let mut compressed = gzip_compress(b"hello world test data");
+        let mut compressed = gzip_compress(b"hello world test data").unwrap();
         if compressed.len() > 14 {
             compressed[12] ^= 0xFF; // corrupt deflate payload
         }
@@ -859,14 +859,14 @@ mod tests {
     fn stream_large_data_chunked() {
         // 64KB of varied data — realistic firmware-like payload
         let original: Vec<u8> = (0..65536).map(|i| (i % 251) as u8).collect();
-        let compressed = gzip_compress(&original);
+        let compressed = gzip_compress(&original).unwrap();
         let result = stream_decompress_chunked(&compressed, 4096).expect("should decompress");
         assert_eq!(result, original);
     }
 
     #[test]
     fn stream_is_done_after_success() {
-        let compressed = gzip_compress(b"test");
+        let compressed = gzip_compress(b"test").unwrap();
         let mut dec = GzipStreamDecompressor::new();
         let _ = dec.feed(&compressed).unwrap();
         assert!(dec.is_done());
@@ -878,7 +878,7 @@ mod tests {
         // Verify the streaming CRC32 produces the same result as the
         // standalone crc32() function
         let original = b"verify crc32 consistency";
-        let compressed = gzip_compress(original);
+        let compressed = gzip_compress(original).unwrap();
         let result = stream_decompress_all(&compressed).expect("should decompress");
         assert_eq!(result, original);
         assert_eq!(crc32(&result), crc32(original));

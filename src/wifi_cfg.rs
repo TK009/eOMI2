@@ -303,24 +303,23 @@ mod nvs_impl {
             }
         }
     }
-}
 
-#[cfg(feature = "esp")]
-pub use nvs_impl::{load_wifi_config, open_wifi_cfg_nvs, save_wifi_config};
-
-/// Load WiFi config from NVS, returning default config if not found or on error.
-#[cfg(feature = "esp")]
-pub fn load_wifi_config_or_default(
-    partition: esp_idf_svc::nvs::EspNvsPartition<esp_idf_svc::nvs::NvsDefault>,
-) -> WifiConfig {
-    match open_wifi_cfg_nvs(partition) {
-        Ok(nvs) => load_wifi_config(&nvs).unwrap_or_default(),
-        Err(e) => {
-            log::warn!("wifi_cfg: failed to open NVS: {}", e);
-            WifiConfig::default()
+    /// Load WiFi config from NVS, returning default config if not found or on error.
+    pub fn load_wifi_config_or_default(
+        partition: EspNvsPartition<NvsDefault>,
+    ) -> WifiConfig {
+        match open_wifi_cfg_nvs(partition) {
+            Ok(nvs) => load_wifi_config(&nvs).unwrap_or_default(),
+            Err(e) => {
+                warn!("wifi_cfg: failed to open NVS: {}", e);
+                WifiConfig::default()
+            }
         }
     }
 }
+
+#[cfg(feature = "esp")]
+pub use nvs_impl::{load_wifi_config, load_wifi_config_or_default, open_wifi_cfg_nvs, save_wifi_config};
 
 // ---------------------------------------------------------------------------
 // Tests

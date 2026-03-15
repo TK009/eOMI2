@@ -248,6 +248,18 @@ pub fn parse_provision_form(body: &str, max_aps: usize, is_first_setup: bool) ->
 }
 
 // ---------------------------------------------------------------------------
+// Shared CSS base for captive portal pages
+// ---------------------------------------------------------------------------
+
+/// CSS rules shared between the provisioning form and success pages.
+/// Each page appends its own page-specific rules after this base.
+const SHARED_CSS: &str = "\
+*{box-sizing:border-box;margin:0;padding:0}\
+body{font-family:sans-serif;padding:1em;max-width:480px;margin:0 auto;background:#f5f5f5}\
+h1{margin-bottom:.5em}\
+#status{padding:.75em;border-radius:4px;margin-top:1em}";
+
+// ---------------------------------------------------------------------------
 // Provisioning form HTML (GET /)
 // ---------------------------------------------------------------------------
 
@@ -274,10 +286,9 @@ pub fn render_provisioning_form(
         <meta charset=\"utf-8\">\
         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
         <title>Device Setup</title>\
-        <style>\
-        *{box-sizing:border-box;margin:0;padding:0}\
-        body{font-family:sans-serif;padding:1em;max-width:480px;margin:0 auto;background:#f5f5f5}\
-        h1{margin-bottom:.5em}\
+        <style>");
+    html.push_str(SHARED_CSS);
+    html.push_str("\
         .field{margin-bottom:1em}\
         label{display:block;font-weight:bold;margin-bottom:.25em}\
         input[type=text],input[type=password],select{width:100%;padding:.5em;border:1px solid #ccc;border-radius:4px}\
@@ -288,7 +299,7 @@ pub fn render_provisioning_form(
         .ap-group h3{margin-bottom:.5em}\
         .saved-hint{font-size:.85em;color:#666;margin-top:.25em}\
         .hidden-input{display:none}\
-        #status{display:none;padding:.75em;border-radius:4px;margin-top:1em}\
+        #status{display:none}\
         .scan-info{font-size:.85em;color:#666;margin-bottom:.25em}\
         </style></head><body>\
         <h1>Device Setup</h1>");
@@ -503,15 +514,15 @@ pub fn render_provision_success(
         <meta charset=\"utf-8\">\
         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
         <title>Setup Complete</title>\
-        <style>\
-        *{box-sizing:border-box;margin:0;padding:0}\
-        body{font-family:sans-serif;padding:1em;max-width:480px;margin:0 auto;background:#f5f5f5}\
-        h1{margin-bottom:.5em;color:#080}\
+        <style>");
+    html.push_str(SHARED_CSS);
+    html.push_str("\
+        h1{color:#080}\
         .info{margin-bottom:1em}\
         .key-box{background:#fff;border:2px solid #f90;padding:1em;border-radius:4px;margin:1em 0;\
         word-break:break-all;font-family:monospace;font-size:1.1em;user-select:all}\
         .warning{color:#c60;font-weight:bold;margin-bottom:.5em}\
-        #status{padding:.75em;border-radius:4px;margin-top:1em;background:#ffe;border:1px solid #cc0}\
+        #status{background:#ffe;border:1px solid #cc0}\
         .connected{background:#efe!important;border:1px solid #0c0!important}\
         .failed{background:#fee!important;border:1px solid #c00!important}\
         </style></head><body>\

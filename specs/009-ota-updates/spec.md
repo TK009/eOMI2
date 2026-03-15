@@ -142,7 +142,7 @@ A device operator can check the current firmware version via the O-DF tree, and 
 - **FR-007**: If authentication fails, the endpoint MUST return HTTP 401 and MUST NOT read the request body or modify any OTA partition.
 - **FR-008**: The endpoint MUST reject concurrent OTA requests with HTTP 409 Conflict.
 - **FR-008b**: The `/ota` URI MUST only accept the POST method. Requests with any other method (GET, PUT, etc.) MUST receive HTTP 405 Method Not Allowed.
-- **FR-008c**: If a `Content-Length` header is present and its value exceeds the OTA partition size (0x1C0000 = 1,835,008 bytes), the endpoint MUST reject the request with HTTP 400 before reading the body.
+- **FR-008c**: If a `Content-Length` header is present and its value exceeds the OTA partition size (0x1E0000 = 1,966,080 bytes), the endpoint MUST reject the request with HTTP 400 before reading the body.
 - **FR-009**: The endpoint MUST validate the gzip magic bytes (`0x1f 0x8b`) in the first two bytes of the body. If not present, return HTTP 400 with a message indicating gzip compression is required.
 - **FR-010a**: The endpoint MUST enforce a 5-minute (300s) upload timeout. The timeout MUST be implemented by tracking wall-clock elapsed time in the read loop using `esp_idf_svc::sys::esp_timer_get_time()`. If the upload is not complete within this window, the OTA write MUST be aborted and the lock released.
 - **FR-010b**: The OTA lock MUST be implemented as an `AtomicBool` with a RAII drop guard that releases the lock when the handler exits (normally or on panic).
@@ -231,22 +231,22 @@ A device operator can check the current firmware version via the O-DF tree, and 
 otadata,   data,  ota,      0xd000,   0x2000,
 phy_init,  data,  phy,      0xf000,   0x1000,
 nvs,       data,  nvs,      0x10000,  0x6000,
-ota_0,     app,   ota_0,    0x20000,  0x1C0000,
-ota_1,     app,   ota_1,    0x1E0000, 0x1C0000,
-storage,   data,  fat,      0x3A0000, 0x60000,
+ota_0,     app,   ota_0,    0x20000,  0x1E0000,
+ota_1,     app,   ota_1,    0x200000, 0x1E0000,
+storage,   data,  fat,      0x3E0000, 0x20000,
 ```
 
 **Layout rationale** (4 MB = 0x400000 total):
 - `otadata` (8 KB): OTA boot selection metadata — must exist for two-slot OTA.
 - `phy_init` (4 KB): WiFi PHY calibration data.
 - `nvs` (24 KB): Non-volatile storage for WiFi config, API key hash, O-DF tree.
-- `ota_0` (1792 KB): First app slot. Current firmware is ~1.2 MB; 1.75 MB gives ~45% growth headroom.
-- `ota_1` (1792 KB): Second app slot. Identical size.
-- `storage` (384 KB): General data partition (pages, future use).
+- `ota_0` (1920 KB): First app slot. Sized to fit current firmware (~1913 KB) with margin.
+- `ota_1` (1920 KB): Second app slot. Identical size.
+- `storage` (128 KB): General data partition (pages, future use).
 
-Total: 8 + 4 + 24 + 1792 + 1792 + 384 = 4004 KB (fits in 4 MB with partition table and bootloader overhead at 0x0000-0xCFFF).
+Total: 8 + 4 + 24 + 1920 + 1920 + 128 = 4004 KB (fits in 4 MB with partition table and bootloader overhead at 0x0000-0xCFFF).
 
-The `memory_budget.rs` test MUST be updated: `FLASH_LIMIT` changes from 2 MB to 1792 KB (0x1C0000 = 1,835,008 bytes).
+The `memory_budget.rs` test MUST be updated: `FLASH_LIMIT` changes from 2 MB to 1920 KB (0x1E0000 = 1,966,080 bytes).
 
 ---
 

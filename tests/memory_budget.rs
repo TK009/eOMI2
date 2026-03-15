@@ -32,9 +32,9 @@ const IRAM_LIMIT: u64 = 128 * 1024;
 
 /// Maximum flash image (code + read-only data stored on the SPI flash).
 /// The smallest common ESP32-S2 module (ESP32-S2-MINI-1) has 4 MB flash.
-/// With the OTA two-slot partition table, each app slot is 0x1C0000
-/// (1,835,008 bytes = 1792 KB).
-const FLASH_LIMIT: u64 = 0x1C_0000;
+/// With the OTA two-slot partition table, each app slot is 0x1E0000
+/// (1,966,080 bytes = 1920 KB).  Storage partition reduced to 128 KB.
+const FLASH_LIMIT: u64 = 0x1E_0000;
 
 // ── ESP32-S2 address ranges ─────────────────────────────────────────────────
 

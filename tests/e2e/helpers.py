@@ -8,6 +8,7 @@ import pytest
 import requests
 
 REQUEST_TIMEOUT = 10  # seconds – avoid hanging on unresponsive devices
+OTA_TIMEOUT = 120  # seconds – generous for ~1.2 MB compressed over LAN
 TREE_WRITE_TIMEOUT = 30  # seconds – tree writes with metadata need more time
 WS_TIMEOUT = 10  # seconds – WebSocket operation timeout
 DEVICE_RETRIES = 3  # retry count for transient connection resets (ESP32 has limited sockets)
@@ -29,6 +30,19 @@ def device_get(url, **kwargs):
 def run_async(coro):
     """Run an async coroutine synchronously."""
     return asyncio.run(coro)
+
+
+def ota_upload(base_url, firmware_gz_path, token):
+    """Upload gzip-compressed firmware via POST /ota."""
+    with open(firmware_gz_path, "rb") as f:
+        data = f.read()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/octet-stream",
+    }
+    return requests.post(
+        f"{base_url}/ota", data=data, headers=headers, timeout=OTA_TIMEOUT,
+    )
 
 
 def reboot_device(device_port):

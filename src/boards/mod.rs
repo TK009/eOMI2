@@ -54,6 +54,26 @@ pub fn init_board(
 ) -> crate::error::Result<BoardPeripherals> {
     use log::info;
 
+    // Suppress onboard WS2812/NeoPixel LED FIRST, before any other GPIO
+    // init.  The WS2812 on GPIO 18 (Saola-1) interprets even brief output
+    // glitches as pixel data, so we must drive it low before anything else
+    // touches the GPIO subsystem.
+    //
+    // We use raw ESP-IDF calls to set the output register LOW *before*
+    // enabling the output direction, avoiding the glitch that PinDriver::
+    // output() causes (it enables the driver before set_low, giving the
+    // WS2812 time to latch a white pixel).
+    #[cfg(has_board_config)]
+    if let Some(pin_num) = crate::board::neopixel_pin() {
+        use esp_idf_svc::sys::{gpio_set_level, gpio_set_direction, gpio_mode_t_GPIO_MODE_OUTPUT, gpio_reset_pin};
+        unsafe {
+            gpio_reset_pin(pin_num as i32);
+            gpio_set_level(pin_num as i32, 0);
+            gpio_set_direction(pin_num as i32, gpio_mode_t_GPIO_MODE_OUTPUT);
+        }
+        info!("Neopixel: GPIO{} driven low (WS2812 disabled)", pin_num);
+    }
+
     let mut gpio_manager = GpioManager::new();
     let mut peripheral_manager = PeripheralManager::new();
 
@@ -83,22 +103,6 @@ pub fn init_board(
         &mut peripheral_manager,
         hostname,
     )?;
-
-    // If the board has an onboard WS2812/NeoPixel LED, drive its data pin
-    // low to prevent it from interpreting noise as pixel data (which can
-    // cause full-white or random colours at boot).
-    #[cfg(has_board_config)]
-    if let Some(pin_num) = crate::board::neopixel_pin() {
-        use esp_idf_svc::hal::gpio::{AnyIOPin, PinDriver, Output};
-        let pin = unsafe { AnyIOPin::new(pin_num as i32) };
-        let mut driver = PinDriver::<_, Output>::output(pin)
-            .map_err(|e| format!("neopixel pin GPIO{} init failed: {}", pin_num, e))?;
-        driver.set_low().ok();
-        // Leak the driver so the pin stays driven low for the lifetime of the
-        // firmware. The WS2812 data line must not float.
-        core::mem::forget(driver);
-        info!("Neopixel: GPIO{} driven low (WS2812 disabled)", pin_num);
-    }
 
     Ok(BoardPeripherals {
         modem: peripherals.modem,

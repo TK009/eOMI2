@@ -32,6 +32,11 @@ SERIAL_LOG=$(mktemp /tmp/e2e-serial.XXXXXX)
 MONITOR_PID=""
 DEVICE_PORT=""
 DEVICE_FD=""
+DUT_PORT=""
+DUT_FD=""
+BRIDGE_PORT=""
+BRIDGE_FD=""
+HAS_BRIDGE=false
 SKIP_BUILD=false
 PYTEST_ARGS=()
 
@@ -57,19 +62,51 @@ stop_monitor() {
 cleanup() {
     echo "── Cleaning up ──"
     stop_monitor
-    if [[ -n "${DEVICE_FD:-}" ]]; then
+    # Release DUT device
+    if [[ -n "${DUT_FD:-}" ]]; then
+        DEVICE_PORT="$DUT_PORT"
+        DEVICE_FD="$DUT_FD"
+        . "$SCRIPT_DIR/release-device.sh"
+    elif [[ -n "${DEVICE_FD:-}" ]]; then
+        . "$SCRIPT_DIR/release-device.sh"
+    fi
+    # Release bridge device
+    if [[ -n "${BRIDGE_FD:-}" ]]; then
+        DEVICE_PORT="$BRIDGE_PORT"
+        DEVICE_FD="$BRIDGE_FD"
         . "$SCRIPT_DIR/release-device.sh"
     fi
     rm -f "$SERIAL_LOG"
 }
 trap cleanup EXIT
 
-# ── 1. Claim device (wait up to 240 s) ──────────────────────────────────
-echo "── Claiming USB device ──"
+# ── 1. Claim DUT device (wait up to 240 s) ────────────────────────────
+echo "── Claiming DUT USB device ──"
 # shellcheck disable=SC2034  # consumed by sourced _claim-wait.sh
 CLAIM_TIMEOUT=240
 . "$SCRIPT_DIR/_claim-wait.sh"
-echo "Claimed $DEVICE_PORT (fd: $DEVICE_FD)"
+DUT_PORT="$DEVICE_PORT"
+DUT_FD="$DEVICE_FD"
+echo "Claimed DUT: $DUT_PORT (fd: $DUT_FD)"
+
+# ── 1a. Claim bridge device (best-effort, 60 s) ──────────────────────
+# Unset DEVICE_PORT/DEVICE_FD so _claim-wait.sh picks a different device.
+# The flock on DUT stays held because DUT_FD is still open.
+unset DEVICE_PORT DEVICE_FD
+echo "── Claiming bridge USB device ──"
+CLAIM_TIMEOUT=60
+if . "$SCRIPT_DIR/_claim-wait.sh" 2>/dev/null; then
+    BRIDGE_PORT="$DEVICE_PORT"
+    BRIDGE_FD="$DEVICE_FD"
+    HAS_BRIDGE=true
+    echo "Claimed bridge: $BRIDGE_PORT (fd: $BRIDGE_FD)"
+else
+    echo "WARNING: could not claim a second device for WiFi bridge — provisioning tests will skip"
+    HAS_BRIDGE=false
+fi
+# Restore DUT as the active device for subsequent steps
+DEVICE_PORT="$DUT_PORT"
+DEVICE_FD="$DUT_FD"
 
 # ── 1b. Source build-time env vars from .env ──────────────────────────────
 # EOMI_BOARD is needed at build time by build.rs to select board config.
@@ -131,6 +168,29 @@ if ! (cd "$PROJECT_ROOT" && cargo test --target x86_64-unknown-linux-gnu --no-de
     exit 1
 fi
 
+# ── 2c. Build and flash WiFi bridge firmware ──────────────────────────
+BRIDGE_FW_DIR="$PROJECT_ROOT/tests/e2e/bridge-fw"
+if [[ "$HAS_BRIDGE" == true ]]; then
+    if [[ "$SKIP_BUILD" == false ]]; then
+        echo "── Building bridge firmware ──"
+        if (cd "$BRIDGE_FW_DIR" && cargo build); then
+            BRIDGE_FIRMWARE="$BRIDGE_FW_DIR/target/xtensa-esp32s2-espidf/debug/wifi-bridge"
+            echo "── Flashing bridge on $BRIDGE_PORT ──"
+            if espflash flash --port "$BRIDGE_PORT" "$BRIDGE_FIRMWARE"; then
+                echo "Bridge firmware flashed successfully"
+            else
+                echo "WARNING: bridge flash failed — provisioning tests will skip" >&2
+                HAS_BRIDGE=false
+            fi
+        else
+            echo "WARNING: bridge build failed — provisioning tests will skip" >&2
+            HAS_BRIDGE=false
+        fi
+    else
+        echo "── Skipping bridge build (--skip-build) ──"
+    fi
+fi
+
 # ── 3. Flash device and start serial capture ────────────────────────────
 echo "── Flashing device on $DEVICE_PORT ──"
 espflash flash --port "$DEVICE_PORT" "$FIRMWARE"
@@ -189,6 +249,10 @@ echo "Device is healthy."
 echo "── Running e2e tests ──"
 export DEVICE_IP
 export DEVICE_PORT
+if [[ "$HAS_BRIDGE" == true ]]; then
+    export BRIDGE_PORT
+    echo "Bridge port: $BRIDGE_PORT"
+fi
 
 # Locate .env: project root > repo root > rig root (Gas Town worktrees).
 ENV_FILE=""

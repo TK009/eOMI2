@@ -11,8 +11,12 @@ Exercises the captive portal provisioning flow on real hardware:
 These tests require a device in provisioning mode (no saved credentials)
 or the ability to trigger provisioning via a factory-reset / NVS erase.
 
+A second ESP32 running the wifi-bridge firmware is used to reach the DUT's
+soft-AP portal (192.168.4.1) from the test host via serial UART.
+
 Environment variables:
   DEVICE_PORT     — USB serial port (for flash/reset)
+  BRIDGE_PORT     — USB serial port for the WiFi bridge ESP32
   DEVICE_IP       — device IP once connected to STA network
   PORTAL_IP       — captive portal IP (default: 192.168.4.1)
   WIFI_SSID       — test network SSID (the real AP the device connects to)
@@ -22,9 +26,11 @@ Environment variables:
   API_TOKEN       — bearer token for authenticated requests
 """
 
+import json
 import os
 import time
 import warnings
+from urllib.parse import urlencode
 
 import pytest
 import requests
@@ -82,29 +88,29 @@ def wifi_pass_2():
 
 
 # ---------------------------------------------------------------------------
-# Portal helpers
+# Portal helpers (use bridge for all portal HTTP access)
 # ---------------------------------------------------------------------------
 
-def wait_for_portal(timeout=PORTAL_BOOT_TIMEOUT):
-    """Poll the portal landing page until it responds."""
+def wait_for_portal(bridge, timeout=PORTAL_BOOT_TIMEOUT):
+    """Poll the portal landing page via bridge until it responds."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            resp = requests.get(f"{PORTAL_URL}/", timeout=5)
-            if resp.status_code == 200 and "Device Setup" in resp.text:
+            resp = bridge.http_get(f"{PORTAL_URL}/", timeout=5)
+            if resp.get("status") == 200 and "Device Setup" in resp.get("body", ""):
                 return
-        except requests.RequestException:
+        except Exception:
             pass
         time.sleep(1)
     raise TimeoutError(f"Portal did not become reachable within {timeout}s")
 
 
-def submit_provision_form(ssids_passwords, hostname=None, api_key_action="keep",
-                          api_key=None):
-    """POST a URL-encoded provisioning form to /provision on the portal.
+def submit_provision_form(bridge, ssids_passwords, hostname=None,
+                          api_key_action="keep", api_key=None):
+    """POST a URL-encoded provisioning form to /provision on the portal via bridge.
 
     *ssids_passwords* is a list of (ssid, password) tuples.
-    Returns the HTTP response object.
+    Returns the bridge HTTP response dict.
     """
     data = {}
     for i, (ssid, password) in enumerate(ssids_passwords):
@@ -115,38 +121,41 @@ def submit_provision_form(ssids_passwords, hostname=None, api_key_action="keep",
     data["api_key_action"] = api_key_action
     if api_key is not None:
         data["api_key"] = api_key
-    return requests.post(
+    body = urlencode(data)
+    return bridge.http_post(
         f"{PORTAL_URL}/provision",
-        data=data,
+        body=body,
+        content_type="application/x-www-form-urlencoded",
         timeout=REQUEST_TIMEOUT,
-        allow_redirects=False,
     )
 
 
-def get_portal_status():
-    """GET /status on the portal and return parsed JSON."""
-    resp = requests.get(f"{PORTAL_URL}/status", timeout=REQUEST_TIMEOUT)
-    resp.raise_for_status()
-    return resp.json()
+def get_portal_status(bridge):
+    """GET /status on the portal via bridge and return parsed JSON."""
+    resp = bridge.http_get(f"{PORTAL_URL}/status", timeout=REQUEST_TIMEOUT)
+    if resp.get("status") != 200:
+        raise RuntimeError(f"Portal /status returned {resp.get('status')}")
+    return json.loads(resp.get("body", "{}"))
 
 
-def get_portal_scan():
-    """GET /scan on the portal and return parsed JSON list."""
-    resp = requests.get(f"{PORTAL_URL}/scan", timeout=REQUEST_TIMEOUT)
-    resp.raise_for_status()
-    return resp.json()
+def get_portal_scan(bridge):
+    """GET /scan on the portal via bridge and return parsed JSON list."""
+    resp = bridge.http_get(f"{PORTAL_URL}/scan", timeout=REQUEST_TIMEOUT)
+    if resp.get("status") != 200:
+        raise RuntimeError(f"Portal /scan returned {resp.get('status')}")
+    return json.loads(resp.get("body", "[]"))
 
 
-def poll_connection_status(target_state, timeout=30):
-    """Poll /status until the given state is reached or timeout."""
+def poll_connection_status(bridge, target_state, timeout=30):
+    """Poll /status via bridge until the given state is reached or timeout."""
     deadline = time.monotonic() + timeout
     last = None
     while time.monotonic() < deadline:
         try:
-            last = get_portal_status()
+            last = get_portal_status(bridge)
             if last.get("state") == target_state:
                 return last
-        except requests.RequestException:
+        except Exception:
             pass
         time.sleep(2)
     raise TimeoutError(
@@ -154,10 +163,12 @@ def poll_connection_status(target_state, timeout=30):
     )
 
 
-def factory_reset_to_portal(device_port):
+def factory_reset_to_portal(device_port, bridge):
     """Erase NVS WiFi config and reboot so the device enters portal mode.
 
     Uses espflash to erase the NVS partition, then reboots.
+    The bridge disconnects from any previous AP and connects to the DUT's
+    setup AP to reach the portal.
     """
     import subprocess
 
@@ -171,8 +182,17 @@ def factory_reset_to_portal(device_port):
     )
     # Reset the device
     reboot_device(device_port)
+
+    # Connect bridge to the DUT's setup AP
+    try:
+        bridge.disconnect()
+    except Exception:
+        pass
+    time.sleep(2)  # Give the DUT time to start its soft-AP
+    bridge.connect("setup-eOMI")
+
     # Wait for portal to come up
-    wait_for_portal()
+    wait_for_portal(bridge)
 
 
 # ---------------------------------------------------------------------------
@@ -183,21 +203,21 @@ class TestFirstTimeProvisioning:
     """Connect to the captive portal AP, submit the form, verify STA connection."""
 
     @pytest.fixture(autouse=True)
-    def _enter_portal_mode(self, device_port):
+    def _enter_portal_mode(self, device_port, bridge):
         """Ensure device is in portal (unconfigured) mode before each test."""
-        factory_reset_to_portal(device_port)
+        factory_reset_to_portal(device_port, bridge)
 
-    def test_portal_landing_page(self):
+    def test_portal_landing_page(self, bridge):
         """GET / on the portal returns the provisioning form."""
-        resp = requests.get(f"{PORTAL_URL}/", timeout=REQUEST_TIMEOUT)
-        assert resp.status_code == 200
-        assert "text/html" in resp.headers.get("Content-Type", "")
-        assert "Device Setup" in resp.text
-        assert 'action="/provision"' in resp.text
+        resp = bridge.http_get(f"{PORTAL_URL}/", timeout=REQUEST_TIMEOUT)
+        assert resp["status"] == 200
+        body = resp.get("body", "")
+        assert "Device Setup" in body
+        assert 'action="/provision"' in body
 
-    def test_portal_scan_endpoint(self):
+    def test_portal_scan_endpoint(self, bridge):
         """GET /scan returns a JSON list of visible networks."""
-        networks = get_portal_scan()
+        networks = get_portal_scan(bridge)
         assert isinstance(networks, list)
         # Each entry should have ssid, rssi, auth
         if networks:
@@ -206,47 +226,51 @@ class TestFirstTimeProvisioning:
             assert "rssi" in net
             assert "auth" in net
 
-    def test_portal_status_idle_before_submit(self):
+    def test_portal_status_idle_before_submit(self, bridge):
         """GET /status reports idle before any form submission."""
-        status = get_portal_status()
+        status = get_portal_status(bridge)
         assert status["state"] == "idle"
 
-    def test_provision_and_connect(self, wifi_ssid, wifi_pass):
+    def test_provision_and_connect(self, bridge, wifi_ssid, wifi_pass):
         """Submit credentials via the form and verify the device connects."""
         resp = submit_provision_form(
+            bridge,
             [(wifi_ssid, wifi_pass)],
             api_key_action="generate",
         )
         # Should get a 200 with the success page (or 302 redirect)
-        assert resp.status_code in (200, 302)
+        assert resp["status"] in (200, 302)
 
         # Poll /status until connected
-        status = poll_connection_status("connected", timeout=30)
+        status = poll_connection_status(bridge, "connected", timeout=30)
         assert status.get("ip"), "Device should report its STA IP"
 
-    def test_provision_with_hostname(self, wifi_ssid, wifi_pass):
+    def test_provision_with_hostname(self, bridge, wifi_ssid, wifi_pass):
         """Provisioning with a custom hostname is accepted."""
         resp = submit_provision_form(
+            bridge,
             [(wifi_ssid, wifi_pass)],
             hostname="test-device-e2e",
             api_key_action="generate",
         )
-        assert resp.status_code in (200, 302)
-        status = poll_connection_status("connected", timeout=30)
+        assert resp["status"] in (200, 302)
+        status = poll_connection_status(bridge, "connected", timeout=30)
         assert status.get("ip")
 
-    def test_provision_empty_ssid_rejected(self):
+    def test_provision_empty_ssid_rejected(self, bridge):
         """Submitting an empty SSID returns an error."""
         resp = submit_provision_form(
+            bridge,
             [("", "somepass")],
             api_key_action="keep",
         )
         # The device should reject this — either via HTTP 400 or by
         # redisplaying the form with an error message.
-        if resp.status_code == 200:
-            assert "error" in resp.text.lower() or "required" in resp.text.lower()
+        if resp["status"] == 200:
+            body = resp.get("body", "").lower()
+            assert "error" in body or "required" in body
         else:
-            assert resp.status_code in (400, 422)
+            assert resp["status"] in (400, 422)
 
 
 # ---------------------------------------------------------------------------
@@ -257,14 +281,16 @@ class TestReprovisioning:
     """Re-provision a device that already has saved credentials."""
 
     @pytest.fixture(autouse=True)
-    def _provision_first(self, device_port, wifi_ssid, wifi_pass, base_url, token):
+    def _provision_first(self, device_port, bridge, wifi_ssid, wifi_pass,
+                         base_url, token):
         """Provision the device, write some user data, then enter portal again."""
-        factory_reset_to_portal(device_port)
+        factory_reset_to_portal(device_port, bridge)
         submit_provision_form(
+            bridge,
             [(wifi_ssid, wifi_pass)],
             api_key_action="generate",
         )
-        poll_connection_status("connected", timeout=30)
+        poll_connection_status(bridge, "connected", timeout=30)
 
         # Write user data that should survive re-provisioning
         wait_for_device(base_url, timeout=30)
@@ -306,31 +332,34 @@ class TestMultiApFailover:
     """Device falls back to the second SSID when the first is unreachable."""
 
     @pytest.fixture(autouse=True)
-    def _enter_portal(self, device_port):
-        factory_reset_to_portal(device_port)
+    def _enter_portal(self, device_port, bridge):
+        factory_reset_to_portal(device_port, bridge)
 
-    def test_provision_two_ssids(self, wifi_ssid, wifi_pass, wifi_ssid_2, wifi_pass_2):
+    def test_provision_two_ssids(self, bridge, wifi_ssid, wifi_pass,
+                                 wifi_ssid_2, wifi_pass_2):
         """Provisioning with two SSIDs is accepted and device connects."""
         resp = submit_provision_form(
+            bridge,
             [(wifi_ssid, wifi_pass), (wifi_ssid_2, wifi_pass_2)],
             api_key_action="generate",
         )
-        assert resp.status_code in (200, 302)
-        status = poll_connection_status("connected", timeout=30)
+        assert resp["status"] in (200, 302)
+        status = poll_connection_status(bridge, "connected", timeout=30)
         assert status.get("ip")
 
-    def test_failover_to_second_ssid(self, wifi_ssid, wifi_pass,
+    def test_failover_to_second_ssid(self, bridge, wifi_ssid, wifi_pass,
                                       wifi_ssid_2, wifi_pass_2):
         """When the first SSID is bogus, the device connects via the second."""
         resp = submit_provision_form(
+            bridge,
             [("NonExistentNetwork_E2E_Test", "badpass"),
              (wifi_ssid, wifi_pass)],
             api_key_action="generate",
         )
-        assert resp.status_code in (200, 302)
+        assert resp["status"] in (200, 302)
         # The device should fail on the first SSID and fall back to the second.
         # This may take longer due to connection timeout + backoff.
-        status = poll_connection_status("connected", timeout=60)
+        status = poll_connection_status(bridge, "connected", timeout=60)
         assert status.get("ip")
 
 
@@ -343,14 +372,15 @@ class TestPowerLossResilience:
     partial-write corruption."""
 
     @pytest.fixture(autouse=True)
-    def _provision_and_flush(self, device_port, wifi_ssid, wifi_pass):
-        factory_reset_to_portal(device_port)
+    def _provision_and_flush(self, device_port, bridge, wifi_ssid, wifi_pass):
+        factory_reset_to_portal(device_port, bridge)
         submit_provision_form(
+            bridge,
             [(wifi_ssid, wifi_pass)],
             hostname="persist-test",
             api_key_action="generate",
         )
-        poll_connection_status("connected", timeout=30)
+        poll_connection_status(bridge, "connected", timeout=30)
         # Wait for NVS flush
         time.sleep(NVS_FLUSH_WAIT_S)
 
@@ -384,44 +414,64 @@ class TestApiDuringProvisioning:
     """OMI API endpoints remain accessible while the captive portal is active."""
 
     @pytest.fixture(autouse=True)
-    def _enter_portal(self, device_port):
-        factory_reset_to_portal(device_port)
+    def _enter_portal(self, device_port, bridge):
+        factory_reset_to_portal(device_port, bridge)
 
-    def test_omi_read_during_portal(self):
+    def test_omi_read_during_portal(self, bridge):
         """OMI read requests work while in provisioning mode."""
-        # OMI endpoint on the portal IP (AP interface)
-        data = omi_read(PORTAL_URL, path="/")
+        # OMI endpoint on the portal IP (AP interface) — accessed via bridge
+        resp = bridge.http_post(
+            f"{PORTAL_URL}/omi",
+            body=json.dumps({"omi": "1.0", "ttl": 0, "read": {"path": "/"}}),
+            content_type="application/json",
+        )
+        assert resp["status"] == 200
+        data = json.loads(resp.get("body", "{}"))
         assert data["omi"] == "1.0"
         assert data["response"]["status"] == 200
 
-    def test_omi_write_during_portal(self, token):
+    def test_omi_write_during_portal(self, bridge, token):
         """OMI write requests work while in provisioning mode."""
-        data = omi_write(PORTAL_URL, "/Test/Portal", "during-setup", token=token)
+        headers_body = json.dumps({
+            "omi": "1.0", "ttl": 0,
+            "write": {"path": "/Test/Portal", "v": "during-setup"},
+        })
+        resp = bridge.http_post(
+            f"{PORTAL_URL}/omi",
+            body=headers_body,
+            content_type="application/json",
+        )
+        assert resp["status"] == 200
+        data = json.loads(resp.get("body", "{}"))
         assert data["response"]["status"] in (200, 201)
 
         # Read it back
-        data = omi_read(PORTAL_URL, "/Test/Portal")
+        read_body = json.dumps({
+            "omi": "1.0", "ttl": 0,
+            "read": {"path": "/Test/Portal"},
+        })
+        resp = bridge.http_post(
+            f"{PORTAL_URL}/omi",
+            body=read_body,
+            content_type="application/json",
+        )
+        assert resp["status"] == 200
+        data = json.loads(resp.get("body", "{}"))
         assert data["response"]["status"] == 200
 
-    def test_portal_does_not_redirect_omi(self):
+    def test_portal_does_not_redirect_omi(self, bridge):
         """OMI API paths are not redirected to the portal form (FR-011)."""
-        resp = requests.get(
-            f"{PORTAL_URL}/omi/",
-            timeout=REQUEST_TIMEOUT,
-            allow_redirects=False,
-        )
+        resp = bridge.http_get(f"{PORTAL_URL}/omi/", timeout=REQUEST_TIMEOUT)
         # Should NOT be a 302 redirect — OMI paths are excluded
-        assert resp.status_code != 302
+        assert resp["status"] != 302
 
-    def test_non_portal_get_redirected(self):
+    def test_non_portal_get_redirected(self, bridge):
         """Non-portal, non-OMI GET paths are redirected to the form (FR-014)."""
-        resp = requests.get(
-            f"{PORTAL_URL}/generate_204",
-            timeout=REQUEST_TIMEOUT,
-            allow_redirects=False,
+        resp = bridge.http_get(
+            f"{PORTAL_URL}/generate_204", timeout=REQUEST_TIMEOUT
         )
-        assert resp.status_code == 302
-        assert "Location" in resp.headers
+        assert resp["status"] == 302
+        assert resp.get("headers", {}).get("location")
 
 
 # ---------------------------------------------------------------------------
@@ -433,14 +483,16 @@ class TestPortalAutoClose:
     the device should automatically reconnect and close the portal."""
 
     @pytest.fixture(autouse=True)
-    def _provision_then_portal(self, device_port, wifi_ssid, wifi_pass, base_url):
+    def _provision_then_portal(self, device_port, bridge, wifi_ssid, wifi_pass,
+                               base_url):
         """Provision once (so creds are saved), then force portal mode."""
-        factory_reset_to_portal(device_port)
+        factory_reset_to_portal(device_port, bridge)
         submit_provision_form(
+            bridge,
             [(wifi_ssid, wifi_pass)],
             api_key_action="generate",
         )
-        poll_connection_status("connected", timeout=30)
+        poll_connection_status(bridge, "connected", timeout=30)
         time.sleep(NVS_FLUSH_WAIT_S)
 
         # Simulate "all SSIDs exhausted" by rebooting.
@@ -458,19 +510,19 @@ class TestPortalAutoClose:
         data = omi_read(base_url, "/")
         assert data["response"]["status"] == 200
 
-    def test_scan_finds_saved_ssid(self, device_port, wifi_ssid):
+    def test_scan_finds_saved_ssid(self, device_port, bridge, wifi_ssid):
         """If portal is active, /scan results include the saved SSID."""
         # This test checks that the scan endpoint lists the test network.
         # The device should have already auto-reconnected, but we verify
         # the scan mechanism works.
         try:
-            networks = get_portal_scan()
+            networks = get_portal_scan(bridge)
             ssids = [n["ssid"] for n in networks]
             if wifi_ssid not in ssids:
                 warnings.warn(
                     f"Saved SSID '{wifi_ssid}' not in scan results — "
                     "device may have already auto-reconnected and left portal mode"
                 )
-        except requests.RequestException:
+        except Exception:
             # Portal may already be closed (device auto-reconnected) — that's OK
             pass

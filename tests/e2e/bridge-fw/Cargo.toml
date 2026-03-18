@@ -1,0 +1,25 @@
+[package]
+name = "wifi-bridge"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "wifi-bridge"
+harness = false
+
+[profile.release]
+opt-level = "z"
+panic = "abort"
+lto = true
+
+[profile.dev]
+debug = true
+opt-level = "z"
+
+[dependencies]
+log = "0.4"
+esp-idf-svc = { version = "0.51", features = ["critical-section"] }
+embedded-svc = { version = "0.28", default-features = false }
+
+[build-dependencies]
+embuild = { version = "0.33", features = ["espidf"] }

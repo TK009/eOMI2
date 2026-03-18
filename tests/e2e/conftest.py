@@ -70,3 +70,22 @@ def ota_firmware_b_gz():
     if not path:
         pytest.skip("OTA_FIRMWARE_B_GZ not set")
     return path
+
+
+@pytest.fixture(scope="session")
+def bridge_port():
+    """Bridge device serial port from BRIDGE_PORT env var."""
+    port = os.environ.get("BRIDGE_PORT")
+    if not port:
+        pytest.skip("BRIDGE_PORT not set — provisioning tests need a WiFi bridge")
+    return port
+
+
+@pytest.fixture(scope="session")
+def bridge(bridge_port):
+    """Session-scoped serial bridge to the WiFi bridge ESP32."""
+    from serial_bridge import SerialBridge
+
+    b = SerialBridge(bridge_port)
+    yield b
+    b.close()

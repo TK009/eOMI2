@@ -56,15 +56,12 @@ mod esp_impl {
         /// - FR-005: Instance name = hostname for uniqueness
         /// - FR-010: Conflict resolution handled by esp-idf probing
         /// - FR-011: Lightweight — uses esp-idf built-in mDNS stack
-        pub fn start(config: MdnsConfig) -> anyhow::Result<Self> {
-            let mut mdns = EspMdns::take()
-                .map_err(|e| anyhow::anyhow!("failed to take mDNS singleton: {}", e))?;
+        pub fn start(config: MdnsConfig) -> crate::error::Result<Self> {
+            let mut mdns = EspMdns::take()?;
 
-            mdns.set_hostname(&config.hostname)
-                .map_err(|e| anyhow::anyhow!("failed to set mDNS hostname: {}", e))?;
+            mdns.set_hostname(&config.hostname)?;
 
-            mdns.set_instance_name(&config.hostname)
-                .map_err(|e| anyhow::anyhow!("failed to set mDNS instance name: {}", e))?;
+            mdns.set_instance_name(&config.hostname)?;
 
             let txt = [("path", config.odf_path.as_str())];
             mdns.add_service(
@@ -73,8 +70,7 @@ mod esp_impl {
                 SERVICE_PROTO,
                 config.port,
                 &txt,
-            )
-            .map_err(|e| anyhow::anyhow!("failed to add mDNS service: {}", e))?;
+            )?;
 
             info!(
                 "mDNS started: {}.local, {}:{} port {}",
@@ -91,12 +87,11 @@ mod esp_impl {
         ///
         /// esp-idf mDNS automatically picks up the new IP from the netif,
         /// but we force a re-announcement by removing and re-adding the service.
-        pub fn update_ip(&mut self) -> anyhow::Result<()> {
+        pub fn update_ip(&mut self) -> crate::error::Result<()> {
             // esp-idf re-announces on netif change; explicit re-add ensures
             // caches are updated promptly.
             self._mdns
-                .remove_service(SERVICE_TYPE, SERVICE_PROTO)
-                .map_err(|e| anyhow::anyhow!("failed to remove mDNS service: {}", e))?;
+                .remove_service(SERVICE_TYPE, SERVICE_PROTO)?;
 
             let txt = [("path", self.config.odf_path.as_str())];
             self._mdns
@@ -106,8 +101,7 @@ mod esp_impl {
                     SERVICE_PROTO,
                     self.config.port,
                     &txt,
-                )
-                .map_err(|e| anyhow::anyhow!("failed to re-add mDNS service: {}", e))?;
+                )?;
 
             info!("mDNS: re-announced service after IP change");
             Ok(())
@@ -145,7 +139,7 @@ mod host_stub {
     }
 
     impl MdnsResponder {
-        pub fn start(config: MdnsConfig) -> anyhow::Result<Self> {
+        pub fn start(config: MdnsConfig) -> crate::error::Result<Self> {
             Ok(Self {
                 config,
                 running: true,
@@ -153,7 +147,7 @@ mod host_stub {
             })
         }
 
-        pub fn update_ip(&mut self) -> anyhow::Result<()> {
+        pub fn update_ip(&mut self) -> crate::error::Result<()> {
             self.ip_updates += 1;
             Ok(())
         }

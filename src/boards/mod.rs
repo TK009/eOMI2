@@ -51,8 +51,28 @@ pub struct BoardPeripherals {
 pub fn init_board(
     peripherals: Peripherals,
     hostname: &str,
-) -> anyhow::Result<BoardPeripherals> {
+) -> crate::error::Result<BoardPeripherals> {
     use log::info;
+
+    // Suppress onboard WS2812/NeoPixel LED FIRST, before any other GPIO
+    // init.  The WS2812 on GPIO 18 (Saola-1) interprets even brief output
+    // glitches as pixel data, so we must drive it low before anything else
+    // touches the GPIO subsystem.
+    //
+    // We use raw ESP-IDF calls to set the output register LOW *before*
+    // enabling the output direction, avoiding the glitch that PinDriver::
+    // output() causes (it enables the driver before set_low, giving the
+    // WS2812 time to latch a white pixel).
+    #[cfg(has_board_config)]
+    if let Some(pin_num) = crate::board::neopixel_pin() {
+        use esp_idf_svc::sys::{gpio_set_level, gpio_set_direction, gpio_mode_t_GPIO_MODE_OUTPUT, gpio_reset_pin};
+        unsafe {
+            gpio_reset_pin(pin_num as i32);
+            gpio_set_level(pin_num as i32, 0);
+            gpio_set_direction(pin_num as i32, gpio_mode_t_GPIO_MODE_OUTPUT);
+        }
+        info!("Neopixel: GPIO{} driven low (WS2812 disabled)", pin_num);
+    }
 
     let mut gpio_manager = GpioManager::new();
     let mut peripheral_manager = PeripheralManager::new();

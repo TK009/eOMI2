@@ -1,6 +1,9 @@
 # Rust often needs a bit of an extra main task stack size compared to C (the default is 3K)
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
+# Compiler: optimize for size (-Os) to reduce flash usage
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
 # Wi-Fi
 CONFIG_ESP_WIFI_ENABLED=y
 
@@ -10,11 +13,49 @@ CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
 # WebSocket support for the HTTP server
 CONFIG_HTTPD_WS_SUPPORT=y
 
-# Logging: compile debug-level logs in; runtime default stays at Info
+# Logging: cap at INFO to strip debug/verbose strings from the binary
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_DEFAULT_LEVEL=3
-CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
-CONFIG_LOG_MAXIMUM_LEVEL=4
+CONFIG_LOG_MAXIMUM_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL=3
 
 # Use 1000 Hz tick for 1ms sleep granularity
 CONFIG_FREERTOS_HZ=1000
+
+# Flash: 4 MB (partition table requires it)
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# OTA: custom partition table with two OTA app slots
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
+# OTA: enable app rollback support
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# ---------- mbedtls trimming ----------
+# Disable WiFi Enterprise (not needed; saves code that pulls extra TLS)
+CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT=n
+
+# No certificate bundle needed (saves ~60-100KB flash)
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
+
+# Keep only RSA key exchange (cheapest single suite that satisfies esp-tls)
+CONFIG_MBEDTLS_KEY_EXCHANGE_RSA=y
+CONFIG_MBEDTLS_KEY_EXCHANGE_DHE_RSA=n
+CONFIG_MBEDTLS_KEY_EXCHANGE_ELLIPTIC_CURVE=n
+CONFIG_MBEDTLS_KEY_EXCHANGE_ECDHE_RSA=n
+CONFIG_MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA=n
+CONFIG_MBEDTLS_KEY_EXCHANGE_ECDH_ECDSA=n
+CONFIG_MBEDTLS_KEY_EXCHANGE_ECDH_RSA=n
+
+# Disable unused symmetric ciphers
+CONFIG_MBEDTLS_RC4_DISABLED=y
+CONFIG_MBEDTLS_CCM_C=n
+CONFIG_MBEDTLS_GCM_C=n
+
+# Disable unused ECC (not needed with RSA-only key exchange)
+CONFIG_MBEDTLS_ECP_C=n
+CONFIG_MBEDTLS_ECDH_C=n
+CONFIG_MBEDTLS_ECDSA_C=n

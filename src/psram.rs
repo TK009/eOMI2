@@ -197,6 +197,90 @@ impl<T> Drop for PsramBox<T> {
 }
 
 // ---------------------------------------------------------------------------
+// PsramBytes — immutable byte buffer in PSRAM
+// ---------------------------------------------------------------------------
+
+/// Immutable byte buffer allocated in PSRAM (ESP) or heap (host).
+///
+/// Like `PsramString` but for arbitrary bytes (no UTF-8 requirement).
+/// Used for storing pre-compressed content.
+pub struct PsramBytes {
+    ptr: *mut u8,
+    len: usize,
+}
+
+// SAFETY: PsramBytes owns its allocation and is immutable after creation.
+unsafe impl Send for PsramBytes {}
+unsafe impl Sync for PsramBytes {}
+
+impl PsramBytes {
+    /// Create a new PSRAM-backed byte buffer from a slice.
+    pub fn from_bytes(data: &[u8]) -> Self {
+        if data.is_empty() {
+            return Self {
+                ptr: ptr::NonNull::dangling().as_ptr(),
+                len: 0,
+            };
+        }
+        let layout = Layout::array::<u8>(data.len()).expect("layout overflow");
+        let ptr = unsafe { psram_alloc(layout) };
+        assert!(!ptr.is_null(), "PsramBytes allocation failed");
+        unsafe {
+            ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+        }
+        Self { ptr, len: data.len() }
+    }
+
+    /// View as a byte slice.
+    #[inline]
+    pub fn as_bytes(&self) -> &[u8] {
+        if self.len == 0 {
+            return &[];
+        }
+        unsafe { core::slice::from_raw_parts(self.ptr, self.len) }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl Clone for PsramBytes {
+    fn clone(&self) -> Self {
+        PsramBytes::from_bytes(self.as_bytes())
+    }
+}
+
+impl PartialEq for PsramBytes {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_bytes() == other.as_bytes()
+    }
+}
+
+impl Eq for PsramBytes {}
+
+impl fmt::Debug for PsramBytes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PsramBytes(len={})", self.len)
+    }
+}
+
+impl Drop for PsramBytes {
+    fn drop(&mut self) {
+        if self.len > 0 {
+            let layout = Layout::array::<u8>(self.len).expect("layout overflow");
+            unsafe { psram_free(self.ptr, layout); }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // PsramString — immutable string in PSRAM
 // ---------------------------------------------------------------------------
 
@@ -215,6 +299,7 @@ unsafe impl Sync for PsramString {}
 
 impl PsramString {
     /// Create a new PSRAM-backed string from a `&str`.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         if s.is_empty() {
             return Self {

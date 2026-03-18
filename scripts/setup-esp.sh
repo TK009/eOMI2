@@ -49,6 +49,24 @@ if [[ ! -e "$PROJECT_ROOT/.env" ]]; then
     fi
 fi
 
+# ── 6. Generate sdkconfig fragment with absolute partition table path ──
+# ESP-IDF cmake resolves PARTITION_TABLE_CUSTOM_FILENAME relative to its
+# own build output dir, not the project root. We generate a fragment with
+# the absolute path and prepend it to ESP_IDF_SDKCONFIG_DEFAULTS so esp-idf-sys
+# picks it up. "Last wins" in sdkconfig defaults, so our project sdkconfig.defaults
+# (which is appended by embuild) will still override — but the partition path
+# in sdkconfig.defaults uses a relative path that won't resolve. We put the
+# absolute-path fragment AFTER sdkconfig.defaults by setting the env var.
+_part_frag="$PROJECT_ROOT/target/sdkconfig.partitions.defaults"
+mkdir -p "$PROJECT_ROOT/target"
+cat > "$_part_frag" <<SDKEOF
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="$PROJECT_ROOT/partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="$PROJECT_ROOT/partitions.csv"
+SDKEOF
+export ESP_IDF_SDKCONFIG_DEFAULTS="$PROJECT_ROOT/sdkconfig.defaults;$_part_frag"
+unset _part_frag
+
 # Restore caller's shell options
 eval "$_setup_esp_oldopts"
 unset _setup_esp_oldopts

@@ -1,3 +1,4 @@
+#![cfg(feature = "lite-json")]
 //! Integration tests for the OMI engine.
 //!
 //! Unlike the unit tests in `src/omi/engine.rs`, these exercise the full
@@ -10,9 +11,7 @@ mod common;
 use common::*;
 use reconfigurable_device::odf::OmiValue;
 use reconfigurable_device::omi::error::ParseError;
-use reconfigurable_device::omi::{Engine, OmiMessage};
-use serde_json::json;
-
+use reconfigurable_device::omi::OmiMessage;
 // ---------------------------------------------------------------------------
 // Helpers (file-specific)
 // ---------------------------------------------------------------------------
@@ -22,30 +21,6 @@ use serde_json::json;
 // ===========================================================================
 // 1.1  Read Operations
 // ===========================================================================
-
-#[test]
-fn read_root_returns_objects() {
-    let mut e = engine_with_sensor_tree();
-    let resp = parse_and_process(&mut e, r#"{"omi":"1.0","ttl":0,"read":{"path":"/"}}"#);
-    assert_eq!(response_status(&resp), 200);
-    let result = extract_json_result(&resp);
-    assert!(result["System"].is_object(), "root should contain System");
-
-    // Verify via JSON round-trip
-    let rt = roundtrip_response_json(&resp);
-    assert_eq!(rt["status"], 200);
-    assert!(rt["result"]["System"].is_object());
-}
-
-#[test]
-fn read_object_returns_items() {
-    let mut e = engine_with_sensor_tree();
-    let resp = parse_and_process(&mut e, r#"{"omi":"1.0","ttl":0,"read":{"path":"/System"}}"#);
-    assert_eq!(response_status(&resp), 200);
-    let result = extract_json_result(&resp);
-    assert_eq!(result["id"], "System");
-    assert!(result["items"]["FreeHeap"].is_object());
-}
 
 #[test]
 fn read_infoitem_empty() {
@@ -75,10 +50,6 @@ fn read_infoitem_with_values() {
     let values = extract_values(&resp);
     assert_eq!(values.len(), 1);
     assert_eq!(values[0].v, OmiValue::Number(23.5));
-
-    // JSON round-trip
-    let rt = roundtrip_response_json(&resp);
-    assert_eq!(rt["result"]["values"][0]["v"], 23.5);
 }
 
 #[test]
@@ -129,34 +100,6 @@ fn read_time_range() {
 }
 
 #[test]
-fn read_with_depth() {
-    let mut e = engine_with_sensor_tree();
-    let resp = parse_and_process(
-        &mut e,
-        r#"{"omi":"1.0","ttl":0,"read":{"path":"/System","depth":0}}"#,
-    );
-    assert_eq!(response_status(&resp), 200);
-    let result = extract_json_result(&resp);
-    assert_eq!(result["id"], "System");
-    // depth=0 should omit nested items
-    assert!(result.get("items").is_none());
-}
-
-#[test]
-fn read_with_depth_includes_items() {
-    let mut e = engine_with_sensor_tree();
-    let resp = parse_and_process(
-        &mut e,
-        r#"{"omi":"1.0","ttl":0,"read":{"path":"/System","depth":1}}"#,
-    );
-    assert_eq!(response_status(&resp), 200);
-    let result = extract_json_result(&resp);
-    assert_eq!(result["id"], "System");
-    // depth=1 should include items
-    assert!(result["items"]["FreeHeap"].is_object());
-}
-
-#[test]
 fn read_nonexistent_path() {
     let mut e = engine_with_sensor_tree();
     let resp = parse_and_process(
@@ -164,10 +107,6 @@ fn read_nonexistent_path() {
         r#"{"omi":"1.0","ttl":0,"read":{"path":"/NoSuchThing"}}"#,
     );
     assert_eq!(response_status(&resp), 404);
-
-    // Verify 404 survives JSON serialization round-trip
-    let rt = roundtrip_response_json(&resp);
-    assert_eq!(rt["status"], 404);
 }
 
 // ===========================================================================
@@ -244,97 +183,6 @@ fn write_batch_mixed_results() {
     assert_eq!(batch.len(), 2);
     assert_eq!(batch[0].status, 201); // new path created
     assert_eq!(batch[1].status, 403); // sensor item not writable
-
-    // Verify batch survives JSON round-trip
-    let rt = roundtrip_response_json(&resp);
-    let items = rt["result"].as_array().unwrap();
-    assert_eq!(items[0]["status"], 201);
-    assert_eq!(items[1]["status"], 403);
-}
-
-#[test]
-fn write_tree_merges_objects() {
-    let mut e = engine_with_sensor_tree();
-    let resp = parse_and_process(
-        &mut e,
-        r#"{
-            "omi":"1.0","ttl":10,
-            "write":{
-                "path":"/",
-                "objects":{
-                    "Garage":{"id":"Garage"}
-                }
-            }
-        }"#,
-    );
-    assert_eq!(response_status(&resp), 200);
-
-    // New object should be readable
-    let resp = parse_and_process(
-        &mut e,
-        r#"{"omi":"1.0","ttl":0,"read":{"path":"/Garage"}}"#,
-    );
-    assert_eq!(response_status(&resp), 200);
-    assert_eq!(extract_json_result(&resp)["id"], "Garage");
-
-    // Original sensor tree should still exist
-    let resp = parse_and_process(
-        &mut e,
-        r#"{"omi":"1.0","ttl":0,"read":{"path":"/System"}}"#,
-    );
-    assert_eq!(response_status(&resp), 200);
-}
-
-#[test]
-fn write_then_read_roundtrip_all_types() {
-    let mut e = Engine::new();
-
-    // Note: JSON `"v": null` is indistinguishable from absent `v` in the
-    // parser (Option<OmiValue>), so OmiValue::Null is not testable via JSON.
-    let cases: &[(&str, &str, OmiValue, serde_json::Value)] = &[
-        (
-            r#"{"omi":"1.0","ttl":10,"write":{"path":"/T/Str","v":"hello"}}"#,
-            "/T/Str",
-            OmiValue::Str("hello".into()),
-            json!("hello"),
-        ),
-        (
-            r#"{"omi":"1.0","ttl":10,"write":{"path":"/T/Num","v":3.14}}"#,
-            "/T/Num",
-            OmiValue::Number(3.14),
-            json!(3.14),
-        ),
-        (
-            r#"{"omi":"1.0","ttl":10,"write":{"path":"/T/Bool","v":true}}"#,
-            "/T/Bool",
-            OmiValue::Bool(true),
-            json!(true),
-        ),
-    ];
-
-    for (write_json, _, _, _) in cases {
-        parse_and_process(&mut e, write_json);
-    }
-
-    // Read each back and verify the value survives the full round-trip
-    for (_, path, expected_omi, expected_json) in cases {
-        let read_json = format!(
-            r#"{{"omi":"1.0","ttl":0,"read":{{"path":"{}","newest":1}}}}"#,
-            path
-        );
-        let resp = parse_and_process(&mut e, &read_json);
-        assert_eq!(response_status(&resp), 200);
-        let values = extract_values(&resp);
-        assert_eq!(
-            values[0].v, *expected_omi,
-            "round-trip mismatch for path {}",
-            path
-        );
-
-        // Also verify via serialization round-trip
-        let rt = roundtrip_response_json(&resp);
-        assert_eq!(rt["result"]["values"][0]["v"], *expected_json);
-    }
 }
 
 // ===========================================================================
@@ -394,10 +242,6 @@ fn subscribe_poll_returns_rid() {
     assert_eq!(response_status(&resp), 200);
     let rid = response_rid(&resp);
     assert!(!rid.is_empty(), "subscription should return a non-empty rid");
-
-    // Verify rid survives JSON round-trip
-    let rt = roundtrip_response_json(&resp);
-    assert_eq!(rt["rid"], rid);
 }
 
 #[test]

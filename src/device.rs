@@ -27,11 +27,17 @@ pub const PATH_FREE_PSRAM: &str = "/System/FreePsram";
 /// O-DF path for the temperature sensor reading.
 pub const PATH_TEMPERATURE: &str = "/System/Temperature";
 
+/// O-DF path for the firmware version InfoItem (FR-023).
+pub const PATH_FIRMWARE_VERSION: &str = "/System/FirmwareVersion";
+
 /// O-DF path prefix for the discovery subtree.
 pub const PATH_DISCOVERY: &str = "/System/discovery";
 
 /// Capacity for sensor InfoItem ring buffers.
 const SENSOR_CAPACITY: usize = 20;
+
+/// Compile-time firmware version string (FR-024).
+const FIRMWARE_VERSION: &str = env!("FIRMWARE_VERSION");
 
 /// Build the sensor object tree for internal system metrics.
 ///
@@ -81,6 +87,12 @@ pub fn build_sensor_tree() -> BTreeMap<String, Object> {
         sys.add_item("FreePsram".into(), psram);
     }
 
+    // FR-023: read-only firmware version InfoItem.
+    let mut fw = InfoItem::new(1);
+    fw.type_uri = Some("omi:device:firmwareversion".into());
+    fw.add_value(OmiValue::Str(FIRMWARE_VERSION.into()), None);
+    sys.add_item("FirmwareVersion".into(), fw);
+
     if crate::board::has_temp_sensor() {
         let mut temp = InfoItem::new(SENSOR_CAPACITY);
         temp.type_uri = Some("omi:sensor:temperature".into());
@@ -97,11 +109,9 @@ pub fn build_sensor_tree() -> BTreeMap<String, Object> {
 
 /// A single writable item's latest value, for NVS persistence.
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
 pub struct SavedItem {
     pub path: String,
     pub v: OmiValue,
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
     pub t: Option<f64>,
 }
 
@@ -195,16 +205,14 @@ pub fn update_discovery_tree(
 }
 
 // ---------------------------------------------------------------------------
-// NVS serialization helpers (platform-independent, json-gated)
+// NVS serialization helpers (platform-independent, compact binary format)
 // ---------------------------------------------------------------------------
 
 /// Maximum blob size for NVS storage. Leave headroom below the NVS page
 /// size (~4096 bytes) to avoid write failures.
-#[cfg(feature = "json")]
 pub const MAX_NVS_BLOB: usize = 4000;
 
 /// Errors from serializing items for NVS persistence.
-#[cfg(feature = "json")]
 #[derive(Debug, PartialEq)]
 pub enum NvsSaveError {
     /// Serialized blob exceeds [`MAX_NVS_BLOB`]. Contains the actual size.
@@ -212,20 +220,145 @@ pub enum NvsSaveError {
     SerializeFailed,
 }
 
-/// Serialize saved items to JSON bytes, enforcing the NVS blob size limit.
-#[cfg(feature = "json")]
+/// Binary format version tag.
+const SAVED_ITEMS_VERSION: u8 = 0x01;
+
+/// Serialize saved items to compact binary, enforcing the NVS blob size limit.
+///
+/// Wire format:
+/// ```text
+/// [version: u8 = 0x01] [item_count: u16-LE]
+/// per item:
+///   [path_len: u16-LE] [path: utf8]
+///   [type_tag: u8]  -- 0=null, 1=bool(0), 2=bool(1), 3=f64, 4=str
+///   [value: variable] -- f64: 8 bytes LE; str: u16-LE len + bytes
+///   [has_t: u8] [t: f64-LE if has_t=1]
+/// ```
 pub fn serialize_saved_items(items: &[SavedItem]) -> Result<Vec<u8>, NvsSaveError> {
-    let blob = serde_json::to_vec(items).map_err(|_| NvsSaveError::SerializeFailed)?;
-    if blob.len() > MAX_NVS_BLOB {
-        return Err(NvsSaveError::TooLarge(blob.len()));
+    let mut buf = Vec::with_capacity(128);
+    buf.push(SAVED_ITEMS_VERSION);
+    let count: u16 = items.len().try_into().map_err(|_| NvsSaveError::SerializeFailed)?;
+    buf.extend_from_slice(&count.to_le_bytes());
+
+    for item in items {
+        let path_bytes = item.path.as_bytes();
+        let path_len: u16 = path_bytes.len().try_into().map_err(|_| NvsSaveError::SerializeFailed)?;
+        buf.extend_from_slice(&path_len.to_le_bytes());
+        buf.extend_from_slice(path_bytes);
+
+        match &item.v {
+            OmiValue::Null => buf.push(0),
+            OmiValue::Bool(false) => buf.push(1),
+            OmiValue::Bool(true) => buf.push(2),
+            OmiValue::Number(n) => {
+                buf.push(3);
+                buf.extend_from_slice(&n.to_le_bytes());
+            }
+            OmiValue::Str(s) => {
+                buf.push(4);
+                let s_bytes = s.as_bytes();
+                let s_len: u16 = s_bytes.len().try_into().map_err(|_| NvsSaveError::SerializeFailed)?;
+                buf.extend_from_slice(&s_len.to_le_bytes());
+                buf.extend_from_slice(s_bytes);
+            }
+        }
+
+        match item.t {
+            Some(t) => {
+                buf.push(1);
+                buf.extend_from_slice(&t.to_le_bytes());
+            }
+            None => buf.push(0),
+        }
     }
-    Ok(blob)
+
+    if buf.len() > MAX_NVS_BLOB {
+        return Err(NvsSaveError::TooLarge(buf.len()));
+    }
+    Ok(buf)
 }
 
-/// Deserialize saved items from a JSON byte slice.
-#[cfg(feature = "json")]
+/// Deserialize saved items from a compact binary byte slice.
 pub fn deserialize_saved_items(data: &[u8]) -> Result<Vec<SavedItem>, String> {
-    serde_json::from_slice(data).map_err(|e| e.to_string())
+    let mut pos = 0;
+
+    let read_u8 = |pos: &mut usize| -> Result<u8, String> {
+        if *pos >= data.len() {
+            return Err("unexpected end of data".into());
+        }
+        let v = data[*pos];
+        *pos += 1;
+        Ok(v)
+    };
+
+    let read_u16 = |pos: &mut usize| -> Result<u16, String> {
+        if *pos + 2 > data.len() {
+            return Err("unexpected end of data".into());
+        }
+        let v = u16::from_le_bytes([data[*pos], data[*pos + 1]]);
+        *pos += 2;
+        Ok(v)
+    };
+
+    let read_f64 = |pos: &mut usize| -> Result<f64, String> {
+        if *pos + 8 > data.len() {
+            return Err("unexpected end of data".into());
+        }
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&data[*pos..*pos + 8]);
+        *pos += 8;
+        Ok(f64::from_le_bytes(bytes))
+    };
+
+    let version = read_u8(&mut pos)?;
+    if version != SAVED_ITEMS_VERSION {
+        return Err(format!("unsupported version: {}", version));
+    }
+
+    let count = read_u16(&mut pos)? as usize;
+    let mut items = Vec::with_capacity(count);
+
+    for _ in 0..count {
+        let path_len = read_u16(&mut pos)? as usize;
+        if pos + path_len > data.len() {
+            return Err("unexpected end of data".into());
+        }
+        let path = core::str::from_utf8(&data[pos..pos + path_len])
+            .map_err(|e| e.to_string())?
+            .to_string();
+        pos += path_len;
+
+        let tag = read_u8(&mut pos)?;
+        let v = match tag {
+            0 => OmiValue::Null,
+            1 => OmiValue::Bool(false),
+            2 => OmiValue::Bool(true),
+            3 => OmiValue::Number(read_f64(&mut pos)?),
+            4 => {
+                let s_len = read_u16(&mut pos)? as usize;
+                if pos + s_len > data.len() {
+                    return Err("unexpected end of data".into());
+                }
+                let s = core::str::from_utf8(&data[pos..pos + s_len])
+                    .map_err(|e| e.to_string())?
+                    .to_string();
+                pos += s_len;
+                OmiValue::Str(s)
+            }
+            _ => return Err(format!("unknown type tag: {}", tag)),
+        };
+
+        let has_t = read_u8(&mut pos)?;
+        let t = if has_t == 1 {
+            Some(read_f64(&mut pos)?)
+        } else {
+            None
+        };
+
+        items.push(SavedItem { path, v, t });
+    }
+
+    Ok(items)
 }
 
 #[cfg(test)]
@@ -463,16 +596,39 @@ mod tests {
         assert!(matches!(ot.resolve(PATH_FREE_HEAP), Ok(PathTarget::InfoItem(_))));
     }
 
-    // --- serialize/deserialize_saved_items (requires json feature) ---
+    #[test]
+    fn sensor_tree_has_firmware_version() {
+        let tree = build_sensor_tree();
+        let sys = &tree["System"];
+        let fw = sys.get_item("FirmwareVersion").expect("FirmwareVersion missing");
+        assert_eq!(fw.type_uri.as_deref(), Some("omi:device:firmwareversion"));
+        assert!(!fw.is_writable(), "FirmwareVersion should not be writable");
+        // Should have exactly one value pre-populated
+        let vals = fw.query_values(Some(1), None, None, None);
+        assert_eq!(vals.len(), 1);
+        assert!(matches!(&vals[0].v, OmiValue::Str(_)));
+    }
 
-    #[cfg(feature = "json")]
-    mod json_persistence {
+    #[test]
+    fn firmware_version_path_resolves() {
+        let tree = build_sensor_tree();
+        let mut ot = ObjectTree::new();
+        ot.write_tree("/", tree).unwrap();
+        assert!(matches!(ot.resolve(PATH_FIRMWARE_VERSION), Ok(PathTarget::InfoItem(_))));
+    }
+
+    // --- serialize/deserialize_saved_items (compact binary format) ---
+
+    mod binary_persistence {
         use super::*;
 
         #[test]
         fn serialize_empty() {
             let blob = serialize_saved_items(&[]).unwrap();
-            assert_eq!(blob, b"[]");
+            // version(1) + count(2) = 3 bytes
+            assert_eq!(blob.len(), 3);
+            assert_eq!(blob[0], 0x01); // version
+            assert_eq!(blob[1..3], [0, 0]); // count = 0
         }
 
         #[test]
@@ -483,9 +639,9 @@ mod tests {
                 t: Some(1000.0),
             }];
             let blob = serialize_saved_items(&items).unwrap();
-            let text = std::str::from_utf8(&blob).unwrap();
-            assert!(text.contains("\"path\":\"/A/B\""));
-            assert!(text.contains("42"));
+            assert_eq!(blob[0], 0x01); // version
+            let restored = deserialize_saved_items(&blob).unwrap();
+            assert_eq!(restored, items);
         }
 
         #[test]
@@ -515,37 +671,26 @@ mod tests {
         }
 
         #[test]
-        fn deserialize_empty_array() {
-            let items = deserialize_saved_items(b"[]").unwrap();
+        fn deserialize_empty_items() {
+            let blob = serialize_saved_items(&[]).unwrap();
+            let items = deserialize_saved_items(&blob).unwrap();
             assert!(items.is_empty());
         }
 
         #[test]
-        fn deserialize_single_item() {
-            let json = r#"[{"path":"/A/B","v":"hello","t":1000.0}]"#;
-            let items = deserialize_saved_items(json.as_bytes()).unwrap();
-            assert_eq!(items.len(), 1);
-            assert_eq!(items[0].path, "/A/B");
-            assert_eq!(items[0].v, OmiValue::Str("hello".into()));
-            assert_eq!(items[0].t, Some(1000.0));
+        fn deserialize_invalid_data() {
+            assert!(deserialize_saved_items(b"not binary").is_err());
         }
 
         #[test]
-        fn deserialize_no_timestamp() {
-            let json = r#"[{"path":"/X","v":3.14}]"#;
-            let items = deserialize_saved_items(json.as_bytes()).unwrap();
-            assert_eq!(items.len(), 1);
-            assert_eq!(items[0].t, None);
+        fn deserialize_wrong_version() {
+            assert!(deserialize_saved_items(&[0xFF, 0, 0]).is_err());
         }
 
         #[test]
-        fn deserialize_invalid_json() {
-            assert!(deserialize_saved_items(b"not json").is_err());
-        }
-
-        #[test]
-        fn deserialize_wrong_structure() {
-            assert!(deserialize_saved_items(b"{}").is_err());
+        fn deserialize_truncated() {
+            // Valid version but truncated count
+            assert!(deserialize_saved_items(&[0x01]).is_err());
         }
 
         #[test]
@@ -558,6 +703,237 @@ mod tests {
             let blob = serialize_saved_items(&items).unwrap();
             let restored = deserialize_saved_items(&blob).unwrap();
             assert_eq!(items, restored);
+        }
+
+        #[test]
+        fn roundtrip_null_value() {
+            let items = vec![SavedItem {
+                path: "/X/Y".into(),
+                v: OmiValue::Null,
+                t: None,
+            }];
+            let blob = serialize_saved_items(&items).unwrap();
+            let restored = deserialize_saved_items(&blob).unwrap();
+            assert_eq!(items, restored);
+        }
+
+        #[test]
+        fn roundtrip_all_value_types() {
+            let items = vec![
+                SavedItem { path: "/null".into(), v: OmiValue::Null, t: None },
+                SavedItem { path: "/false".into(), v: OmiValue::Bool(false), t: Some(1.0) },
+                SavedItem { path: "/true".into(), v: OmiValue::Bool(true), t: None },
+                SavedItem { path: "/num".into(), v: OmiValue::Number(3.14), t: Some(2.0) },
+                SavedItem { path: "/str".into(), v: OmiValue::Str("test".into()), t: None },
+            ];
+            let blob = serialize_saved_items(&items).unwrap();
+            let restored = deserialize_saved_items(&blob).unwrap();
+            assert_eq!(items, restored);
+        }
+
+        #[test]
+        fn roundtrip_unicode_strings() {
+            let items = vec![
+                SavedItem { path: "/日本語/パス".into(), v: OmiValue::Str("こんにちは".into()), t: None },
+                SavedItem { path: "/emoji".into(), v: OmiValue::Str("🌡️".into()), t: Some(1.0) },
+            ];
+            let blob = serialize_saved_items(&items).unwrap();
+            let restored = deserialize_saved_items(&blob).unwrap();
+            assert_eq!(items, restored);
+        }
+
+        #[test]
+        fn roundtrip_empty_path_and_string() {
+            let items = vec![
+                SavedItem { path: "".into(), v: OmiValue::Str(String::new()), t: None },
+            ];
+            let blob = serialize_saved_items(&items).unwrap();
+            let restored = deserialize_saved_items(&blob).unwrap();
+            assert_eq!(items, restored);
+        }
+
+        #[test]
+        fn roundtrip_max_length_path() {
+            let long_path = "/".to_string() + &"a".repeat(1000);
+            let items = vec![SavedItem {
+                path: long_path.clone(),
+                v: OmiValue::Number(0.0),
+                t: None,
+            }];
+            let blob = serialize_saved_items(&items).unwrap();
+            let restored = deserialize_saved_items(&blob).unwrap();
+            assert_eq!(restored[0].path, long_path);
+        }
+
+        // --- Adversarial / error-path tests ---
+
+        #[test]
+        fn deserialize_future_version_tag() {
+            // Version 0x02 — a hypothetical future version should be rejected gracefully
+            assert!(deserialize_saved_items(&[0x02, 0, 0]).unwrap_err().contains("unsupported version"));
+            // Version 0x00 — below current
+            assert!(deserialize_saved_items(&[0x00, 0, 0]).unwrap_err().contains("unsupported version"));
+            // High version byte
+            assert!(deserialize_saved_items(&[0x7F, 0, 0]).unwrap_err().contains("unsupported version"));
+        }
+
+        #[test]
+        fn deserialize_truncated_mid_path_length() {
+            // Valid header (version + count=1) but path_len is truncated (only 1 byte of u16)
+            let data = [0x01, 1, 0, 0x05]; // version=1, count=1, path_len starts but only 1 byte
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_truncated_mid_path_data() {
+            // version=1, count=1, path_len=10, but only 3 bytes of path follow
+            let mut data = vec![0x01, 1, 0]; // version + count=1
+            data.extend_from_slice(&10u16.to_le_bytes()); // path_len=10
+            data.extend_from_slice(b"abc"); // only 3 bytes of path
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_truncated_before_type_tag() {
+            // version=1, count=1, valid path, then EOF before type tag
+            let mut data = vec![0x01, 1, 0]; // version + count=1
+            data.extend_from_slice(&2u16.to_le_bytes()); // path_len=2
+            data.extend_from_slice(b"/A"); // path
+            // Missing type tag
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_truncated_mid_f64_value() {
+            // version=1, count=1, path="/A", type=Number(3), then only 4 of 8 f64 bytes
+            let mut data = vec![0x01, 1, 0]; // version + count=1
+            data.extend_from_slice(&2u16.to_le_bytes()); // path_len=2
+            data.extend_from_slice(b"/A"); // path
+            data.push(3); // type_tag = Number
+            data.extend_from_slice(&[0u8; 4]); // only 4 bytes of f64 (need 8)
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_truncated_mid_string_length() {
+            // type=Str(4), then only 1 byte of string length u16
+            let mut data = vec![0x01, 1, 0];
+            data.extend_from_slice(&2u16.to_le_bytes());
+            data.extend_from_slice(b"/A");
+            data.push(4); // type_tag = Str
+            data.push(0x05); // only 1 byte of string length
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_truncated_mid_string_data() {
+            // type=Str, string_len=10, but only 3 bytes of string data
+            let mut data = vec![0x01, 1, 0];
+            data.extend_from_slice(&2u16.to_le_bytes());
+            data.extend_from_slice(b"/A");
+            data.push(4); // type_tag = Str
+            data.extend_from_slice(&10u16.to_le_bytes()); // string_len=10
+            data.extend_from_slice(b"abc"); // only 3 bytes
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_truncated_before_has_t() {
+            // Complete value but EOF before has_t byte
+            let mut data = vec![0x01, 1, 0];
+            data.extend_from_slice(&2u16.to_le_bytes());
+            data.extend_from_slice(b"/A");
+            data.push(0); // type_tag = Null
+            // Missing has_t byte
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_truncated_mid_timestamp() {
+            // has_t=1 but only 4 of 8 timestamp bytes
+            let mut data = vec![0x01, 1, 0];
+            data.extend_from_slice(&2u16.to_le_bytes());
+            data.extend_from_slice(b"/A");
+            data.push(0); // Null
+            data.push(1); // has_t = true
+            data.extend_from_slice(&[0u8; 4]); // only 4 bytes of f64
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_unknown_type_tag() {
+            // type_tag = 5 (unknown — only 0-4 are valid)
+            let mut data = vec![0x01, 1, 0];
+            data.extend_from_slice(&2u16.to_le_bytes());
+            data.extend_from_slice(b"/A");
+            data.push(5); // unknown type tag
+            let err = deserialize_saved_items(&data).unwrap_err();
+            assert!(err.contains("unknown type tag"), "got: {}", err);
+        }
+
+        #[test]
+        fn deserialize_unknown_type_tag_high() {
+            // type_tag = 0xFF
+            let mut data = vec![0x01, 1, 0];
+            data.extend_from_slice(&2u16.to_le_bytes());
+            data.extend_from_slice(b"/A");
+            data.push(0xFF);
+            assert!(deserialize_saved_items(&data).unwrap_err().contains("unknown type tag"));
+        }
+
+        #[test]
+        fn deserialize_count_exceeds_data() {
+            // Claims 1000 items but has no item data
+            let mut data = vec![0x01];
+            data.extend_from_slice(&1000u16.to_le_bytes());
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_invalid_utf8_path() {
+            // Path contains invalid UTF-8
+            let mut data = vec![0x01, 1, 0]; // version + count=1
+            data.extend_from_slice(&3u16.to_le_bytes()); // path_len=3
+            data.extend_from_slice(&[0xFF, 0xFE, 0xFD]); // invalid UTF-8
+            data.push(0); // type_tag = Null
+            data.push(0); // has_t = false
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_invalid_utf8_string_value() {
+            // String value contains invalid UTF-8
+            let mut data = vec![0x01, 1, 0];
+            data.extend_from_slice(&2u16.to_le_bytes());
+            data.extend_from_slice(b"/A"); // valid path
+            data.push(4); // type_tag = Str
+            data.extend_from_slice(&3u16.to_le_bytes()); // string_len=3
+            data.extend_from_slice(&[0xFF, 0xFE, 0xFD]); // invalid UTF-8
+            data.push(0); // has_t = false
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn deserialize_corrupt_first_item_valid_second() {
+            // Two items claimed, but first has corrupt type tag — should fail on first
+            let mut data = vec![0x01, 2, 0]; // version + count=2
+            data.extend_from_slice(&2u16.to_le_bytes());
+            data.extend_from_slice(b"/A");
+            data.push(99); // bad type tag on first item
+            // Second item would be valid but we never reach it
+            assert!(deserialize_saved_items(&data).is_err());
+        }
+
+        #[test]
+        fn binary_is_compact() {
+            // Verify binary is more compact than equivalent JSON would be
+            let items = vec![
+                SavedItem { path: "/A/B".into(), v: OmiValue::Number(42.0), t: Some(1000.0) },
+                SavedItem { path: "/C/D".into(), v: OmiValue::Str("hello".into()), t: None },
+            ];
+            let blob = serialize_saved_items(&items).unwrap();
+            // Binary should be well under 100 bytes for this
+            assert!(blob.len() < 100, "binary blob unexpectedly large: {} bytes", blob.len());
         }
     }
 

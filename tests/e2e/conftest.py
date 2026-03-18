@@ -52,3 +52,21 @@ def auth_headers(token):
 def ws_url(device_ip):
     """WebSocket URL for OMI."""
     return f"ws://{device_ip}/omi/ws"
+
+
+@pytest.fixture(scope="session")
+def ota_firmware_a_gz():
+    """Path to gzip-compressed firmware version A (for restore)."""
+    path = os.environ.get("OTA_FIRMWARE_A_GZ")
+    if not path:
+        pytest.skip("OTA_FIRMWARE_A_GZ not set")
+    return path
+
+
+@pytest.fixture(scope="session")
+def ota_firmware_b_gz():
+    """Path to gzip-compressed firmware version B (for OTA test)."""
+    path = os.environ.get("OTA_FIRMWARE_B_GZ")
+    if not path:
+        pytest.skip("OTA_FIRMWARE_B_GZ not set")
+    return path

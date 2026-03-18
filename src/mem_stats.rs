@@ -18,11 +18,16 @@ pub struct MemStat {
 mod imp {
     use super::MemStat;
 
+    /// Size of a single NVS entry slot in bytes.
+    const NVS_ENTRY_SIZE: u32 = 32;
+
     /// Free and total heap (internal SRAM).
     pub fn heap() -> Option<MemStat> {
         unsafe {
             let free = esp_idf_svc::sys::esp_get_free_heap_size();
-            let total = esp_idf_svc::sys::esp_get_heap_size();
+            let total = esp_idf_svc::sys::heap_caps_get_total_size(
+                esp_idf_svc::sys::MALLOC_CAP_DEFAULT,
+            );
             Some(MemStat {
                 free: free as u32,
                 total: total as u32,
@@ -51,13 +56,19 @@ mod imp {
         }
     }
 
-    /// NVS usage statistics for the default partition.
+    /// NVS usage statistics for the default partition, in bytes.
+    ///
+    /// NVS reports free/total as entry counts (each entry is 32 bytes).
+    /// We multiply by `NVS_ENTRY_SIZE` to return bytes, consistent with
+    /// the other memory stat readers. The percentage `free / total` is
+    /// exact since both sides use the same multiplier.
     ///
     /// Returns `None` if the query fails.
     pub fn nvs() -> Option<MemStat> {
         let mut stats = esp_idf_svc::sys::nvs_stats_t {
             used_entries: 0,
             free_entries: 0,
+            available_entries: 0,
             total_entries: 0,
             namespace_count: 0,
         };
@@ -68,8 +79,8 @@ mod imp {
             return None;
         }
         Some(MemStat {
-            free: stats.free_entries as u32,
-            total: stats.total_entries as u32,
+            free: stats.free_entries as u32 * NVS_ENTRY_SIZE,
+            total: stats.total_entries as u32 * NVS_ENTRY_SIZE,
         })
     }
 

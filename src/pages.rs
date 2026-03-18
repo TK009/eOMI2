@@ -1,5 +1,9 @@
 // In-memory storage for user-uploaded HTML pages.
 //
+// Pages are stored as raw bytes with an optional compression flag.
+// When `compressed` is true the bytes are gzip-encoded; the GET handler
+// serves them with `Content-Encoding: gzip` (zero CPU passthrough).
+//
 // Platform-independent (no ESP deps), fully unit-testable on host.
 
 extern crate alloc;
@@ -8,10 +12,10 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::psram::PsramString;
+use crate::psram::PsramBytes;
 
 const DEFAULT_MAX_TOTAL: usize = 100 * 1024; // 100 KB
-const MAX_SINGLE_PAGE: usize = 64 * 1024; // 64 KB
+pub(crate) const MAX_SINGLE_PAGE: usize = 64 * 1024; // 64 KB
 
 #[derive(Debug, PartialEq)]
 pub enum PageError {
@@ -22,9 +26,15 @@ pub enum PageError {
     NotFound,
 }
 
+/// A stored page: raw bytes plus a flag indicating gzip compression.
+struct StoredPage {
+    data: PsramBytes,
+    compressed: bool,
+}
+
 pub struct PageStore {
-    pages: BTreeMap<String, PsramString>,
-    /// Tracks total heap usage: path keys + HTML content.
+    pages: BTreeMap<String, StoredPage>,
+    /// Tracks total heap usage: path keys + page content bytes.
     total_bytes: usize,
     max_total_bytes: usize,
 }
@@ -69,31 +79,46 @@ impl PageStore {
         Ok(())
     }
 
-    /// Store an HTML page at the given path. Replaces any existing page.
+    /// Store an HTML page at the given path (uncompressed). Replaces any existing page.
     pub fn store(&mut self, path: &str, html: &str) -> Result<(), PageError> {
+        self.store_bytes(path, html.as_bytes(), false)
+    }
+
+    /// Store raw bytes at the given path, with an optional compression flag.
+    ///
+    /// When `compressed` is true the bytes are assumed to be gzip-encoded and
+    /// will be served back with `Content-Encoding: gzip`.
+    pub fn store_bytes(&mut self, path: &str, data: &[u8], compressed: bool) -> Result<(), PageError> {
         Self::validate_path(path)?;
 
-        if html.len() > MAX_SINGLE_PAGE {
+        if data.len() > MAX_SINGLE_PAGE {
             return Err(PageError::PageTooLarge);
         }
 
-        // Reclaim old size if replacing (account for both path key and HTML value)
+        // Reclaim old size if replacing (account for both path key and content)
         let is_new = !self.pages.contains_key(path);
-        let old_size = self.pages.get(path).map(|p| p.len()).unwrap_or(0);
+        let old_size = self.pages.get(path).map(|p| p.data.len()).unwrap_or(0);
         let key_cost = if is_new { path.len() } else { 0 };
-        let new_total = self.total_bytes - old_size + html.len() + key_cost;
+        let new_total = self.total_bytes - old_size + data.len() + key_cost;
 
         if new_total > self.max_total_bytes {
             return Err(PageError::StorageFull);
         }
 
         self.total_bytes = new_total;
-        self.pages.insert(String::from(path), PsramString::from_str(html));
+        self.pages.insert(
+            String::from(path),
+            StoredPage {
+                data: PsramBytes::from_bytes(data),
+                compressed,
+            },
+        );
         Ok(())
     }
 
-    pub fn get(&self, path: &str) -> Option<&str> {
-        self.pages.get(path).map(|s| s.as_str())
+    /// Retrieve a page. Returns `(bytes, is_compressed)`.
+    pub fn get(&self, path: &str) -> Option<(&[u8], bool)> {
+        self.pages.get(path).map(|p| (p.data.as_bytes(), p.compressed))
     }
 
     /// Return sorted list of all stored paths.
@@ -103,8 +128,8 @@ impl PageStore {
 
     pub fn remove(&mut self, path: &str) -> Result<(), PageError> {
         match self.pages.remove(path) {
-            Some(html) => {
-                self.total_bytes -= html.len() + path.len();
+            Some(page) => {
+                self.total_bytes -= page.data.len() + path.len();
                 Ok(())
             }
             None => Err(PageError::NotFound),
@@ -126,7 +151,33 @@ mod tests {
     fn store_and_retrieve() {
         let mut store = PageStore::new();
         store.store("/hello", "<h1>Hi</h1>").unwrap();
-        assert_eq!(store.get("/hello"), Some("<h1>Hi</h1>"));
+        let (data, compressed) = store.get("/hello").unwrap();
+        assert_eq!(data, b"<h1>Hi</h1>");
+        assert!(!compressed);
+    }
+
+    #[test]
+    fn store_compressed_bytes() {
+        let mut store = PageStore::new();
+        let fake_gzip = b"\x1f\x8b\x08compressed-data";
+        store.store_bytes("/gz", fake_gzip, true).unwrap();
+        let (data, compressed) = store.get("/gz").unwrap();
+        assert_eq!(data, fake_gzip);
+        assert!(compressed);
+    }
+
+    #[test]
+    fn replace_plain_with_compressed() {
+        let mut store = PageStore::new();
+        store.store("/page", "<h1>Hi</h1>").unwrap();
+        let (_, compressed) = store.get("/page").unwrap();
+        assert!(!compressed);
+
+        let gzip_data = b"\x1f\x8b\x08short";
+        store.store_bytes("/page", gzip_data, true).unwrap();
+        let (data, compressed) = store.get("/page").unwrap();
+        assert_eq!(data, gzip_data);
+        assert!(compressed);
     }
 
     #[test]
@@ -179,7 +230,8 @@ mod tests {
         let mut store = PageStore::new();
         // "/omission" should NOT be blocked — it's not "/omi" or "/omi/*"
         store.store("/omission", "<h1>X</h1>").unwrap();
-        assert_eq!(store.get("/omission"), Some("<h1>X</h1>"));
+        let (data, _) = store.get("/omission").unwrap();
+        assert_eq!(data, b"<h1>X</h1>");
     }
 
     #[test]
@@ -217,7 +269,8 @@ mod tests {
         assert_eq!(store.total_bytes, 6);
         store.store("/a", "bb").unwrap(); // key already exists, so 6 - 4 + 2 = 4
         assert_eq!(store.total_bytes, 4);
-        assert_eq!(store.get("/a"), Some("bb"));
+        let (data, _) = store.get("/a").unwrap();
+        assert_eq!(data, b"bb");
     }
 
     #[test]
@@ -257,7 +310,7 @@ mod tests {
         assert_eq!(store.total_bytes, 8);
         store.remove("/a").unwrap();
         assert_eq!(store.total_bytes, 4);
-        assert_eq!(store.get("/a"), None);
+        assert!(store.get("/a").is_none());
         // Now there's room again
         store.store("/c", "12").unwrap();
     }
@@ -286,5 +339,14 @@ mod tests {
         // Removing frees both key and value
         store.remove("/hello").unwrap();
         assert_eq!(store.total_bytes, 0);
+    }
+
+    #[test]
+    fn store_bytes_size_tracking() {
+        let mut store = PageStore::with_capacity(100);
+        let data = b"\x1f\x8b\x08abcde";
+        store.store_bytes("/p", data, true).unwrap();
+        // "/p" = 2 key + 8 bytes data = 10
+        assert_eq!(store.total_bytes, 10);
     }
 }

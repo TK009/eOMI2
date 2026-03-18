@@ -34,6 +34,19 @@ fn sigma1(x: u32) -> u32 { x.rotate_right(6) ^ x.rotate_right(11) ^ x.rotate_rig
 fn little_sigma0(x: u32) -> u32 { x.rotate_right(7) ^ x.rotate_right(18) ^ (x >> 3) }
 fn little_sigma1(x: u32) -> u32 { x.rotate_right(17) ^ x.rotate_right(19) ^ (x >> 10) }
 
+/// Convert a byte slice to a 64-byte block reference.
+///
+/// # Panics
+///
+/// Panics if `slice.len() != 64`. All call-sites maintain this invariant
+/// via construction (loop stride or fixed-size buffer arithmetic), so a
+/// panic here signals a logic bug introduced by refactoring.
+fn as_block(slice: &[u8]) -> &[u8; 64] {
+    slice
+        .try_into()
+        .expect("SHA-256 block must be exactly 64 bytes")
+}
+
 fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
     let mut w = [0u32; 64];
     for i in 0..16 {
@@ -88,7 +101,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     // Process complete 64-byte blocks.
     let mut offset = 0;
     while offset + 64 <= data.len() {
-        let block: &[u8; 64] = data[offset..offset + 64].try_into().unwrap();
+        let block = as_block(&data[offset..offset + 64]);
         compress(&mut state, block);
         offset += 64;
     }
@@ -102,9 +115,9 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     let padded_len = if remaining < 56 { 64 } else { 128 };
     buf[padded_len - 8..padded_len].copy_from_slice(&bit_len.to_be_bytes());
 
-    compress(&mut state, buf[..64].try_into().unwrap());
+    compress(&mut state, as_block(&buf[..64]));
     if padded_len == 128 {
-        compress(&mut state, buf[64..128].try_into().unwrap());
+        compress(&mut state, as_block(&buf[64..128]));
     }
 
     let mut out = [0u8; 32];

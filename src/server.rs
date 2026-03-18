@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 use std::sync::{Arc, Mutex};
 
-use anyhow::Result;
+use crate::error::Result;
 use esp_idf_svc::{
     http::server::{Configuration as HttpConfig, EspHttpServer, ws::EspHttpWsDetachedSender},
     http::Method,
@@ -21,6 +21,8 @@ use log::{debug, info, warn};
 use crate::captive_portal::{
     self, ConnectionState, ConnectionStatus, ProvisionForm, ScannedNetwork,
 };
+use crate::compress;
+use crate::json::serializer::ToJson;
 use crate::http::{
     build_read_op, check_bearer_auth, is_mutating_operation, is_successful_write_response,
     now_secs, omi_uri_to_odf_path, render_landing_page, uri_path, uri_query,
@@ -197,6 +199,30 @@ fn send_response(
     }
 }
 
+/// Send an HTML response, gzip-compressed if the client accepts it.
+/// Falls back to uncompressed if gzip allocation fails (ESP32 has limited RAM).
+fn send_html(
+    req: esp_idf_svc::http::server::Request<&mut esp_idf_svc::http::server::EspHttpConnection>,
+    status: u16,
+    reason: &str,
+    html: &[u8],
+) {
+    let accept = req.header("accept-encoding").unwrap_or("");
+    if accept.contains("gzip") {
+        if let Some(compressed) = compress::gzip_compress(html) {
+            let headers = [
+                ("Content-Type", "text/html"),
+                ("Content-Encoding", "gzip"),
+            ];
+            send_response(req, status, reason, &headers, &compressed);
+            return;
+        }
+        warn!("gzip compression failed (OOM?), serving uncompressed");
+    }
+    let headers = [("Content-Type", "text/html")];
+    send_response(req, status, reason, &headers, html);
+}
+
 /// Map a `BodyError` to an HTTP error response.
 fn send_body_error(
     req: esp_idf_svc::http::server::Request<&mut esp_idf_svc::http::server::EspHttpConnection>,
@@ -216,26 +242,15 @@ fn send_omi_json(
     msg: &OmiMessage,
 ) {
     let headers = [("Content-Type", "application/json")];
-    match serde_json::to_string(msg) {
-        Ok(json) => {
-            send_response(req, 200, "OK", &headers, json.as_bytes());
-        }
-        Err(e) => {
-            warn!("OMI response serialization failed: {}", e);
-            let err = OmiResponse::error("Serialization error");
-            let json = serde_json::to_string(&err).unwrap_or_default();
-            send_response(req, 500, "Internal Server Error", &headers, json.as_bytes());
-        }
-    }
+    let json = msg.to_json_string();
+    send_response(req, 200, "OK", &headers, json.as_bytes());
 }
 
 fn send_ws_omi(
     conn: &mut esp_idf_svc::http::server::ws::EspHttpWsConnection,
     msg: OmiMessage,
 ) -> Result<()> {
-    let json = serde_json::to_string(&msg).unwrap_or_else(|_|
-        r#"{"omi":"1.0","ttl":0,"response":{"status":500,"desc":"Serialization error"}}"#.into()
-    );
+    let json = msg.to_json_string();
     conn.send(FrameType::Text(false), json.as_bytes())?;
     Ok(())
 }
@@ -248,6 +263,9 @@ fn check_auth(
 }
 
 /// Dispatch subscription deliveries: send WebSocket frames, POST callbacks, skip poll.
+///
+/// Callback deliveries with `javascript://` URLs are routed to the embedded
+/// script engine instead of HTTP POST — no network traffic is generated.
 pub fn dispatch_deliveries(
     deliveries: &[Delivery],
     ws_senders: &WsSenders,
@@ -259,6 +277,8 @@ pub fn dispatch_deliveries(
     }
     let mut failed_sessions: Vec<SessionId> = Vec::new();
     let mut pending_callbacks: Vec<(String, String, String)> = Vec::new();
+    // Script callbacks need the raw delivery values (not serialised JSON).
+    let mut script_callbacks: Vec<(String, String, Vec<crate::odf::Value>)> = Vec::new();
     {
         let mut senders = lock_or_recover(ws_senders, "ws_senders");
         for d in deliveries {
@@ -266,30 +286,22 @@ pub fn dispatch_deliveries(
                 DeliveryTarget::WebSocket(session) => {
                     if let Some(sender) = senders.get_mut(session) {
                         let resp = OmiResponse::subscription_event(&d.rid, &d.path, &d.values);
-                        match serde_json::to_string(&resp) {
-                            Ok(json) => {
-                                if sender.send(FrameType::Text(false), json.as_bytes()).is_err() {
-                                    info!("WS send failed for session {}, removing", session);
-                                    if !failed_sessions.contains(session) {
-                                        failed_sessions.push(*session);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                warn!("WS delivery serialization failed session={}: {}", session, e);
+                        let json = resp.to_json_string();
+                        if sender.send(FrameType::Text(false), json.as_bytes()).is_err() {
+                            info!("WS send failed for session {}, removing", session);
+                            if !failed_sessions.contains(session) {
+                                failed_sessions.push(*session);
                             }
                         }
                     }
                 }
                 DeliveryTarget::Callback(url) => {
-                    let resp = OmiResponse::subscription_event(&d.rid, &d.path, &d.values);
-                    match serde_json::to_string(&resp) {
-                        Ok(json) => {
-                            pending_callbacks.push((url.clone(), json, d.rid.clone()));
-                        }
-                        Err(e) => {
-                            warn!("Callback delivery serialization failed: {}", e);
-                        }
+                    if crate::callback_url::is_javascript_callback(url) {
+                        script_callbacks.push((url.clone(), d.path.clone(), d.values.clone()));
+                    } else {
+                        let resp = OmiResponse::subscription_event(&d.rid, &d.path, &d.values);
+                        let json = resp.to_json_string();
+                        pending_callbacks.push((url.clone(), json, d.rid.clone()));
                     }
                 }
                 DeliveryTarget::Poll => {}
@@ -301,6 +313,35 @@ pub fn dispatch_deliveries(
     }
     for (url, json, rid) in &pending_callbacks {
         crate::callback::deliver_callback(url, json.as_bytes(), rid);
+    }
+    // Execute javascript:// callbacks via the script engine. Any writes
+    // produced by the scripts generate cascading deliveries which are
+    // dispatched recursively.
+    if !script_callbacks.is_empty() {
+        let mut eng = lock_or_recover(engine, "engine");
+        let now = crate::http::now_secs();
+        for (url, path, values) in &script_callbacks {
+            #[cfg(feature = "scripting")]
+            {
+                let cascaded = eng.run_callback_script(url, path, values, now);
+                if !cascaded.is_empty() {
+                    // Drop the engine lock before recursing to maintain lock ordering.
+                    drop(eng);
+                    dispatch_deliveries(&cascaded, ws_senders, engine, rate_limiter);
+                    eng = lock_or_recover(engine, "engine");
+                }
+            }
+            #[cfg(not(feature = "scripting"))]
+            {
+                let log_msg = format!(
+                    "javascript:// callback '{}' ignored: scripting feature not enabled",
+                    url,
+                );
+                if rate_limiter.should_emit(&log_msg) {
+                    warn!("{}", log_msg);
+                }
+            }
+        }
     }
     if !failed_sessions.is_empty() {
         let mut eng = lock_or_recover(engine, "engine");
@@ -352,13 +393,11 @@ pub fn start_http_server(
                 cfg.is_first_setup,
                 cfg.error_message.as_deref(),
             );
-            let headers = [("Content-Type", "text/html")];
-            send_response(req, 200, "OK", &headers, html.as_bytes());
+            send_html(req, 200, "OK", html.as_bytes());
         } else {
             let store = lock_or_recover(&s, "page_store");
             let html = render_landing_page(&store);
-            let headers = [("Content-Type", "text/html")];
-            send_response(req, 200, "OK", &headers, html.as_bytes());
+            send_html(req, 200, "OK", html.as_bytes());
         }
         Ok(())
     })?;
@@ -439,8 +478,7 @@ pub fn start_http_server(
                     &hostname,
                     ssid_count,
                 );
-                let headers = [("Content-Type", "text/html")];
-                send_response(req, 200, "OK", &headers, html.as_bytes());
+                send_html(req, 200, "OK", html.as_bytes());
             }
             Err(e) => {
                 let msg = match e {
@@ -458,8 +496,7 @@ pub fn start_http_server(
                     cfg.is_first_setup,
                     Some(msg),
                 );
-                let headers = [("Content-Type", "text/html")];
-                send_response(req, 400, "Bad Request", &headers, html.as_bytes());
+                send_html(req, 400, "Bad Request", html.as_bytes());
             }
         }
         Ok(())
@@ -470,10 +507,8 @@ pub fn start_http_server(
     server.fn_handler::<Infallible, _>("/scan", Method::Get, move |req| {
         let results = lock_or_recover(&p.scan_results, "scan_results");
         let headers = [("Content-Type", "application/json")];
-        match serde_json::to_string(&*results) {
-            Ok(json) => send_response(req, 200, "OK", &headers, json.as_bytes()),
-            Err(_) => send_response(req, 200, "OK", &headers, b"[]"),
-        }
+        let json = captive_portal::scan_results_json_lite(&results);
+        send_response(req, 200, "OK", &headers, json.as_bytes());
         Ok(())
     })?;
 
@@ -482,10 +517,19 @@ pub fn start_http_server(
     server.fn_handler::<Infallible, _>("/status", Method::Get, move |req| {
         let status = lock_or_recover(&p.connection_status, "connection_status");
         let headers = [("Content-Type", "application/json")];
-        match serde_json::to_string(&*status) {
-            Ok(json) => send_response(req, 200, "OK", &headers, json.as_bytes()),
-            Err(_) => send_response(req, 200, "OK", &headers, b"{\"state\":\"idle\"}"),
+        let json = captive_portal::connection_status_json_lite(&status);
+        send_response(req, 200, "OK", &headers, json.as_bytes());
+        Ok(())
+    })?;
+
+    // POST /ota — OTA firmware update (FR-005..FR-010b, FR-015..FR-019)
+    let p = portal.clone();
+    server.fn_handler::<Infallible, _>("/ota", Method::Post, move |req| {
+        if is_api_denied(&p) {
+            send_response(req, 503, "Service Unavailable", &[], b"API disabled during provisioning");
+            return Ok(());
         }
+        crate::ota::handle_ota(req, api_token);
         Ok(())
     })?;
 
@@ -577,7 +621,7 @@ pub fn start_http_server(
     let ws = ws_senders.clone();
     let fd_map = fd_to_session.clone();
     let p = portal.clone();
-    server.ws_handler("/omi/ws", move |conn| -> anyhow::Result<()> {
+    server.ws_handler("/omi/ws", move |conn| -> core::result::Result<(), crate::error::Error> {
         if conn.is_new() {
             if is_api_denied(&p) {
                 // Can't send HTTP error on WS upgrade, just close
@@ -663,13 +707,8 @@ pub fn start_http_server(
             let mut eng = lock_or_recover(&eng, "engine");
             eng.process(msg, now_secs(), Some(session_id))
         };
-        match serde_json::to_string(&resp) {
-            Ok(json) => conn.send(FrameType::Text(false), json.as_bytes())?,
-            Err(e) => {
-                warn!("WS response serialization failed session={}: {}", session_id, e);
-                send_ws_omi(conn, OmiResponse::error("Serialization error"))?;
-            }
-        }
+        let json = resp.to_json_string();
+        conn.send(FrameType::Text(false), json.as_bytes())?;
         Ok(())
     })?;
 
@@ -704,6 +743,9 @@ pub fn start_http_server(
             return Ok(());
         }
         let path = uri_path(req.uri()).to_string();
+        let is_gzip = req.header("content-encoding")
+            .map(|v| v.eq_ignore_ascii_case("gzip"))
+            .unwrap_or(false);
 
         const MAX_PAYLOAD: usize = 64 * 1024;
         let body = match read_body(&mut req, MAX_PAYLOAD) {
@@ -711,17 +753,19 @@ pub fn start_http_server(
             Err(e) => { send_body_error(req, e, "Payload exceeds 64KB limit"); return Ok(()); }
         };
 
-        let html = match String::from_utf8(body) {
-            Ok(s) => s,
-            Err(_) => {
+        // If not pre-compressed, validate UTF-8 (HTML).
+        // If pre-compressed (gzip), store raw bytes directly.
+        if !is_gzip {
+            if core::str::from_utf8(&body).is_err() {
                 send_response(req, 400, "Bad Request", &[], b"Invalid UTF-8");
                 return Ok(());
             }
-        };
+        }
+
         let mut store = lock_or_recover(&s, "page_store");
-        match store.store(&path, &html) {
+        match store.store_bytes(&path, &body, is_gzip) {
             Ok(()) => {
-                info!("PATCH path={} bytes={}", path, html.len());
+                info!("PATCH path={} bytes={} compressed={}", path, body.len(), is_gzip);
                 send_response(req, 200, "OK", &[], b"OK: page stored");
             }
             Err(PageError::ReservedPath) => {
@@ -783,9 +827,31 @@ pub fn start_http_server(
 
         let store = lock_or_recover(&s, "page_store");
         match store.get(&path) {
-            Some(html) => {
-                let headers = [("Content-Type", "text/html")];
-                send_response(req, 200, "OK", &headers, html.as_bytes());
+            Some((data, true)) => {
+                // Pre-compressed: check if client accepts gzip
+                let accept = req.header("accept-encoding").unwrap_or("");
+                if accept.contains("gzip") {
+                    let headers = [
+                        ("Content-Type", "text/html"),
+                        ("Content-Encoding", "gzip"),
+                    ];
+                    send_response(req, 200, "OK", &headers, data);
+                } else {
+                    // Client doesn't accept gzip — decompress on the fly
+                    match compress::gzip_decompress(data, crate::pages::MAX_SINGLE_PAGE) {
+                        Some(plain) => {
+                            let headers = [("Content-Type", "text/html")];
+                            send_response(req, 200, "OK", &headers, &plain);
+                        }
+                        None => {
+                            send_response(req, 500, "Internal Server Error", &[], b"Decompression failed");
+                        }
+                    }
+                }
+            }
+            Some((data, false)) => {
+                // Plain HTML — use existing send_html (compresses on the fly if accepted)
+                send_html(req, 200, "OK", data);
             }
             None => {
                 send_response(req, 404, "Not Found", &[], b"Page not found");

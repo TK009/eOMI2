@@ -9,7 +9,9 @@
 //! On ESP targets, [`init_gpio`] and [`init_peripherals`] use the board config
 //! to register pins with the [`GpioManager`] and [`PeripheralManager`].
 
-use crate::gpio::{GpioMode, GpioPinConfig};
+use crate::gpio::GpioPinConfig;
+#[cfg(any(has_board_config, test, feature = "esp"))]
+use crate::gpio::GpioMode;
 use crate::gpio::peripheral::{PeripheralConfig, PeripheralProtocol};
 
 #[cfg(has_board_config)]
@@ -45,6 +47,15 @@ pub fn has_temp_sensor() -> bool {
     { generated::HAS_TEMP_SENSOR }
     #[cfg(not(has_board_config))]
     { false }
+}
+
+/// GPIO pin connected to an onboard WS2812/NeoPixel LED, if any.
+/// Returns None if no board config was loaded or the board has no neopixel.
+pub fn neopixel_pin() -> Option<u8> {
+    #[cfg(has_board_config)]
+    { generated::NEOPIXEL_PIN }
+    #[cfg(not(has_board_config))]
+    { None }
 }
 
 #[cfg(any(has_board_config, test))]
@@ -162,7 +173,7 @@ pub fn peripheral_pin_configs() -> Vec<PeripheralPinConfig> {
 pub fn init_gpio(
     gpio_manager: &mut crate::gpio::pwm::GpioManager,
     hostname: &str,
-) -> Result<(), anyhow::Error> {
+) -> crate::error::Result<()> {
     use crate::gpio::pwm::EdgeType;
     use esp_idf_svc::hal::gpio::AnyIOPin;
     use log::{info, warn};

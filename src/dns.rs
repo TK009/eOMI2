@@ -159,9 +159,9 @@ mod esp_impl {
         ///
         /// Binds UDP port 53 on `bind_ip` (typically "0.0.0.0") and responds
         /// to every query with `redirect_ip`.
-        pub fn start(bind_ip: &str, redirect_ip: &str) -> anyhow::Result<Self> {
+        pub fn start(bind_ip: &str, redirect_ip: &str) -> crate::error::Result<Self> {
             let ip_bytes = super::parse_ip(redirect_ip)
-                .ok_or_else(|| anyhow::anyhow!("invalid redirect IP: {}", redirect_ip))?;
+                .ok_or_else(|| crate::error::Error::Owned(format!("invalid redirect IP: {}", redirect_ip)))?;
 
             let addr = format!("{}:53", bind_ip);
             let socket = UdpSocket::bind(&addr)?;

@@ -1,17 +1,10 @@
-#[cfg(feature = "json")]
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-#[cfg(feature = "json")]
-use serde::ser::SerializeSeq;
-
 use super::OmiValue;
 use crate::psram::PsramBox;
 
 /// A timestamped value in the OMI data model.
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "json", derive(Serialize, Deserialize))]
 pub struct Value {
     pub v: OmiValue,
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
     pub t: Option<f64>,
 }
 
@@ -129,7 +122,7 @@ impl RingBuffer {
         let mut result: Vec<Value> = self
             .iter_oldest_to_newest()
             .filter(|v| {
-                v.t.map_or(false, |t| t >= begin && t <= end)
+                v.t.is_some_and(|t| t >= begin && t <= end)
             })
             .cloned()
             .collect();
@@ -176,32 +169,6 @@ impl RingBuffer {
         // Return newest first
         values.reverse();
         values
-    }
-}
-
-#[cfg(feature = "json")]
-impl Serialize for RingBuffer {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut seq = serializer.serialize_seq(Some(self.len))?;
-        // Serialize newest first (spec ordering)
-        for i in (0..self.len).rev() {
-            seq.serialize_element(self.get(i))?;
-        }
-        seq.end()
-    }
-}
-
-#[cfg(feature = "json")]
-impl<'de> Deserialize<'de> for RingBuffer {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let values: Vec<Value> = Vec::deserialize(deserializer)?;
-        let capacity = values.len().max(1);
-        let mut rb = RingBuffer::new(capacity);
-        // Input is newest-first; push in reverse so oldest goes in first
-        for v in values.into_iter().rev() {
-            rb.push(v);
-        }
-        Ok(rb)
     }
 }
 
@@ -338,40 +305,6 @@ mod tests {
         let result = rb.range(0.0, 1000.0);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].v, OmiValue::Number(2.0));
-    }
-
-    #[cfg(feature = "json")]
-    mod json {
-        use super::*;
-
-        #[test]
-        fn serde_roundtrip() {
-            let mut rb = RingBuffer::new(5);
-            rb.push(val(1.0, 100.0));
-            rb.push(val(2.0, 200.0));
-            rb.push(val(3.0, 300.0));
-
-            let json = serde_json::to_string(&rb).unwrap();
-            let rb2: RingBuffer = serde_json::from_str(&json).unwrap();
-
-            assert_eq!(rb2.len(), 3);
-            let newest = rb2.newest(3);
-            assert_eq!(newest[0].v, OmiValue::Number(3.0));
-            assert_eq!(newest[1].v, OmiValue::Number(2.0));
-            assert_eq!(newest[2].v, OmiValue::Number(1.0));
-        }
-
-        #[test]
-        fn serialize_newest_first() {
-            let mut rb = RingBuffer::new(5);
-            rb.push(val(1.0, 100.0));
-            rb.push(val(2.0, 200.0));
-            let json = serde_json::to_string(&rb).unwrap();
-            let arr: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
-            // First element should be newest
-            assert_eq!(arr[0]["v"], 2.0);
-            assert_eq!(arr[1]["v"], 1.0);
-        }
     }
 
     #[test]

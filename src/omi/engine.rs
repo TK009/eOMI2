@@ -136,10 +136,6 @@ impl Engine {
             TreeError::NotFound(msg) => Self::error_response(StatusCode::NotFound, msg),
             TreeError::Forbidden(msg) => Self::error_response(StatusCode::Forbidden, msg),
             TreeError::InvalidPath(msg) => Self::error_response(StatusCode::BadRequest, msg),
-            #[cfg(feature = "json")]
-            TreeError::SerializationError(msg) => {
-                Self::error_response(StatusCode::InternalError, msg)
-            }
         }
     }
 
@@ -148,8 +144,6 @@ impl Engine {
             TreeError::NotFound(msg) => (StatusCode::NotFound, msg),
             TreeError::Forbidden(msg) => (StatusCode::Forbidden, msg),
             TreeError::InvalidPath(msg) => (StatusCode::BadRequest, msg),
-            #[cfg(feature = "json")]
-            TreeError::SerializationError(msg) => (StatusCode::InternalError, msg),
         };
         ItemStatus {
             path: path.into(),
@@ -201,13 +195,31 @@ impl Engine {
                         }
                     }
                 }
-                OmiResponse::ok_read_result(path.to_string(), values)
+                // Re-resolve to get metadata (borrow was released after query_values)
+                let meta = match self.tree.resolve(path) {
+                    Ok(PathTarget::InfoItem(item)) => item.meta.clone(),
+                    _ => None,
+                };
+                OmiResponse::ok_read_result_with_meta(path.to_string(), values, meta)
             }
-            Ok(PathTarget::Object(_)) | Ok(PathTarget::Root(_)) => {
-                match self.tree.read(path, op.depth.map(|d| d as usize)) {
-                    Ok(val) => OmiResponse::ok(val),
-                    Err(e) => Self::tree_error_to_response(e),
+            #[cfg(feature = "lite-json")]
+            Ok(PathTarget::Object(obj)) => {
+                use crate::json::serializer::JsonWriter;
+                let mut w = JsonWriter::new();
+                obj.write_json_with_depth(&mut w, op.depth.map(|d| d as usize).unwrap_or(usize::MAX));
+                OmiResponse::ok_json_string(w.into_string())
+            }
+            #[cfg(feature = "lite-json")]
+            Ok(PathTarget::Root(map)) => {
+                use crate::json::serializer::JsonWriter;
+                let mut w = JsonWriter::new();
+                w.begin_object();
+                for (id, obj) in map {
+                    w.key(id);
+                    obj.write_json_with_depth(&mut w, op.depth.map(|d| d as usize).unwrap_or(usize::MAX));
                 }
+                w.end_object();
+                OmiResponse::ok_json_string(w.into_string())
             }
             Err(e) => Self::tree_error_to_response(e),
         }
@@ -349,6 +361,10 @@ impl Engine {
             Err(e) => return (Self::tree_error_to_response(e), Vec::new()),
         }
 
+        // Clamp numeric values if the InfoItem has a max_duty metadata constraint (PWM pins).
+        let v = self.clamp_if_constrained(path, v);
+        // Default to server timestamp when the client omits one.
+        let t = t.or(Some(now));
         let saved_value = v.clone();
         match self.tree.write_value(path, v, t) {
             Ok(created) => {
@@ -374,6 +390,24 @@ impl Engine {
             }
             Err(e) => (Self::tree_error_to_response(e), Vec::new()),
         }
+    }
+
+    /// Clamp a numeric value if the target InfoItem has a `max_duty` metadata
+    /// constraint (used by PWM pins). Values below 0 are clamped to 0.
+    fn clamp_if_constrained(&self, path: &str, v: OmiValue) -> OmiValue {
+        if let OmiValue::Number(n) = &v {
+            if let Ok(PathTarget::InfoItem(item)) = self.tree.resolve(path) {
+                if let Some(meta) = &item.meta {
+                    if let Some(OmiValue::Number(max)) = meta.get("max_duty") {
+                        let clamped = n.clamp(0.0, *max);
+                        if (clamped - n).abs() > f64::EPSILON {
+                            return OmiValue::Number(clamped);
+                        }
+                    }
+                }
+            }
+        }
+        v
     }
 
     fn process_write_batch(&mut self, items: Vec<WriteItem>, now: f64) -> (OmiMessage, Vec<Delivery>) {
@@ -702,10 +736,7 @@ impl Engine {
         };
 
         // Temporarily take the script engine out of self
-        let mut script_engine = match self.script_engine.take() {
-            Some(se) => se,
-            None => return None,
-        };
+        let mut script_engine = self.script_engine.take()?;
         let mjs = script_engine.raw();
 
         let mut pending_writes: Vec<PendingWrite> = Vec::new();
@@ -853,6 +884,197 @@ impl Engine {
         }
 
         result_value
+    }
+
+    /// Execute a `javascript://` callback script for a subscription delivery.
+    ///
+    /// Resolves the script source from the URL, builds the event object from
+    /// delivery values, executes with `odf.writeItem`/`odf.readItem` bindings,
+    /// and processes any pending writes with cascading. Script return value is
+    /// ignored. On error/timeout, logs a warning but does not cancel the
+    /// subscription (FR-002/FR-012/FR-013).
+    #[cfg(feature = "scripting")]
+    pub fn run_callback_script(
+        &mut self,
+        url: &str,
+        path: &str,
+        values: &[crate::odf::Value],
+        now: f64,
+    ) -> Vec<Delivery> {
+        use crate::scripting::bindings::{PendingWrite, ScriptCallbackCtx,
+                                          js_odf_write_item, js_odf_read_item};
+        use crate::scripting::ffi;
+        use crate::scripting::ffi::mjs_name;
+        use crate::scripting::convert::delivery_to_mjs_event;
+        use crate::scripting::resolve_script_url;
+
+        // Resolve script source from the javascript:// URL
+        let script_src = match resolve_script_url(&self.tree, url) {
+            Ok(src) => src,
+            Err(e) => {
+                let log_msg = format!("callback script resolve failed for '{}': {}", url, e);
+                if self.script_rl.should_emit(&log_msg) {
+                    warn!("{}", log_msg);
+                }
+                return Vec::new();
+            }
+        };
+
+        // Take the script engine
+        let mut script_engine = match self.script_engine.take() {
+            Some(se) => se,
+            None => return Vec::new(),
+        };
+        let mjs = script_engine.raw();
+
+        let mut pending_writes: Vec<PendingWrite> = Vec::new();
+
+        // Safety: mjs is valid for the duration of this block. The callback
+        // writes to `pending_writes` through the ctx pointer — no Engine aliasing.
+        unsafe {
+            // Build event object from delivery values
+            let event = delivery_to_mjs_event(mjs, path, values);
+
+            let global = ffi::mjs_get_global(mjs);
+            let (n, l) = mjs_name!("event");
+            ffi::mjs_set(mjs, global, n, l, event);
+
+            // Set up `odf.writeItem` and `odf.readItem` bindings
+            let odf = ffi::mjs_mk_object(mjs);
+            let write_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_write_item));
+            let (n, l) = mjs_name!("writeItem");
+            ffi::mjs_set(mjs, odf, n, l, write_fn);
+            let read_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_read_item));
+            let (n, l) = mjs_name!("readItem");
+            ffi::mjs_set(mjs, odf, n, l, read_fn);
+            let (n, l) = mjs_name!("odf");
+            ffi::mjs_set(mjs, global, n, l, odf);
+
+            // Set up callback context
+            let mut ctx = ScriptCallbackCtx {
+                pending_writes: &mut pending_writes,
+                depth: 0,
+                tree: &self.tree as *const _,
+                onread_path_ptr: std::ptr::null(),
+                onread_path_len: 0,
+                onread_fns: std::ptr::null(),
+            };
+            let ctx_foreign = ffi::mjs_mk_foreign(mjs, &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void);
+            let (n, l) = mjs_name!("__ctx");
+            ffi::mjs_set(mjs, global, n, l, ctx_foreign);
+
+            // Execute the script
+            let c_src = match std::ffi::CString::new(script_src.as_str()) {
+                Ok(c) => c,
+                Err(_) => {
+                    warn!("callback script at '{}' contains NUL byte", url);
+                    let null_val = ffi::mjs_mk_null();
+                    let (n, l) = mjs_name!("__ctx");
+                    ffi::mjs_set(mjs, global, n, l, null_val);
+                    self.script_engine = Some(script_engine);
+                    return Vec::new();
+                }
+            };
+            let mut res: ffi::mjs_val_t = 0;
+            ffi::mjs_reset_ops_count(mjs);
+            let deadline = std::time::Instant::now();
+            let err = ffi::mjs_exec(mjs, c_src.as_ptr(), &mut res);
+            let elapsed = deadline.elapsed();
+
+            // Detect resource-limit errors
+            let time_limit = std::time::Duration::from_millis(
+                crate::scripting::engine::MAX_SCRIPT_EXEC_MS,
+            );
+            if elapsed >= time_limit {
+                let log_msg = format!(
+                    "callback script at '{}' exceeded time limit ({}ms)",
+                    url, elapsed.as_millis(),
+                );
+                if self.script_rl.should_emit(&log_msg) {
+                    warn!("{}", log_msg);
+                }
+            } else if err == ffi::MJS_OP_LIMIT_ERROR {
+                let log_msg = format!(
+                    "callback script at '{}' exceeded operation limit ({}ms elapsed)",
+                    url, elapsed.as_millis(),
+                );
+                if self.script_rl.should_emit(&log_msg) {
+                    warn!("{}", log_msg);
+                }
+            } else if err != ffi::MJS_OK {
+                let err_ptr = ffi::mjs_strerror(mjs, err);
+                let msg = if err_ptr.is_null() {
+                    "unknown error"
+                } else {
+                    std::ffi::CStr::from_ptr(err_ptr).to_str().unwrap_or("unknown error")
+                };
+                let log_msg = format!("callback script error at '{}': {}", url, msg);
+                if self.script_rl.should_emit(&log_msg) {
+                    warn!("{}", log_msg);
+                }
+            }
+            // Return value is ignored (FR-002)
+
+            // Clear all script globals
+            let null_val = ffi::mjs_mk_null();
+            let (n, l) = mjs_name!("__ctx");
+            ffi::mjs_set(mjs, global, n, l, null_val);
+            let (n, l) = mjs_name!("event");
+            ffi::mjs_set(mjs, global, n, l, null_val);
+            let (n, l) = mjs_name!("odf");
+            ffi::mjs_set(mjs, global, n, l, null_val);
+        }
+
+        // Put the script engine back before processing writes
+        self.script_engine = Some(script_engine);
+
+        // Process collected writes — each may trigger onwrite scripts at depth 1
+        let mut deliveries = Vec::new();
+        for pw in pending_writes {
+            let value = match pw.encoding {
+                Some(enc) => {
+                    let data_enc = enc.to_data_encoding();
+                    match &pw.value {
+                        OmiValue::Str(s) => match data_enc.decode(s) {
+                            Ok(bytes) => OmiValue::Str(
+                                std::string::String::from_utf8(bytes)
+                                    .unwrap_or_else(|e| {
+                                        std::string::String::from_utf8_lossy(e.as_bytes()).into_owned()
+                                    }),
+                            ),
+                            Err(e) => {
+                                log::warn!(
+                                    "encoding decode error for '{}' ({:?}): {}",
+                                    pw.path, enc, e
+                                );
+                                pw.value
+                            }
+                        },
+                        _ => pw.value,
+                    }
+                }
+                None => pw.value,
+            };
+            let (_resp, d) = self.write_single_inner(&pw.path, value, None, now, 1);
+            deliveries.extend(d);
+
+            if let Some(enc) = pw.encoding {
+                if let Ok(PathTargetMut::InfoItem(item)) = self.tree.resolve_mut(&pw.path) {
+                    let meta = item.meta.get_or_insert_with(BTreeMap::new);
+                    meta.insert(
+                        "tx_encoding".into(),
+                        OmiValue::Str(enc.to_data_encoding().as_str().into()),
+                    );
+                }
+            }
+        }
+
+        // Run GC after cascade completes
+        if let Some(se) = self.script_engine.as_mut() {
+            se.gc();
+        }
+
+        deliveries
     }
 
     // --- Delete ---
@@ -1043,7 +1265,7 @@ mod tests {
         let resp = e.process(read_msg("/Sensor1/Temperature"), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(ResultPayload::ReadValues { path, values }) => {
+            ResponseResult::Single(ResultPayload::ReadValues { path, values, .. }) => {
                 assert_eq!(path, "/Sensor1/Temperature");
                 assert_eq!(values.len(), 3);
             }
@@ -1057,7 +1279,7 @@ mod tests {
         let resp = e.process(read_with("/Sensor1/Temperature", Some(1), None, None, None, None), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(ResultPayload::ReadValues { path: _, values }) => {
+            ResponseResult::Single(ResultPayload::ReadValues { path: _, values, .. }) => {
                 assert_eq!(values.len(), 1);
                 assert_eq!(values[0].v, OmiValue::Number(22.0));
             }
@@ -1071,7 +1293,7 @@ mod tests {
         let resp = e.process(read_with("/Sensor1/Temperature", None, Some(1), None, None, None), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(ResultPayload::ReadValues { path: _, values }) => {
+            ResponseResult::Single(ResultPayload::ReadValues { path: _, values, .. }) => {
                 assert_eq!(values.len(), 1);
                 assert_eq!(values[0].v, OmiValue::Number(20.0));
             }
@@ -1087,7 +1309,7 @@ mod tests {
         ), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(ResultPayload::ReadValues { path: _, values }) => {
+            ResponseResult::Single(ResultPayload::ReadValues { path: _, values, .. }) => {
                 assert_eq!(values.len(), 1);
                 assert_eq!(values[0].v, OmiValue::Number(21.0));
             }
@@ -1095,44 +1317,49 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "lite-json")]
     #[test]
-    fn read_object() {
+    fn read_object_lite() {
         let mut e = setup();
         let resp = e.process(read_msg("/Sensor1"), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(ResultPayload::Json(val)) => {
-                assert_eq!(val["id"], "Sensor1");
-                assert!(val["items"]["Temperature"].is_object());
+            ResponseResult::Single(ResultPayload::JsonString(s)) => {
+                assert!(s.contains("\"id\""));
+                assert!(s.contains("Sensor1"));
+                assert!(s.contains("Temperature"));
             }
-            _ => panic!("expected Single(Json)"),
+            _ => panic!("expected Single(JsonString)"),
         }
     }
 
+    #[cfg(feature = "lite-json")]
     #[test]
-    fn read_root() {
+    fn read_root_lite() {
         let mut e = setup();
         let resp = e.process(read_msg("/"), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(ResultPayload::Json(val)) => {
-                assert!(val["Sensor1"].is_object());
+            ResponseResult::Single(ResultPayload::JsonString(s)) => {
+                assert!(s.contains("Sensor1"));
             }
-            _ => panic!("expected Single(Json)"),
+            _ => panic!("expected Single(JsonString)"),
         }
     }
 
+    #[cfg(feature = "lite-json")]
     #[test]
-    fn read_with_depth() {
+    fn read_with_depth_lite() {
         let mut e = setup();
         let resp = e.process(read_with("/Sensor1", None, None, None, None, Some(0)), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(ResultPayload::Json(val)) => {
-                assert_eq!(val["id"], "Sensor1");
-                assert!(val.get("items").is_none());
+            ResponseResult::Single(ResultPayload::JsonString(s)) => {
+                assert!(s.contains("\"id\""));
+                assert!(s.contains("Sensor1"));
+                assert!(!s.contains("\"items\""));
             }
-            _ => panic!("expected Single(Json)"),
+            _ => panic!("expected Single(JsonString)"),
         }
     }
 
@@ -1196,7 +1423,7 @@ mod tests {
         let resp = e.process(poll_msg(rid), 1001.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(ResultPayload::ReadValues { path, values }) => {
+            ResponseResult::Single(ResultPayload::ReadValues { path, values, .. }) => {
                 assert_eq!(path, "/Sensor1/Temperature");
                 assert_eq!(values.len(), 0);
             }
@@ -1372,7 +1599,7 @@ mod tests {
         let resp = e.process(read_with("/Dev/Sensor", Some(1), None, None, None, None), 0.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(ResultPayload::ReadValues { path: _, values }) => {
+            ResponseResult::Single(ResultPayload::ReadValues { path: _, values, .. }) => {
                 assert_eq!(values.len(), 1);
                 assert_eq!(values[0].v, OmiValue::Number(42.0));
             }
@@ -1437,7 +1664,7 @@ mod tests {
         let resp = e.process(poll_msg(&rid), 1001.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(ResultPayload::ReadValues { path: _, values }) => {
+            ResponseResult::Single(ResultPayload::ReadValues { path: _, values, .. }) => {
                 assert_eq!(values.len(), 0);
             }
             _ => panic!("expected Single(ReadValues)"),
@@ -1454,7 +1681,7 @@ mod tests {
         let resp = e.process(poll_msg(&rid), 1007.0, None);
         assert_eq!(status(&resp), 200);
         match body(&resp).result.as_ref().unwrap() {
-            ResponseResult::Single(ResultPayload::ReadValues { path, values }) => {
+            ResponseResult::Single(ResultPayload::ReadValues { path, values, .. }) => {
                 assert_eq!(path, "/Sensor1/Temperature");
                 assert_eq!(values.len(), 1);
                 assert_eq!(values[0].v, OmiValue::Number(22.0));
@@ -1483,7 +1710,7 @@ mod tests {
         let poll = e.process(poll_msg(&rid), 1003.0, None);
         assert_eq!(status(&poll), 200);
         match body(&poll).result.as_ref().unwrap() {
-            ResponseResult::Single(ResultPayload::ReadValues { path: _, values }) => {
+            ResponseResult::Single(ResultPayload::ReadValues { path: _, values, .. }) => {
                 assert_eq!(values.len(), 1);
                 assert_eq!(values[0].v, OmiValue::Number(42.0));
             }
@@ -1870,7 +2097,7 @@ mod tests {
             e.process(write_msg("/Dev/Reader", OmiValue::Number(0.0)), 0.0, None);
             set_onread(&mut e, "/Dev/Reader",
                 "odf.readItem('/Dev/Src/value')");
-            let result = e.run_onread_script(
+            let _result = e.run_onread_script(
                 "/Dev/Reader",
                 &OmiValue::Number(0.0),
                 Some(1000.0),

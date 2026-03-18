@@ -13,7 +13,7 @@ libfuzzer-sys = "0.4"
 [dependencies.reconfigurable-device]
 path = ".."
 default-features = false
-features = ["std", "json", "scripting"]
+features = ["std", "lite-json", "scripting"]
 
 # Prevent cargo from looking for a parent workspace
 [workspace]

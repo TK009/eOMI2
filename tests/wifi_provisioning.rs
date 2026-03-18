@@ -1,3 +1,4 @@
+#![cfg(feature = "lite-json")]
 // Host-side unit tests for WiFi provisioning flows.
 //
 // Tests cross-module interactions: form parsing → config building,
@@ -5,7 +6,7 @@
 // credential management, and API key lifecycle.
 
 use reconfigurable_device::captive_portal::{
-    parse_provision_form, ApiKeyAction, FormError, ProvisionForm,
+    parse_provision_form, ApiKeyAction, FormError,
 };
 use reconfigurable_device::wifi_cfg::{
     deserialize_wifi_config, serialize_wifi_config, WifiConfig, MAX_WIFI_APS,
@@ -80,6 +81,52 @@ fn provision_set_api_key_replaces_hash() {
         form.api_key_action,
         ApiKeyAction::Set("my-custom-key".into())
     );
+}
+
+/// Hostname from provisioning form propagates to WifiConfig (regression for eo-uk6).
+#[test]
+fn provision_form_hostname_propagates_to_config() {
+    let body = "ssid_0=Net&password_0=pass&hostname=new-hostname&api_key_action=keep";
+    let form = parse_provision_form(body, MAX_WIFI_APS, false).unwrap();
+    assert_eq!(form.hostname, Some("new-hostname".into()));
+
+    // Simulate main loop: start with old hostname, apply form
+    let mut cfg = WifiConfig::new();
+    assert_eq!(cfg.hostname, reconfigurable_device::wifi_cfg::DEFAULT_HOSTNAME);
+
+    let mut hostname = cfg.hostname.clone();
+
+    // This mirrors the fix in handle_provision: update hostname from form
+    if let Some(ref new_hostname) = form.hostname {
+        hostname = new_hostname.clone();
+    }
+    for cred in &form.credentials {
+        cfg.add_ssid(cred.ssid.clone(), cred.password.clone());
+    }
+    cfg.hostname = hostname.clone();
+
+    // Verify hostname was updated
+    assert_eq!(hostname, "new-hostname");
+    assert_eq!(cfg.hostname, "new-hostname");
+
+    // Verify roundtrip
+    let blob = serialize_wifi_config(&cfg).unwrap();
+    let restored = deserialize_wifi_config(&blob).unwrap();
+    assert_eq!(restored.hostname, "new-hostname");
+}
+
+/// When form omits hostname, the existing hostname is preserved.
+#[test]
+fn provision_form_no_hostname_keeps_existing() {
+    let body = "ssid_0=Net&password_0=pass&api_key_action=keep";
+    let form = parse_provision_form(body, MAX_WIFI_APS, false).unwrap();
+    assert_eq!(form.hostname, None);
+
+    let mut hostname = "original-host".to_string();
+    if let Some(ref new_hostname) = form.hostname {
+        hostname = new_hostname.clone();
+    }
+    assert_eq!(hostname, "original-host");
 }
 
 // ---------------------------------------------------------------------------

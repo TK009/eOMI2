@@ -12,6 +12,8 @@ tests/e2e/.venv/
 /fuzz/corpus/
 /fuzz/Cargo.lock
 /fuzz/target/
+/coverage/
+tarpaulin-report.html
 
 # Gas Town (added by gt)
 .runtime/

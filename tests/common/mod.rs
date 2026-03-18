@@ -67,14 +67,6 @@ pub fn extract_read_path(resp: &OmiMessage) -> &str {
     }
 }
 
-/// Extract the JSON result from a Json response result (object/tree reads).
-pub fn extract_json_result(resp: &OmiMessage) -> &serde_json::Value {
-    match extract_single_result(resp) {
-        ResultPayload::Json(v) => v,
-        other => panic!("expected Json result, got {:?}", other),
-    }
-}
-
 /// Extract the batch item-status list from a response.
 pub fn response_batch(resp: &OmiMessage) -> &[ItemStatus] {
     match &resp.operation {
@@ -104,10 +96,3 @@ pub fn response_rid(resp: &OmiMessage) -> &str {
     }
 }
 
-/// Serialize a response to JSON, re-parse it, and return the `serde_json::Value`
-/// for the `response` envelope field — proving the serialization round-trip works.
-pub fn roundtrip_response_json(resp: &OmiMessage) -> serde_json::Value {
-    let json_str = serde_json::to_string(resp).expect("response should serialize");
-    let v: serde_json::Value = serde_json::from_str(&json_str).expect("should re-parse");
-    v["response"].clone()
-}

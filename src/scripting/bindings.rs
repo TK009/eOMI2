@@ -604,3 +604,1203 @@ pub(crate) unsafe extern "C" fn js_odf_read_item(mjs: *mut ffi::mjs) {
         ffi::mjs_return(mjs, info_item_to_mjs(mjs, item));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::odf::{OmiValue, ObjectTree, Object, InfoItem};
+
+    unsafe fn with_mjs<F: FnOnce(*mut ffi::mjs)>(f: F) {
+        let mjs = ffi::mjs_create();
+        assert!(!mjs.is_null());
+        f(mjs);
+        ffi::mjs_destroy(mjs);
+    }
+
+    /// Set up mJS with odf.writeItem and odf.readItem bound to a context,
+    /// execute `script`, and return the result as an OmiValue.
+    unsafe fn exec_with_bindings(
+        tree: &ObjectTree,
+        pending: &mut Vec<PendingWrite>,
+        depth: u8,
+        script: &str,
+    ) -> OmiValue {
+        let mjs = ffi::mjs_create();
+        assert!(!mjs.is_null());
+        ffi::mjs_set_max_ops(mjs, 50_000);
+
+        let mut ctx = ScriptCallbackCtx {
+            pending_writes: pending as *mut Vec<PendingWrite>,
+            depth,
+            tree: tree as *const ObjectTree,
+            onread_path_ptr: std::ptr::null(),
+            onread_path_len: 0,
+            onread_fns: std::ptr::null(),
+        };
+
+        let global = ffi::mjs_get_global(mjs);
+
+        let ctx_foreign = ffi::mjs_mk_foreign(
+            mjs,
+            &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void,
+        );
+        let (n, l) = ffi::mjs_name!("__ctx");
+        ffi::mjs_set(mjs, global, n, l, ctx_foreign);
+
+        let odf = ffi::mjs_mk_object(mjs);
+        let write_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_write_item));
+        let (n, l) = ffi::mjs_name!("writeItem");
+        ffi::mjs_set(mjs, odf, n, l, write_fn);
+        let read_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_read_item));
+        let (n, l) = ffi::mjs_name!("readItem");
+        ffi::mjs_set(mjs, odf, n, l, read_fn);
+        let (n, l) = ffi::mjs_name!("odf");
+        ffi::mjs_set(mjs, global, n, l, odf);
+
+        let c_src = std::ffi::CString::new(script).unwrap();
+        let mut res: ffi::mjs_val_t = 0;
+        ffi::mjs_reset_ops_count(mjs);
+        let err = ffi::mjs_exec(mjs, c_src.as_ptr(), &mut res);
+        let result = if err == ffi::MJS_OK {
+            convert::mjs_to_omi(mjs, res)
+        } else {
+            let err_ptr = ffi::mjs_strerror(mjs, err);
+            let msg = if err_ptr.is_null() {
+                "unknown".to_string()
+            } else {
+                std::ffi::CStr::from_ptr(err_ptr).to_string_lossy().into_owned()
+            };
+            panic!("mjs_exec failed: {}", msg);
+        };
+
+        ffi::mjs_destroy(mjs);
+        result
+    }
+
+    // ── WriteEncoding ──
+
+    #[test]
+    fn write_encoding_equality() {
+        assert_eq!(WriteEncoding::String, WriteEncoding::String);
+        assert_eq!(WriteEncoding::Hex, WriteEncoding::Hex);
+        assert_eq!(WriteEncoding::Base64, WriteEncoding::Base64);
+        assert_ne!(WriteEncoding::String, WriteEncoding::Hex);
+    }
+
+    #[test]
+    fn write_encoding_debug() {
+        let s = format!("{:?}", WriteEncoding::Hex);
+        assert!(s.contains("Hex"));
+    }
+
+    #[test]
+    fn write_encoding_clone_copy() {
+        let enc = WriteEncoding::Base64;
+        let copied = enc;
+        assert_eq!(enc, copied);
+    }
+
+    // ── strip_value_suffix ──
+
+    #[test]
+    fn strip_value_suffix_no_suffix() {
+        let tree = ObjectTree::new();
+        let (path, wants_raw) = strip_value_suffix("/Dev/Temp", &tree);
+        assert_eq!(path, "/Dev/Temp");
+        assert!(!wants_raw);
+    }
+
+    #[test]
+    fn strip_value_suffix_with_suffix() {
+        let tree = ObjectTree::new();
+        let (path, wants_raw) = strip_value_suffix("/Dev/Temp/value", &tree);
+        assert_eq!(path, "/Dev/Temp");
+        assert!(wants_raw);
+    }
+
+    #[test]
+    fn strip_value_suffix_just_value() {
+        let tree = ObjectTree::new();
+        let (path, wants_raw) = strip_value_suffix("/value", &tree);
+        assert_eq!(path, "/value");
+        assert!(!wants_raw);
+    }
+
+    #[test]
+    fn strip_value_suffix_real_item_named_value() {
+        let mut tree = ObjectTree::new();
+        let mut obj = Object::new("Dev");
+        let mut child = Object::new("Temp");
+        let item = InfoItem::new(10);
+        child.add_item("value".into(), item);
+        obj.add_child(child);
+        tree.insert_root(obj);
+
+        let (path, wants_raw) = strip_value_suffix("/Dev/Temp/value", &tree);
+        assert_eq!(path, "/Dev/Temp/value");
+        assert!(!wants_raw);
+    }
+
+    #[test]
+    fn strip_value_suffix_no_trailing_value() {
+        let tree = ObjectTree::new();
+        let (path, wants_raw) = strip_value_suffix("/Dev/values", &tree);
+        assert_eq!(path, "/Dev/values");
+        assert!(!wants_raw);
+    }
+
+    // ── ScriptCallbackCtx ──
+
+    #[test]
+    fn callback_ctx_layout() {
+        let mut writes = Vec::new();
+        let tree = ObjectTree::new();
+        let ctx = ScriptCallbackCtx {
+            pending_writes: &mut writes as *mut _,
+            depth: 0,
+            tree: &tree as *const _,
+            onread_path_ptr: std::ptr::null(),
+            onread_path_len: 0,
+            onread_fns: std::ptr::null(),
+        };
+        assert_eq!(ctx.depth, 0);
+        assert!(ctx.onread_path_ptr.is_null());
+        assert_eq!(ctx.onread_path_len, 0);
+        assert!(ctx.onread_fns.is_null());
+    }
+
+    // ── js_odf_write_item ──
+
+    #[test]
+    fn write_item_collects_pending_write() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            exec_with_bindings(&tree, &mut pending, 0, "odf.writeItem(42, '/Dev/Temp')");
+        }
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].path, "/Dev/Temp");
+        assert_eq!(pending[0].value, OmiValue::Number(42.0));
+        assert!(pending[0].encoding.is_none());
+    }
+
+    #[test]
+    fn write_item_string_value() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            exec_with_bindings(&tree, &mut pending, 0, "odf.writeItem('hello', '/Dev/Msg')");
+        }
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].value, OmiValue::Str("hello".into()));
+        assert_eq!(pending[0].path, "/Dev/Msg");
+    }
+
+    #[test]
+    fn write_item_bool_value() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            exec_with_bindings(&tree, &mut pending, 0, "odf.writeItem(true, '/Dev/Flag')");
+        }
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].value, OmiValue::Bool(true));
+    }
+
+    #[test]
+    fn write_item_null_value() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            exec_with_bindings(&tree, &mut pending, 0, "odf.writeItem(null, '/Dev/X')");
+        }
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].value, OmiValue::Null);
+    }
+
+    #[test]
+    fn write_item_returns_true_on_success() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            let result = exec_with_bindings(&tree, &mut pending, 0, "odf.writeItem(1, '/x')");
+            assert_eq!(result, OmiValue::Bool(true));
+        }
+    }
+
+    #[test]
+    fn write_item_too_few_args_returns_false() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            let result = exec_with_bindings(&tree, &mut pending, 0, "odf.writeItem(42)");
+            assert_eq!(result, OmiValue::Bool(false));
+        }
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn write_item_no_args_returns_false() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            let result = exec_with_bindings(&tree, &mut pending, 0, "odf.writeItem()");
+            assert_eq!(result, OmiValue::Bool(false));
+        }
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn write_item_non_string_path_returns_false() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            let result = exec_with_bindings(&tree, &mut pending, 0, "odf.writeItem(42, 123)");
+            assert_eq!(result, OmiValue::Bool(false));
+        }
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn write_item_depth_limit_returns_false() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            let result = exec_with_bindings(
+                &tree,
+                &mut pending,
+                MAX_SCRIPT_DEPTH - 1,
+                "odf.writeItem(1, '/x')",
+            );
+            assert_eq!(result, OmiValue::Bool(false));
+        }
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn write_item_at_penultimate_depth_succeeds() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            let result = exec_with_bindings(
+                &tree,
+                &mut pending,
+                MAX_SCRIPT_DEPTH - 2,
+                "odf.writeItem(1, '/x')",
+            );
+            assert_eq!(result, OmiValue::Bool(true));
+        }
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
+    fn write_item_with_hex_encoding() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            exec_with_bindings(
+                &tree,
+                &mut pending,
+                0,
+                "odf.writeItem('deadbeef', '/Dev/Data', {type: 'hex'})",
+            );
+        }
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].encoding, Some(WriteEncoding::Hex));
+    }
+
+    #[test]
+    fn write_item_with_base64_encoding() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            exec_with_bindings(
+                &tree,
+                &mut pending,
+                0,
+                "odf.writeItem('data', '/Dev/D', {type: 'base64'})",
+            );
+        }
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].encoding, Some(WriteEncoding::Base64));
+    }
+
+    #[test]
+    fn write_item_with_string_encoding() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            exec_with_bindings(
+                &tree,
+                &mut pending,
+                0,
+                "odf.writeItem('txt', '/Dev/D', {type: 'string'})",
+            );
+        }
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].encoding, Some(WriteEncoding::String));
+    }
+
+    #[test]
+    fn write_item_with_unknown_encoding() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            exec_with_bindings(
+                &tree,
+                &mut pending,
+                0,
+                "odf.writeItem('x', '/Dev/D', {type: 'unknown'})",
+            );
+        }
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].encoding, None);
+    }
+
+    #[test]
+    fn write_item_opts_without_type() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            exec_with_bindings(
+                &tree,
+                &mut pending,
+                0,
+                "odf.writeItem('x', '/Dev/D', {foo: 'bar'})",
+            );
+        }
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].encoding, None);
+    }
+
+    #[test]
+    fn write_item_multiple_writes() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            exec_with_bindings(
+                &tree,
+                &mut pending,
+                0,
+                "odf.writeItem(1, '/a'); odf.writeItem(2, '/b'); odf.writeItem(3, '/c')",
+            );
+        }
+        assert_eq!(pending.len(), 3);
+        assert_eq!(pending[0].path, "/a");
+        assert_eq!(pending[1].path, "/b");
+        assert_eq!(pending[2].path, "/c");
+        assert_eq!(pending[0].value, OmiValue::Number(1.0));
+        assert_eq!(pending[1].value, OmiValue::Number(2.0));
+        assert_eq!(pending[2].value, OmiValue::Number(3.0));
+    }
+
+    // ── js_odf_read_item ──
+
+    fn make_tree_with_item(path: &str, value: OmiValue, ts: Option<f64>) -> ObjectTree {
+        let mut tree = ObjectTree::new();
+        tree.write_value(path, value, ts).unwrap();
+        tree
+    }
+
+    #[test]
+    fn read_item_with_value_suffix() {
+        let tree = make_tree_with_item("/Dev/Temp", OmiValue::Number(22.5), Some(1000.0));
+        let mut pending = Vec::new();
+        unsafe {
+            let result = exec_with_bindings(
+                &tree,
+                &mut pending,
+                0,
+                "odf.readItem('/Dev/Temp/value')",
+            );
+            assert_eq!(result, OmiValue::Number(22.5));
+        }
+    }
+
+    #[test]
+    fn read_item_without_suffix_returns_object() {
+        let tree = make_tree_with_item("/Dev/Temp", OmiValue::Number(22.5), Some(1000.0));
+        let mut pending = Vec::new();
+        unsafe {
+            // Without /value suffix, returns element object (mjs_to_omi → Null for objects)
+            let result = exec_with_bindings(
+                &tree,
+                &mut pending,
+                0,
+                "odf.readItem('/Dev/Temp')",
+            );
+            assert_eq!(result, OmiValue::Null);
+        }
+    }
+
+    #[test]
+    fn read_item_nonexistent_returns_null() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            let result = exec_with_bindings(
+                &tree,
+                &mut pending,
+                0,
+                "odf.readItem('/nonexistent/path/value')",
+            );
+            assert_eq!(result, OmiValue::Null);
+        }
+    }
+
+    #[test]
+    fn read_item_no_args_returns_null() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            let result = exec_with_bindings(&tree, &mut pending, 0, "odf.readItem()");
+            assert_eq!(result, OmiValue::Null);
+        }
+    }
+
+    #[test]
+    fn read_item_non_string_arg_returns_null() {
+        let tree = ObjectTree::new();
+        let mut pending = Vec::new();
+        unsafe {
+            let result = exec_with_bindings(&tree, &mut pending, 0, "odf.readItem(123)");
+            assert_eq!(result, OmiValue::Null);
+        }
+    }
+
+    #[test]
+    fn read_item_object_path_returns_null() {
+        let mut tree = ObjectTree::new();
+        tree.insert_root(Object::new("Dev"));
+        let mut pending = Vec::new();
+        unsafe {
+            let result = exec_with_bindings(
+                &tree,
+                &mut pending,
+                0,
+                "odf.readItem('/Dev')",
+            );
+            assert_eq!(result, OmiValue::Null);
+        }
+    }
+
+    #[test]
+    fn read_item_non_readable_returns_null() {
+        let mut tree = ObjectTree::new();
+        let mut obj = Object::new("Dev");
+        let mut item = InfoItem::new(10);
+        item.add_value(OmiValue::Number(42.0), None);
+        let mut meta = std::collections::BTreeMap::new();
+        meta.insert("readable".into(), OmiValue::Bool(false));
+        item.meta = Some(meta);
+        obj.add_item("Temp".into(), item);
+        tree.insert_root(obj);
+
+        let mut pending = Vec::new();
+        unsafe {
+            let result = exec_with_bindings(
+                &tree,
+                &mut pending,
+                0,
+                "odf.readItem('/Dev/Temp/value')",
+            );
+            assert_eq!(result, OmiValue::Null);
+        }
+    }
+
+    #[test]
+    fn read_item_empty_values_returns_null() {
+        let mut tree = ObjectTree::new();
+        let mut obj = Object::new("Dev");
+        let item = InfoItem::new(10);
+        obj.add_item("Temp".into(), item);
+        tree.insert_root(obj);
+
+        let mut pending = Vec::new();
+        unsafe {
+            let result = exec_with_bindings(
+                &tree,
+                &mut pending,
+                0,
+                "odf.readItem('/Dev/Temp/value')",
+            );
+            assert_eq!(result, OmiValue::Null);
+        }
+    }
+
+    #[test]
+    fn read_item_string_value() {
+        let tree = make_tree_with_item("/Dev/Msg", OmiValue::Str("hello".into()), None);
+        let mut pending = Vec::new();
+        unsafe {
+            let result = exec_with_bindings(
+                &tree,
+                &mut pending,
+                0,
+                "odf.readItem('/Dev/Msg/value')",
+            );
+            assert_eq!(result, OmiValue::Str("hello".into()));
+        }
+    }
+
+    #[test]
+    fn read_item_bool_value() {
+        let tree = make_tree_with_item("/Dev/Flag", OmiValue::Bool(true), None);
+        let mut pending = Vec::new();
+        unsafe {
+            let result = exec_with_bindings(
+                &tree,
+                &mut pending,
+                0,
+                "odf.readItem('/Dev/Flag/value')",
+            );
+            assert_eq!(result, OmiValue::Bool(true));
+        }
+    }
+
+    // ── Read-after-write consistency ──
+
+    #[test]
+    fn read_after_write_returns_pending_value() {
+        let tree = make_tree_with_item("/Dev/Temp", OmiValue::Number(10.0), None);
+        let mut pending = Vec::new();
+        unsafe {
+            let result = exec_with_bindings(
+                &tree,
+                &mut pending,
+                0,
+                "odf.writeItem(99, '/Dev/Temp'); odf.readItem('/Dev/Temp/value')",
+            );
+            assert_eq!(result, OmiValue::Number(99.0));
+        }
+    }
+
+    #[test]
+    fn read_after_multiple_writes_returns_last() {
+        let tree = make_tree_with_item("/Dev/Temp", OmiValue::Number(10.0), None);
+        let mut pending = Vec::new();
+        unsafe {
+            let result = exec_with_bindings(
+                &tree,
+                &mut pending,
+                0,
+                "odf.writeItem(1, '/Dev/Temp'); odf.writeItem(2, '/Dev/Temp'); odf.readItem('/Dev/Temp/value')",
+            );
+            assert_eq!(result, OmiValue::Number(2.0));
+        }
+    }
+
+    // ── info_item_to_mjs ──
+
+    #[test]
+    fn info_item_to_mjs_with_type_and_desc() {
+        unsafe {
+            with_mjs(|mjs| {
+                let mut item = InfoItem::new(10);
+                item.type_uri = Some("omi:temp".into());
+                item.desc = Some("Temperature".into());
+                item.add_value(OmiValue::Number(22.5), Some(1000.0));
+
+                let obj = info_item_to_mjs(mjs, &item);
+                assert_ne!(ffi::mjs_is_object(obj), 0);
+
+                let (n, l) = ffi::mjs_name!("type");
+                let type_val = ffi::mjs_get(mjs, obj, n, l);
+                let omi_type = convert::mjs_to_omi(mjs, type_val);
+                assert_eq!(omi_type, OmiValue::Str("omi:temp".into()));
+
+                let (n, l) = ffi::mjs_name!("desc");
+                let desc_val = ffi::mjs_get(mjs, obj, n, l);
+                let omi_desc = convert::mjs_to_omi(mjs, desc_val);
+                assert_eq!(omi_desc, OmiValue::Str("Temperature".into()));
+
+                let (n, l) = ffi::mjs_name!("values");
+                let arr = ffi::mjs_get(mjs, obj, n, l);
+                assert_ne!(ffi::mjs_is_object(arr), 0);
+            });
+        }
+    }
+
+    #[test]
+    fn info_item_to_mjs_no_optional_fields() {
+        unsafe {
+            with_mjs(|mjs| {
+                let item = InfoItem::new(10);
+                let obj = info_item_to_mjs(mjs, &item);
+                assert_ne!(ffi::mjs_is_object(obj), 0);
+
+                let (n, l) = ffi::mjs_name!("type");
+                let type_val = ffi::mjs_get(mjs, obj, n, l);
+                assert_ne!(ffi::mjs_is_undefined(type_val), 0);
+
+                let (n, l) = ffi::mjs_name!("desc");
+                let desc_val = ffi::mjs_get(mjs, obj, n, l);
+                assert_ne!(ffi::mjs_is_undefined(desc_val), 0);
+            });
+        }
+    }
+
+    // ── info_item_to_mjs_with_override ──
+
+    #[test]
+    fn info_item_override_replaces_newest() {
+        unsafe {
+            with_mjs(|mjs| {
+                let mut item = InfoItem::new(10);
+                item.add_value(OmiValue::Number(10.0), Some(1.0));
+                item.add_value(OmiValue::Number(20.0), Some(2.0));
+
+                let override_val = ffi::mjs_mk_number(mjs, 999.0);
+                let obj = info_item_to_mjs_with_override(mjs, &item, override_val);
+                assert_ne!(ffi::mjs_is_object(obj), 0);
+
+                let (n, l) = ffi::mjs_name!("values");
+                let arr = ffi::mjs_get(mjs, obj, n, l);
+                assert_ne!(ffi::mjs_is_object(arr), 0);
+            });
+        }
+    }
+
+    // ── PendingWrite ──
+
+    #[test]
+    fn pending_write_fields() {
+        let pw = PendingWrite {
+            path: "/Dev/Temp".into(),
+            value: OmiValue::Number(42.0),
+            encoding: Some(WriteEncoding::Hex),
+        };
+        assert_eq!(pw.path, "/Dev/Temp");
+        assert_eq!(pw.value, OmiValue::Number(42.0));
+        assert_eq!(pw.encoding, Some(WriteEncoding::Hex));
+    }
+
+    #[test]
+    fn pending_write_no_encoding() {
+        let pw = PendingWrite {
+            path: "/x".into(),
+            value: OmiValue::Null,
+            encoding: None,
+        };
+        assert!(pw.encoding.is_none());
+    }
+
+    // ── Self-read recursion guard (FR-008) ──
+
+    #[test]
+    fn read_item_self_read_guard_returns_stored_value() {
+        let tree = make_tree_with_item("/Dev/Temp", OmiValue::Number(55.0), Some(100.0));
+        let mut pending = Vec::new();
+        let onread_path = "/Dev/Temp";
+
+        unsafe {
+            let mjs = ffi::mjs_create();
+            assert!(!mjs.is_null());
+            ffi::mjs_set_max_ops(mjs, 50_000);
+
+            let mut ctx = ScriptCallbackCtx {
+                pending_writes: &mut pending as *mut Vec<PendingWrite>,
+                depth: 1,
+                tree: &tree as *const ObjectTree,
+                onread_path_ptr: onread_path.as_ptr(),
+                onread_path_len: onread_path.len(),
+                onread_fns: std::ptr::null(),
+            };
+
+            let global = ffi::mjs_get_global(mjs);
+            let ctx_foreign = ffi::mjs_mk_foreign(
+                mjs,
+                &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void,
+            );
+            let (n, l) = ffi::mjs_name!("__ctx");
+            ffi::mjs_set(mjs, global, n, l, ctx_foreign);
+
+            let odf = ffi::mjs_mk_object(mjs);
+            let read_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_read_item));
+            let (n, l) = ffi::mjs_name!("readItem");
+            ffi::mjs_set(mjs, odf, n, l, read_fn);
+            let (n, l) = ffi::mjs_name!("odf");
+            ffi::mjs_set(mjs, global, n, l, odf);
+
+            let c_src = std::ffi::CString::new("odf.readItem('/Dev/Temp/value')").unwrap();
+            let mut res: ffi::mjs_val_t = 0;
+            ffi::mjs_reset_ops_count(mjs);
+            let err = ffi::mjs_exec(mjs, c_src.as_ptr(), &mut res);
+            assert_eq!(err, ffi::MJS_OK);
+            let result = convert::mjs_to_omi(mjs, res);
+            assert_eq!(result, OmiValue::Number(55.0));
+
+            ffi::mjs_destroy(mjs);
+        }
+    }
+
+    // ── Context safety: null/missing __ctx ──
+
+    #[test]
+    fn write_item_without_ctx_returns_false() {
+        unsafe {
+            let mjs = ffi::mjs_create();
+            assert!(!mjs.is_null());
+            ffi::mjs_set_max_ops(mjs, 50_000);
+
+            let global = ffi::mjs_get_global(mjs);
+
+            let odf = ffi::mjs_mk_object(mjs);
+            let write_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_write_item));
+            let (n, l) = ffi::mjs_name!("writeItem");
+            ffi::mjs_set(mjs, odf, n, l, write_fn);
+            let (n, l) = ffi::mjs_name!("odf");
+            ffi::mjs_set(mjs, global, n, l, odf);
+
+            let c_src = std::ffi::CString::new("odf.writeItem(1, '/x')").unwrap();
+            let mut res: ffi::mjs_val_t = 0;
+            ffi::mjs_reset_ops_count(mjs);
+            let err = ffi::mjs_exec(mjs, c_src.as_ptr(), &mut res);
+            assert_eq!(err, ffi::MJS_OK);
+            let result = convert::mjs_to_omi(mjs, res);
+            assert_eq!(result, OmiValue::Bool(false));
+
+            ffi::mjs_destroy(mjs);
+        }
+    }
+
+    #[test]
+    fn read_item_without_ctx_returns_null() {
+        unsafe {
+            let mjs = ffi::mjs_create();
+            assert!(!mjs.is_null());
+            ffi::mjs_set_max_ops(mjs, 50_000);
+
+            let global = ffi::mjs_get_global(mjs);
+
+            let odf = ffi::mjs_mk_object(mjs);
+            let read_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_read_item));
+            let (n, l) = ffi::mjs_name!("readItem");
+            ffi::mjs_set(mjs, odf, n, l, read_fn);
+            let (n, l) = ffi::mjs_name!("odf");
+            ffi::mjs_set(mjs, global, n, l, odf);
+
+            let c_src = std::ffi::CString::new("odf.readItem('/Dev/Temp/value')").unwrap();
+            let mut res: ffi::mjs_val_t = 0;
+            ffi::mjs_reset_ops_count(mjs);
+            let err = ffi::mjs_exec(mjs, c_src.as_ptr(), &mut res);
+            assert_eq!(err, ffi::MJS_OK);
+            let result = convert::mjs_to_omi(mjs, res);
+            assert_eq!(result, OmiValue::Null);
+
+            ffi::mjs_destroy(mjs);
+        }
+    }
+
+    // ── execute_nested_onread ──
+
+    #[test]
+    fn nested_onread_no_script_returns_none() {
+        unsafe {
+            with_mjs(|mjs| {
+                // Item WITHOUT onread script
+                let mut item = InfoItem::new(10);
+                item.add_value(OmiValue::Number(1.0), None);
+
+                let mut writes = Vec::new();
+                let tree = ObjectTree::new();
+                let onread_fns: std::collections::BTreeMap<String, ffi::mjs_val_t> =
+                    std::collections::BTreeMap::new();
+                let ctx = ScriptCallbackCtx {
+                    pending_writes: &mut writes,
+                    depth: 0,
+                    tree: &tree,
+                    onread_path_ptr: std::ptr::null(),
+                    onread_path_len: 0,
+                    onread_fns: &onread_fns,
+                };
+
+                let result = execute_nested_onread(mjs, &item, "/Dev/Temp", &ctx);
+                assert!(result.is_none());
+            });
+        }
+    }
+
+    #[test]
+    fn nested_onread_depth_exceeded_returns_none() {
+        unsafe {
+            with_mjs(|mjs| {
+                let mut item = InfoItem::new(10);
+                item.add_value(OmiValue::Number(1.0), None);
+                let mut meta = std::collections::BTreeMap::new();
+                meta.insert("onread".into(), OmiValue::Str("event.value".into()));
+                item.meta = Some(meta);
+
+                let mut writes = Vec::new();
+                let tree = ObjectTree::new();
+                let onread_fns: std::collections::BTreeMap<String, ffi::mjs_val_t> =
+                    std::collections::BTreeMap::new();
+                let ctx = ScriptCallbackCtx {
+                    pending_writes: &mut writes,
+                    depth: MAX_SCRIPT_DEPTH - 1, // new_depth == MAX_SCRIPT_DEPTH → blocked
+                    tree: &tree,
+                    onread_path_ptr: std::ptr::null(),
+                    onread_path_len: 0,
+                    onread_fns: &onread_fns,
+                };
+
+                let result = execute_nested_onread(mjs, &item, "/Dev/Temp", &ctx);
+                assert!(result.is_none());
+            });
+        }
+    }
+
+    #[test]
+    fn nested_onread_null_fns_returns_none() {
+        unsafe {
+            with_mjs(|mjs| {
+                let mut item = InfoItem::new(10);
+                item.add_value(OmiValue::Number(1.0), None);
+                let mut meta = std::collections::BTreeMap::new();
+                meta.insert("onread".into(), OmiValue::Str("event.value".into()));
+                item.meta = Some(meta);
+
+                let mut writes = Vec::new();
+                let tree = ObjectTree::new();
+                let ctx = ScriptCallbackCtx {
+                    pending_writes: &mut writes,
+                    depth: 0,
+                    tree: &tree,
+                    onread_path_ptr: std::ptr::null(),
+                    onread_path_len: 0,
+                    onread_fns: std::ptr::null(), // null onread_fns
+                };
+
+                let result = execute_nested_onread(mjs, &item, "/Dev/Temp", &ctx);
+                assert!(result.is_none());
+            });
+        }
+    }
+
+    #[test]
+    fn nested_onread_missing_func_in_map_returns_none() {
+        unsafe {
+            with_mjs(|mjs| {
+                let mut item = InfoItem::new(10);
+                item.add_value(OmiValue::Number(1.0), None);
+                let mut meta = std::collections::BTreeMap::new();
+                meta.insert("onread".into(), OmiValue::Str("event.value".into()));
+                item.meta = Some(meta);
+
+                let mut writes = Vec::new();
+                let tree = ObjectTree::new();
+                // Map exists but doesn't contain the path
+                let onread_fns: std::collections::BTreeMap<String, ffi::mjs_val_t> =
+                    std::collections::BTreeMap::new();
+                let ctx = ScriptCallbackCtx {
+                    pending_writes: &mut writes,
+                    depth: 0,
+                    tree: &tree,
+                    onread_path_ptr: std::ptr::null(),
+                    onread_path_len: 0,
+                    onread_fns: &onread_fns,
+                };
+
+                let result = execute_nested_onread(mjs, &item, "/Dev/Temp", &ctx);
+                assert!(result.is_none());
+            });
+        }
+    }
+
+    #[test]
+    fn nested_onread_non_function_value_returns_none() {
+        unsafe {
+            with_mjs(|mjs| {
+                let mut item = InfoItem::new(10);
+                item.add_value(OmiValue::Number(1.0), None);
+                let mut meta = std::collections::BTreeMap::new();
+                meta.insert("onread".into(), OmiValue::Str("event.value".into()));
+                item.meta = Some(meta);
+
+                let mut writes = Vec::new();
+                let tree = ObjectTree::new();
+                // Map contains the path but value is not a function
+                let mut onread_fns: std::collections::BTreeMap<String, ffi::mjs_val_t> =
+                    std::collections::BTreeMap::new();
+                let not_a_func = ffi::mjs_mk_number(mjs, 42.0);
+                onread_fns.insert("/Dev/Temp".into(), not_a_func);
+                let ctx = ScriptCallbackCtx {
+                    pending_writes: &mut writes,
+                    depth: 0,
+                    tree: &tree,
+                    onread_path_ptr: std::ptr::null(),
+                    onread_path_len: 0,
+                    onread_fns: &onread_fns,
+                };
+
+                let result = execute_nested_onread(mjs, &item, "/Dev/Temp", &ctx);
+                assert!(result.is_none());
+            });
+        }
+    }
+
+    #[test]
+    fn nested_onread_executes_precompiled_function() {
+        unsafe {
+            with_mjs(|mjs| {
+                // Build a tree and item with onread script
+                let mut tree = ObjectTree::new();
+                let mut obj = Object::new("Dev");
+                let mut item = InfoItem::new(10);
+                item.add_value(OmiValue::Number(5.0), Some(100.0));
+                let mut meta = std::collections::BTreeMap::new();
+                meta.insert("onread".into(), OmiValue::Str("event.value * 10".into()));
+                item.meta = Some(meta);
+                obj.add_item("Temp".into(), item);
+                tree.insert_root(obj);
+
+                // Pre-compile the function
+                let script_src = "(function(){ return event.value * 10; })\0";
+                let mut func_val: ffi::mjs_val_t = 0;
+                let err = ffi::mjs_exec(mjs, script_src.as_ptr() as *const _, &mut func_val);
+                assert_eq!(err, ffi::MJS_OK);
+                assert_ne!(ffi::mjs_is_function(func_val), 0);
+
+                let mut onread_fns: std::collections::BTreeMap<String, ffi::mjs_val_t> =
+                    std::collections::BTreeMap::new();
+                onread_fns.insert("/Dev/Temp".into(), func_val);
+
+                let mut writes = Vec::new();
+                let mut ctx = ScriptCallbackCtx {
+                    pending_writes: &mut writes,
+                    depth: 0,
+                    tree: &tree,
+                    onread_path_ptr: std::ptr::null(),
+                    onread_path_len: 0,
+                    onread_fns: &onread_fns,
+                };
+
+                // Set up globals needed by nested execution
+                let global = ffi::mjs_get_global(mjs);
+                let ctx_foreign = ffi::mjs_mk_foreign(
+                    mjs,
+                    &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void,
+                );
+                let (n, l) = ffi::mjs_name!("__ctx");
+                ffi::mjs_set(mjs, global, n, l, ctx_foreign);
+                let odf = ffi::mjs_mk_object(mjs);
+                let read_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_read_item));
+                let (n, l) = ffi::mjs_name!("readItem");
+                ffi::mjs_set(mjs, odf, n, l, read_fn);
+                let (n, l) = ffi::mjs_name!("odf");
+                ffi::mjs_set(mjs, global, n, l, odf);
+                let event = ffi::mjs_mk_object(mjs);
+                let (n, l) = ffi::mjs_name!("event");
+                ffi::mjs_set(mjs, global, n, l, event);
+
+                if let Ok(PathTarget::InfoItem(item)) = tree.resolve("/Dev/Temp") {
+                    let result = execute_nested_onread(mjs, item, "/Dev/Temp", &ctx);
+                    assert!(result.is_some(), "expected Some from nested onread");
+                    let val = result.unwrap();
+                    assert_ne!(ffi::mjs_is_number(val), 0);
+                    assert_eq!(ffi::mjs_get_double(mjs, val), 50.0); // 5.0 * 10
+                } else {
+                    panic!("expected InfoItem at /Dev/Temp");
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn nested_onread_restores_globals() {
+        unsafe {
+            with_mjs(|mjs| {
+                let mut tree = ObjectTree::new();
+                let mut obj = Object::new("Dev");
+                let mut item = InfoItem::new(10);
+                item.add_value(OmiValue::Number(3.0), None);
+                let mut meta = std::collections::BTreeMap::new();
+                meta.insert("onread".into(), OmiValue::Str("event.value + 1".into()));
+                item.meta = Some(meta);
+                obj.add_item("Temp".into(), item);
+                tree.insert_root(obj);
+
+                let script_src = "(function(){ return event.value + 1; })\0";
+                let mut func_val: ffi::mjs_val_t = 0;
+                ffi::mjs_exec(mjs, script_src.as_ptr() as *const _, &mut func_val);
+                let mut onread_fns: std::collections::BTreeMap<String, ffi::mjs_val_t> =
+                    std::collections::BTreeMap::new();
+                onread_fns.insert("/Dev/Temp".into(), func_val);
+
+                let mut writes = Vec::new();
+                let mut ctx = ScriptCallbackCtx {
+                    pending_writes: &mut writes,
+                    depth: 0,
+                    tree: &tree,
+                    onread_path_ptr: std::ptr::null(),
+                    onread_path_len: 0,
+                    onread_fns: &onread_fns,
+                };
+
+                // Set up initial globals — save the raw event val for comparison
+                let global = ffi::mjs_get_global(mjs);
+                let original_event = ffi::mjs_mk_object(mjs);
+                let (n, l) = ffi::mjs_name!("event");
+                ffi::mjs_set(mjs, global, n, l, original_event);
+
+                let ctx_foreign = ffi::mjs_mk_foreign(
+                    mjs,
+                    &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void,
+                );
+                let (n, l) = ffi::mjs_name!("__ctx");
+                ffi::mjs_set(mjs, global, n, l, ctx_foreign);
+
+                let original_odf = ffi::mjs_mk_object(mjs);
+                let read_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_read_item));
+                let (n, l) = ffi::mjs_name!("readItem");
+                ffi::mjs_set(mjs, original_odf, n, l, read_fn);
+                let (n, l) = ffi::mjs_name!("odf");
+                ffi::mjs_set(mjs, global, n, l, original_odf);
+
+                // Execute nested onread
+                if let Ok(PathTarget::InfoItem(item)) = tree.resolve("/Dev/Temp") {
+                    execute_nested_onread(mjs, item, "/Dev/Temp", &ctx);
+                }
+
+                // Verify event global was restored to the original object (same mjs_val_t)
+                let (n, l) = ffi::mjs_name!("event");
+                let restored_event = ffi::mjs_get(mjs, global, n, l);
+                assert_eq!(restored_event, original_event, "event global should be restored");
+
+                // Verify odf global was restored
+                let (n, l) = ffi::mjs_name!("odf");
+                let restored_odf = ffi::mjs_get(mjs, global, n, l);
+                assert_eq!(restored_odf, original_odf, "odf global should be restored");
+            });
+        }
+    }
+
+    #[test]
+    fn nested_onread_null_result_returns_none() {
+        unsafe {
+            with_mjs(|mjs| {
+                let mut tree = ObjectTree::new();
+                let mut obj = Object::new("Dev");
+                let mut item = InfoItem::new(10);
+                item.add_value(OmiValue::Number(1.0), None);
+                let mut meta = std::collections::BTreeMap::new();
+                meta.insert("onread".into(), OmiValue::Str("null".into()));
+                item.meta = Some(meta);
+                obj.add_item("Temp".into(), item);
+                tree.insert_root(obj);
+
+                // Function returns null
+                let script_src = "(function(){ return null; })\0";
+                let mut func_val: ffi::mjs_val_t = 0;
+                ffi::mjs_exec(mjs, script_src.as_ptr() as *const _, &mut func_val);
+                let mut onread_fns: std::collections::BTreeMap<String, ffi::mjs_val_t> =
+                    std::collections::BTreeMap::new();
+                onread_fns.insert("/Dev/Temp".into(), func_val);
+
+                let mut writes = Vec::new();
+                let mut ctx = ScriptCallbackCtx {
+                    pending_writes: &mut writes,
+                    depth: 0,
+                    tree: &tree,
+                    onread_path_ptr: std::ptr::null(),
+                    onread_path_len: 0,
+                    onread_fns: &onread_fns,
+                };
+
+                let global = ffi::mjs_get_global(mjs);
+                let ctx_foreign = ffi::mjs_mk_foreign(
+                    mjs,
+                    &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void,
+                );
+                let (n, l) = ffi::mjs_name!("__ctx");
+                ffi::mjs_set(mjs, global, n, l, ctx_foreign);
+                let odf = ffi::mjs_mk_object(mjs);
+                let (n, l) = ffi::mjs_name!("odf");
+                ffi::mjs_set(mjs, global, n, l, odf);
+                let event = ffi::mjs_mk_object(mjs);
+                let (n, l) = ffi::mjs_name!("event");
+                ffi::mjs_set(mjs, global, n, l, event);
+
+                if let Ok(PathTarget::InfoItem(item)) = tree.resolve("/Dev/Temp") {
+                    let result = execute_nested_onread(mjs, item, "/Dev/Temp", &ctx);
+                    assert!(result.is_none(), "null return should yield None");
+                }
+            });
+        }
+    }
+
+    // ── readItem with onread via js_odf_read_item callback ──
+
+    #[test]
+    fn read_item_triggers_onread_script() {
+        unsafe {
+            let mjs = ffi::mjs_create();
+            assert!(!mjs.is_null());
+            ffi::mjs_set_max_ops(mjs, 50_000);
+
+            // Build tree: /Dev/Sensor with onread script and value
+            let mut tree = ObjectTree::new();
+            let mut obj = Object::new("Dev");
+            let mut item = InfoItem::new(10);
+            item.add_value(OmiValue::Number(7.0), Some(100.0));
+            let mut meta = std::collections::BTreeMap::new();
+            meta.insert("onread".into(), OmiValue::Str("event.value * 2".into()));
+            item.meta = Some(meta);
+            obj.add_item("Sensor".into(), item);
+            tree.insert_root(obj);
+
+            // Pre-compile onread function
+            let script_src = "(function(){ return event.value * 2; })\0";
+            let mut func_val: ffi::mjs_val_t = 0;
+            let err = ffi::mjs_exec(mjs, script_src.as_ptr() as *const _, &mut func_val);
+            assert_eq!(err, ffi::MJS_OK);
+
+            let mut onread_fns: std::collections::BTreeMap<String, ffi::mjs_val_t> =
+                std::collections::BTreeMap::new();
+            onread_fns.insert("/Dev/Sensor".into(), func_val);
+
+            let mut writes = Vec::new();
+            let mut ctx = ScriptCallbackCtx {
+                pending_writes: &mut writes,
+                depth: 0,
+                tree: &tree,
+                onread_path_ptr: std::ptr::null(),
+                onread_path_len: 0,
+                onread_fns: &onread_fns,
+            };
+
+            let global = ffi::mjs_get_global(mjs);
+            let ctx_foreign = ffi::mjs_mk_foreign(
+                mjs,
+                &mut ctx as *mut ScriptCallbackCtx as *mut std::os::raw::c_void,
+            );
+            let (n, l) = ffi::mjs_name!("__ctx");
+            ffi::mjs_set(mjs, global, n, l, ctx_foreign);
+
+            let odf = ffi::mjs_mk_object(mjs);
+            let read_fn = ffi::mjs_mk_foreign_func(mjs, Some(js_odf_read_item));
+            let (n, l) = ffi::mjs_name!("readItem");
+            ffi::mjs_set(mjs, odf, n, l, read_fn);
+            let (n, l) = ffi::mjs_name!("odf");
+            ffi::mjs_set(mjs, global, n, l, odf);
+
+            // Read with /value suffix — should trigger onread and return transformed value
+            let c_src = std::ffi::CString::new("odf.readItem('/Dev/Sensor/value')").unwrap();
+            let mut res: ffi::mjs_val_t = 0;
+            ffi::mjs_reset_ops_count(mjs);
+            let err = ffi::mjs_exec(mjs, c_src.as_ptr(), &mut res);
+            assert_eq!(err, ffi::MJS_OK);
+            assert_ne!(ffi::mjs_is_number(res), 0);
+            assert_eq!(ffi::mjs_get_double(mjs, res), 14.0); // 7.0 * 2
+
+            ffi::mjs_destroy(mjs);
+        }
+    }
+
+    // ── MAX_SCRIPT_DEPTH constant ──
+
+    #[test]
+    fn max_script_depth_is_4() {
+        assert_eq!(MAX_SCRIPT_DEPTH, 4);
+    }
+}

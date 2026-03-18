@@ -6,11 +6,12 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-#[cfg(all(feature = "json", feature = "lite-json"))]
-compile_error!(
-    "Features `json` and `lite-json` are mutually exclusive. Enable only one."
-);
+/// Firmware version injected at build time (FR-024).
+/// Defaults to CARGO_PKG_VERSION; overridable via FIRMWARE_VERSION env var.
+pub const FIRMWARE_VERSION: &str = env!("FIRMWARE_VERSION");
 
+#[cfg(feature = "std")]
+pub mod error;
 pub mod board;
 #[cfg(feature = "esp")]
 pub mod boards;
@@ -19,15 +20,16 @@ pub mod device;
 pub mod gpio;
 #[cfg(feature = "std")]
 pub mod odf;
-#[cfg(all(feature = "std", any(feature = "json", feature = "lite-json")))]
+#[cfg(all(feature = "std", feature = "lite-json"))]
 pub mod omi;
 #[cfg(feature = "std")]
 pub mod pages;
+pub mod compress;
 pub mod crypto;
 pub mod psram;
-#[cfg(all(feature = "std", feature = "json"))]
+#[cfg(all(feature = "std", feature = "lite-json"))]
 pub mod http;
-#[cfg(all(feature = "std", feature = "json"))]
+#[cfg(all(feature = "std", feature = "lite-json"))]
 pub mod captive_portal;
 #[cfg(feature = "scripting")]
 pub mod scripting;
@@ -39,14 +41,17 @@ pub mod log_util;
 pub mod nvs;
 #[cfg(feature = "lite-json")]
 pub mod json;
-#[cfg(feature = "json")]
+#[cfg(feature = "lite-json")]
 pub mod wifi_cfg;
 pub mod mem_stats;
 pub mod wifi_sm;
-#[cfg(feature = "esp")]
+pub mod callback_url;
 pub mod callback;
 #[cfg(feature = "esp")]
 pub mod temp_sensor;
+pub mod time_sync;
+#[cfg(feature = "esp")]
+pub mod ota;
 #[cfg(feature = "esp")]
 pub mod server;
 #[cfg(feature = "std")]

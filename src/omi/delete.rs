@@ -1,23 +1,11 @@
-#[cfg(feature = "json")]
-use serde::{Deserialize, Serialize};
-
 use super::error::ParseError;
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "json", derive(Serialize, Deserialize))]
 pub struct DeleteOp {
     pub path: String,
 }
 
 impl DeleteOp {
-    #[cfg(feature = "json")]
-    pub fn from_value(value: serde_json::Value) -> Result<Self, ParseError> {
-        let op: DeleteOp = serde_json::from_value(value)
-            .map_err(|e| ParseError::InvalidJson(e.to_string()))?;
-        op.validate()?;
-        Ok(op)
-    }
-
     pub fn validate(&self) -> Result<(), ParseError> {
         if !self.path.starts_with('/') {
             return Err(ParseError::InvalidField {
@@ -77,39 +65,4 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "json")]
-    mod json {
-        use super::*;
-
-        #[test]
-        fn from_value_valid() {
-            let v = serde_json::json!({ "path": "/DeviceA/Temperature" });
-            let op = DeleteOp::from_value(v).unwrap();
-            assert_eq!(op.path, "/DeviceA/Temperature");
-        }
-
-        #[test]
-        fn from_value_missing_path() {
-            let v = serde_json::json!({});
-            let err = DeleteOp::from_value(v).unwrap_err();
-            assert!(matches!(err, ParseError::InvalidJson(_)));
-        }
-
-        #[test]
-        fn from_value_reject_root() {
-            let v = serde_json::json!({ "path": "/" });
-            let err = DeleteOp::from_value(v).unwrap_err();
-            assert!(matches!(err, ParseError::InvalidField { .. }));
-        }
-
-        #[test]
-        fn serialize_roundtrip() {
-            let op = DeleteOp {
-                path: "/A/B".into(),
-            };
-            let json = serde_json::to_value(&op).unwrap();
-            let op2 = DeleteOp::from_value(json).unwrap();
-            assert_eq!(op, op2);
-        }
-    }
 }

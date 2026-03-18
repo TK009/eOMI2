@@ -3,7 +3,7 @@
 //! Platform-independent types live here. ESP-specific drivers are in submodules
 //! gated on the `esp` feature.
 
-#[cfg(feature = "esp")]
+#[cfg(any(feature = "esp", feature = "std"))]
 pub mod adc;
 pub mod driver;
 pub mod encoding;
@@ -99,15 +99,14 @@ pub fn build_gpio_items(configs: &[GpioPinConfig]) -> Vec<(String, InfoItem)> {
 ///
 /// Tracks which GPIO pins have been assigned and to what purpose.
 /// Returns a clear error when the same pin is registered twice.
+#[derive(Default)]
 pub struct PinRegistry {
     owners: HashMap<u8, String>,
 }
 
 impl PinRegistry {
     pub fn new() -> Self {
-        Self {
-            owners: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Register a pin for a given purpose. Returns `Err` with a descriptive

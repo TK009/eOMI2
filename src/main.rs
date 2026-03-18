@@ -1,4 +1,4 @@
-use anyhow::Result;
+use reconfigurable_device::error::Result;
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     hal::prelude::Peripherals,
@@ -18,6 +18,7 @@ use reconfigurable_device::device::{PATH_FREE_FLASH, PATH_FREE_ODF_STORAGE};
 use reconfigurable_device::device::PATH_FREE_PSRAM;
 use reconfigurable_device::dns::DnsServer;
 use reconfigurable_device::mdns::{MdnsConfig, MdnsResponder};
+use reconfigurable_device::time_sync::TimeSync;
 use reconfigurable_device::nvs::{load_writable_items, open_nvs, save_writable_items};
 use reconfigurable_device::odf::OmiValue;
 use reconfigurable_device::http::now_secs;
@@ -104,7 +105,7 @@ fn main() -> Result<()> {
     }
 
     info!("WiFi credentials: {} available", creds.len());
-    let hostname = wifi_cfg.hostname.clone();
+    let mut hostname = wifi_cfg.hostname.clone();
 
     // Resolve API token: use build-time value if set, otherwise empty placeholder
     // so the device can boot into captive portal for first-time provisioning.
@@ -131,6 +132,7 @@ fn main() -> Result<()> {
     let mut ap_active = false;
     let mut dns_server: Option<DnsServer> = None;
     let mut mdns_responder: Option<MdnsResponder> = None;
+    let mut time_sync: Option<TimeSync> = None;
     let mut last_sta_ip: Option<String> = None;
 
     // Determine initial server mode based on WiFi state
@@ -207,11 +209,23 @@ fn main() -> Result<()> {
         start_http_server(nvs_dirty.clone(), api_token, portal.clone())?;
     info!("HTTP server listening on port 80");
 
+    // FR-020: Confirm running firmware as valid to cancel OTA rollback.
+    // Without this call, ESP-IDF's rollback mechanism reboots into the
+    // previous OTA slot on watchdog timeout (FR-021).
+    unsafe {
+        let err = esp_idf_svc::sys::esp_ota_mark_app_valid_cancel_rollback();
+        if err != esp_idf_svc::sys::ESP_OK {
+            warn!("esp_ota_mark_app_valid_cancel_rollback failed: {}", err);
+        } else {
+            info!("OTA: running firmware confirmed valid (rollback cancelled)");
+        }
+    }
+
     // Populate sensor tree
     {
         let mut eng = lock_or_recover(&engine, "engine");
-        eng.tree.write_tree("/", build_sensor_tree()).unwrap();
-        info!("Sensor tree populated: System/{{FreeHeap,FreeFlash,FreePsram,FreeOdfStorage,Temperature}}");
+        eng.tree.write_tree("/", build_sensor_tree())?;
+        info!("Sensor tree populated: System/{{FirmwareVersion,FreeHeap,FreeFlash,FreePsram,FreeOdfStorage,Temperature}}");
 
         // Register PWM InfoItems as writable entries in the O-DF tree (FR-004)
         gpio_manager.register_tree_items(&mut eng.tree);
@@ -377,13 +391,24 @@ fn main() -> Result<()> {
                 &mut wifi,
                 &mut wifi_sm,
                 &mut creds,
-                &hostname,
+                &mut hostname,
                 &mut ap_active,
                 &mut dns_server,
                 &portal,
                 &mut wifi_nvs,
                 &mut wifi_cfg,
             );
+            // Restart mDNS with updated hostname if connected
+            if let Some(resp) = mdns_responder.take() {
+                drop(resp);
+                match MdnsResponder::start(MdnsConfig::new(&hostname)) {
+                    Ok(resp) => {
+                        info!("mDNS responder restarted for {}.local", hostname);
+                        mdns_responder = Some(resp);
+                    }
+                    Err(e) => warn!("Failed to restart mDNS responder: {}", e),
+                }
+            }
         }
 
         // Check backoff timer completion
@@ -428,6 +453,12 @@ fn main() -> Result<()> {
 
         // WiFi reconnection via state machine
         if !wifi.is_connected().unwrap_or(false) && *wifi_sm.state() == WifiState::Connected {
+            // Stop SNTP immediately on disconnect — avoids leaking stale handles
+            // across reconnection cycles and ensures a fresh sync on reconnect.
+            if time_sync.take().is_some() {
+                info!("SNTP time sync stopped (WiFi disconnected)");
+            }
+
             let action = wifi_sm.handle_event(WifiEvent::ConnectionLost);
             handle_reconnect_action(
                 &mut wifi_sm, &mut wifi, &creds, action, &mut wifi_rl,
@@ -460,6 +491,11 @@ fn main() -> Result<()> {
                     }
                 }
 
+                // Start SNTP time sync after mDNS (non-blocking, syncs in background)
+                if time_sync.is_none() {
+                    time_sync = TimeSync::start();
+                }
+
                 // Check for IP change (DHCP renewal)
                 if let Ok(ip_info) = wifi.wifi().sta_netif().get_ip_info() {
                     let current_ip = ip_info.ip.to_string();
@@ -480,6 +516,10 @@ fn main() -> Result<()> {
                     info!("Stopping mDNS responder (state: {:?})", wifi_sm.state());
                     resp.stop();
                     last_sta_ip = None;
+                }
+                // Stop SNTP when WiFi disconnects (no network for time sync)
+                if time_sync.take().is_some() {
+                    info!("SNTP time sync stopped (WiFi disconnected)");
                 }
             }
         }
@@ -595,7 +635,7 @@ fn handle_provision(
     wifi: &mut BlockingWifi<EspWifi<'static>>,
     wifi_sm: &mut WifiSm,
     creds: &mut Vec<(String, String)>,
-    ap_hostname: &str,
+    hostname: &mut String,
     ap_active: &mut bool,
     dns_server: &mut Option<DnsServer>,
     portal: &Arc<PortalState>,
@@ -603,6 +643,11 @@ fn handle_provision(
     wifi_cfg: &mut wifi_cfg::WifiConfig,
 ) {
     let form = &provision.form;
+
+    // Update hostname from form if provided (fixes hostname propagation bug)
+    if let Some(ref new_hostname) = form.hostname {
+        *hostname = new_hostname.clone();
+    }
 
     // Hash and store the API key (FR-005)
     use reconfigurable_device::captive_portal::ApiKeyAction;
@@ -641,16 +686,16 @@ fn handle_provision(
 
     info!("Provisioning: {} total credentials after update", creds.len());
 
-    // Persist updated config (credentials + API key hash) to NVS (FR-005, FR-013, SC-004, SC-007)
+    // Persist updated config (credentials + hostname + API key hash) to NVS (FR-005, FR-013, SC-004, SC-007)
     wifi_cfg.ssids = creds.clone();
-    wifi_cfg.hostname = ap_hostname.to_string();
+    wifi_cfg.hostname = hostname.clone();
     if !wifi_cfg::save_wifi_config(wifi_nvs, wifi_cfg) {
         warn!("Provisioning: failed to persist WiFi config to NVS");
     }
 
     // Update portal form config so re-renders show the new SSIDs/hostname (SC-004)
     let saved_ssids: Vec<String> = creds.iter().map(|(s, _)| s.clone()).collect();
-    portal.update_form_config(saved_ssids, wifi_cfg.hostname.clone());
+    portal.update_form_config(saved_ssids, hostname.clone());
 
     // Notify state machine of new credentials
     let action = wifi_sm.credentials_updated(creds.len(), start_index);
@@ -661,7 +706,7 @@ fn handle_provision(
             if ssid_index < creds.len() {
                 let (ssid, pass) = &creds[ssid_index];
                 info!("Provisioning: attempting connection to {}", ssid);
-                match wifi_ap::try_connect_sta(wifi, ssid, pass, ap_hostname) {
+                match wifi_ap::try_connect_sta(wifi, ssid, pass, hostname) {
                     Ok(()) => {
                         info!("Provisioning: connected to {}", ssid);
                         wifi_sm.handle_event(WifiEvent::ConnectSuccess);
@@ -886,8 +931,8 @@ fn handle_portal_reconnect(
 
 fn try_connect(wifi: &mut BlockingWifi<EspWifi<'static>>, ssid: &str, pass: &str) -> Result<()> {
     wifi.set_configuration(&Configuration::Client(ClientConfiguration {
-        ssid: ssid.try_into().map_err(|_| anyhow::anyhow!("SSID too long"))?,
-        password: pass.try_into().map_err(|_| anyhow::anyhow!("Password too long"))?,
+        ssid: ssid.try_into().map_err(|_| reconfigurable_device::error::Error::Msg("SSID too long"))?,
+        password: pass.try_into().map_err(|_| reconfigurable_device::error::Error::Msg("Password too long"))?,
         ..Default::default()
     }))?;
 

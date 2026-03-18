@@ -71,10 +71,20 @@ CLAIM_TIMEOUT=240
 . "$SCRIPT_DIR/_claim-wait.sh"
 echo "Claimed $DEVICE_PORT (fd: $DEVICE_FD)"
 
+# ── 1b. Source build-time env vars from .env ──────────────────────────────
+# EOMI_BOARD is needed at build time by build.rs to select board config.
+for _envfile in "$PROJECT_ROOT/.env" "$REPO_ROOT/.env" "${RIG_ROOT:-}/.env"; do
+    if [[ -f "$_envfile" ]] && [[ -z "${EOMI_BOARD:-}" ]]; then
+        _val=$(grep -E '^EOMI_BOARD=' "$_envfile" | head -1 | cut -d= -f2- | tr -d "'\"") || true
+        if [[ -n "$_val" ]]; then export EOMI_BOARD="$_val"; fi
+    fi
+done
+unset _envfile _val
+
 # ── 2. Build firmware ───────────────────────────────────────────────────
 if [[ "$SKIP_BUILD" == false ]]; then
     echo "── Building firmware ──"
-    if ! (cd "$PROJECT_ROOT" && cargo build --features mem-stats); then
+    if ! (cd "$PROJECT_ROOT" && cargo build --no-default-features --features std,esp,gpio,lite-json,scripting,mem-stats); then
         echo "ERROR: firmware build failed" >&2
         exit 1
     fi
@@ -82,8 +92,46 @@ else
     echo "── Skipping build (--skip-build) ──"
 fi
 
-# ── 3. Flash device and start serial capture ────────────────────────────
+# ── 2a. Build OTA binaries (firmware A and B) ─────────────────────────
 FIRMWARE="$PROJECT_ROOT/target/xtensa-esp32s2-espidf/debug/reconfigurable-device"
+FIRMWARE_A_BIN="$PROJECT_ROOT/target/xtensa-esp32s2-espidf/debug/firmware-a.bin"
+FIRMWARE_B_BIN="$PROJECT_ROOT/target/xtensa-esp32s2-espidf/debug/firmware-b.bin"
+BUILD_FEATURES="std,esp,gpio,lite-json,scripting,mem-stats"
+
+echo "── Building OTA binaries ──"
+# Save version "A" (current build) as OTA binary for restore step
+espflash save-image --chip esp32s2 --format esp-idf "$FIRMWARE" "$FIRMWARE_A_BIN"
+gzip -c "$FIRMWARE_A_BIN" > "$FIRMWARE_A_BIN.gz"
+
+# Build version "B" with a different FIRMWARE_VERSION for OTA test
+if ! (cd "$PROJECT_ROOT" && FIRMWARE_VERSION="e2e-ota-test" cargo build \
+    --no-default-features --features "$BUILD_FEATURES"); then
+    echo "ERROR: firmware B build failed" >&2
+    exit 1
+fi
+espflash save-image --chip esp32s2 --format esp-idf "$FIRMWARE" "$FIRMWARE_B_BIN"
+gzip -c "$FIRMWARE_B_BIN" > "$FIRMWARE_B_BIN.gz"
+
+# Rebuild original version "A" to leave the build dir clean
+if ! (cd "$PROJECT_ROOT" && unset FIRMWARE_VERSION && cargo build \
+    --no-default-features --features "$BUILD_FEATURES"); then
+    echo "ERROR: firmware A rebuild failed" >&2
+    exit 1
+fi
+
+export OTA_FIRMWARE_A_GZ="$FIRMWARE_A_BIN.gz"
+export OTA_FIRMWARE_B_GZ="$FIRMWARE_B_BIN.gz"
+echo "OTA firmware A: $OTA_FIRMWARE_A_GZ"
+echo "OTA firmware B: $OTA_FIRMWARE_B_GZ"
+
+# ── 2b. Memory budget check ──────────────────────────────────────────────
+echo "── Memory budget check ──"
+if ! (cd "$PROJECT_ROOT" && cargo test --target x86_64-unknown-linux-gnu --no-default-features --features std,lite-json,scripting --test memory_budget -- --nocapture); then
+    echo "ERROR: memory budget exceeded — aborting before flash" >&2
+    exit 1
+fi
+
+# ── 3. Flash device and start serial capture ────────────────────────────
 echo "── Flashing device on $DEVICE_PORT ──"
 espflash flash --port "$DEVICE_PORT" "$FIRMWARE"
 
@@ -167,7 +215,7 @@ _env_val() {
 }
 
 # Export WIFI_SSID, WIFI_PASS, API_TOKEN from .env if not already set.
-for _key in WIFI_SSID WIFI_PASS API_TOKEN; do
+for _key in WIFI_SSID WIFI_PASS API_TOKEN GPIO_OUT_PATH GPIO_IN_PATH ANALOG_IN_PATH PWM_PATH; do
     if [[ -z "${!_key:-}" ]]; then
         if _val=$(_env_val "$_key"); then
             export "$_key=$_val"

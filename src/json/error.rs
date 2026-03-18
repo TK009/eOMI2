@@ -107,14 +107,16 @@ impl fmt::Display for LiteParseError {
 
 impl std::error::Error for LiteParseError {}
 
-// When both lite-json and omi are available, provide conversion.
-// Currently omi requires the `json` feature which is mutually exclusive with
-// `lite-json`, so this conversion will be enabled once the omi module is
-// decoupled from serde_json (future task).
-#[cfg(feature = "json")]
+// Convert lite-json parse errors into OMI-level ParseError.
+// Available when the omi module is compiled (std + json or lite-json).
+#[cfg(all(feature = "std", feature = "lite-json"))]
 impl From<LiteParseError> for crate::omi::error::ParseError {
     fn from(e: LiteParseError) -> Self {
-        crate::omi::error::ParseError::InvalidJson(e.to_string())
+        use crate::omi::error::ParseError;
+        match e {
+            LiteParseError::MissingField { field, .. } => ParseError::MissingField(field),
+            other => ParseError::InvalidJson(other.to_string()),
+        }
     }
 }
 
@@ -213,5 +215,97 @@ mod tests {
         let c = LiteParseError::UnexpectedEof { pos: Pos::new(6) };
         assert_eq!(a, b);
         assert_ne!(a, c);
+    }
+
+    // -- From<LiteParseError> for ParseError conversion tests --
+
+    #[cfg(all(feature = "std", feature = "lite-json"))]
+    mod from_parse_error {
+        use super::*;
+        use crate::omi::error::ParseError;
+
+        #[test]
+        fn missing_field_maps_directly() {
+            let e = LiteParseError::MissingField { field: "version", pos: Pos::new(0) };
+            let pe: ParseError = e.into();
+            assert_eq!(pe, ParseError::MissingField("version"));
+        }
+
+        #[test]
+        fn unexpected_char_maps_to_invalid_json() {
+            let e = LiteParseError::UnexpectedChar { ch: b'{', pos: Pos::new(3) };
+            let pe: ParseError = e.into();
+            assert!(matches!(pe, ParseError::InvalidJson(ref s) if s.contains("unexpected character")));
+        }
+
+        #[test]
+        fn unexpected_eof_maps_to_invalid_json() {
+            let e = LiteParseError::UnexpectedEof { pos: Pos::new(10) };
+            let pe: ParseError = e.into();
+            assert!(matches!(pe, ParseError::InvalidJson(_)));
+        }
+
+        #[test]
+        fn invalid_escape_maps_to_invalid_json() {
+            let e = LiteParseError::InvalidEscape { pos: Pos::new(1) };
+            let pe: ParseError = e.into();
+            assert!(matches!(pe, ParseError::InvalidJson(_)));
+        }
+
+        #[test]
+        fn invalid_unicode_escape_maps_to_invalid_json() {
+            let e = LiteParseError::InvalidUnicodeEscape { pos: Pos::new(4) };
+            let pe: ParseError = e.into();
+            assert!(matches!(pe, ParseError::InvalidJson(_)));
+        }
+
+        #[test]
+        fn invalid_surrogate_pair_maps_to_invalid_json() {
+            let e = LiteParseError::InvalidSurrogatePair { pos: Pos::new(6) };
+            let pe: ParseError = e.into();
+            assert!(matches!(pe, ParseError::InvalidJson(_)));
+        }
+
+        #[test]
+        fn unterminated_string_maps_to_invalid_json() {
+            let e = LiteParseError::UnterminatedString { pos: Pos::new(0) };
+            let pe: ParseError = e.into();
+            assert!(matches!(pe, ParseError::InvalidJson(_)));
+        }
+
+        #[test]
+        fn invalid_number_maps_to_invalid_json() {
+            let e = LiteParseError::InvalidNumber { pos: Pos::new(2) };
+            let pe: ParseError = e.into();
+            assert!(matches!(pe, ParseError::InvalidJson(_)));
+        }
+
+        #[test]
+        fn invalid_literal_maps_to_invalid_json() {
+            let e = LiteParseError::InvalidLiteral { pos: Pos::new(0) };
+            let pe: ParseError = e.into();
+            assert!(matches!(pe, ParseError::InvalidJson(_)));
+        }
+
+        #[test]
+        fn expected_token_maps_to_invalid_json() {
+            let e = LiteParseError::ExpectedToken { expected: "':'", pos: Pos::new(5) };
+            let pe: ParseError = e.into();
+            assert!(matches!(pe, ParseError::InvalidJson(_)));
+        }
+
+        #[test]
+        fn depth_exceeded_maps_to_invalid_json() {
+            let e = LiteParseError::DepthExceeded { max: 32, pos: Pos::new(0) };
+            let pe: ParseError = e.into();
+            assert!(matches!(pe, ParseError::InvalidJson(_)));
+        }
+
+        #[test]
+        fn trailing_data_maps_to_invalid_json() {
+            let e = LiteParseError::TrailingData { pos: Pos::new(100) };
+            let pe: ParseError = e.into();
+            assert!(matches!(pe, ParseError::InvalidJson(_)));
+        }
     }
 }

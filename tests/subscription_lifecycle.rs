@@ -1,3 +1,4 @@
+#![cfg(feature = "lite-json")]
 //! Integration tests for multi-step subscription lifecycles.
 //!
 //! These tests exercise the full JSON round-trip through the Engine for

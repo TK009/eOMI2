@@ -32,6 +32,10 @@ mod board_config {
         pub chip: String,
         #[serde(default)]
         pub has_temp_sensor: bool,
+        /// GPIO pin connected to an onboard WS2812/NeoPixel LED, if any.
+        /// Firmware drives this pin low at boot to prevent the LED from
+        /// interpreting noise or PWM signals as pixel data.
+        pub neopixel_pin: Option<u8>,
     }
 
     #[derive(Deserialize)]
@@ -163,9 +167,16 @@ mod board_config {
             board.board.chip
         ));
         code.push_str(&format!(
-            "pub const HAS_TEMP_SENSOR: bool = {};\n\n",
+            "pub const HAS_TEMP_SENSOR: bool = {};\n",
             board.board.has_temp_sensor
         ));
+        match board.board.neopixel_pin {
+            Some(pin) => code.push_str(&format!(
+                "pub const NEOPIXEL_PIN: Option<u8> = Some({});\n\n",
+                pin
+            )),
+            None => code.push_str("pub const NEOPIXEL_PIN: Option<u8> = None;\n\n"),
+        }
 
         // GPIO config: &[(pin, mode, name)]
         code.push_str("/// Build-time GPIO pin configurations.\n");
@@ -312,9 +323,23 @@ fn main() {
 
     }
 
+    // --- FIRMWARE_VERSION: default to CARGO_PKG_VERSION, overridable via env (FR-024) ---
+    let firmware_version = std::env::var("FIRMWARE_VERSION")
+        .unwrap_or_else(|_| std::env::var("CARGO_PKG_VERSION").unwrap());
+    println!("cargo:rustc-env=FIRMWARE_VERSION={firmware_version}");
+    println!("cargo:rerun-if-env-changed=FIRMWARE_VERSION");
+
     // --- Build-configurable constants (available in all build profiles) ---
     println!("cargo:rerun-if-env-changed=MAX_WIFI_APS");
     println!("cargo:rerun-if-env-changed=EOMI_HOSTNAME");
+    println!("cargo:rerun-if-env-changed=FIRMWARE_VERSION");
+
+    // FR-024: FIRMWARE_VERSION defaults to CARGO_PKG_VERSION, overridable via env var.
+    let firmware_version = std::env::var("FIRMWARE_VERSION")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| std::env::var("CARGO_PKG_VERSION").unwrap());
+    println!("cargo:rustc-env=FIRMWARE_VERSION={}", firmware_version);
     println!("cargo:rerun-if-env-changed=PERIPHERALS");
 
     // MAX_WIFI_APS: default 3

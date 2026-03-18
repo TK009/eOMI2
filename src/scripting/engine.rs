@@ -102,6 +102,7 @@ impl ScriptEngine {
     }
 
     /// Create an mJS foreign pointer value.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn mk_foreign(&mut self, ptr: *mut std::os::raw::c_void) -> ffi::mjs_val_t {
         unsafe { ffi::mjs_mk_foreign(self.mjs, ptr) }
     }

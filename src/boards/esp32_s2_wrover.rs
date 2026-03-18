@@ -10,7 +10,7 @@
 
 use std::rc::Rc;
 
-use anyhow::anyhow;
+use crate::error::Error;
 use esp_idf_svc::hal::adc::oneshot::config::AdcChannelConfig;
 use esp_idf_svc::hal::adc::oneshot::{AdcChannelDriver, AdcDriver};
 use esp_idf_svc::hal::adc::attenuation::DB_11;
@@ -39,7 +39,7 @@ pub fn init_typed_hal(
     gpio_manager: &mut GpioManager,
     peripheral_manager: &mut PeripheralManager,
     hostname: &str,
-) -> anyhow::Result<()> {
+) -> crate::error::Result<()> {
     let configs = board::gpio_configs();
 
     // --- PWM (LEDC) ---
@@ -72,7 +72,7 @@ fn init_pwm(
     gpio_manager: &mut GpioManager,
     pwm_configs: &[&GpioPinConfig],
     hostname: &str,
-) -> anyhow::Result<()> {
+) -> crate::error::Result<()> {
     if pwm_configs.is_empty() {
         return Ok(());
     }
@@ -132,7 +132,7 @@ fn init_adc(
     gpio_manager: &mut GpioManager,
     adc_configs: &[&GpioPinConfig],
     hostname: &str,
-) -> anyhow::Result<()> {
+) -> crate::error::Result<()> {
     if adc_configs.is_empty() {
         return Ok(());
     }
@@ -160,7 +160,7 @@ fn add_adc_pin(
     adc_driver: Rc<AdcDriver<'static, ADC1>>,
     pin_num: u8,
     path: String,
-) -> anyhow::Result<()> {
+) -> crate::error::Result<()> {
     use esp_idf_svc::hal::gpio::*;
 
     // Macro to reduce repetition for each ADC1-capable pin.
@@ -176,10 +176,10 @@ fn add_adc_pin(
                     }
                 )+
                 _ => {
-                    return Err(anyhow!(
+                    return Err(Error::Owned(format!(
                         "GPIO{} is not ADC1-capable on ESP32-S2 (valid: GPIO1-GPIO10)",
                         pin_num
-                    ));
+                    )));
                 }
             }
         };
@@ -202,7 +202,7 @@ fn init_peripherals(
     uart1: UART1,
     peripheral_manager: &mut PeripheralManager,
     hostname: &str,
-) -> anyhow::Result<()> {
+) -> crate::error::Result<()> {
     use crate::gpio::peripheral::i2c::{I2cBus, I2cConfig2};
     use crate::gpio::peripheral::uart::{UartBus, UartConfig};
 
@@ -229,7 +229,7 @@ fn init_peripherals(
                     let sda = unsafe { AnyIOPin::new(sda as i32) };
                     let scl = unsafe { AnyIOPin::new(scl as i32) };
                     let config = I2cConfig2::new(pcfg.name.clone());
-                    let bus = I2cBus::new(i2c0, sda, scl, &device_path, config)?;
+                    let bus = I2cBus::new(&device_path, &config, i2c0, sda, scl)?;
                     peripheral_manager.add_i2c(bus);
                     i2c_used = true;
                     info!("I2C bus initialized: {}", pcfg.name);
@@ -250,7 +250,7 @@ fn init_peripherals(
                     let rx = unsafe { AnyIOPin::new(rx as i32) };
                     let tx = unsafe { AnyIOPin::new(tx as i32) };
                     let config = UartConfig::new(pcfg.name.clone());
-                    let bus = UartBus::new(uart1, tx, rx, &device_path, config)?;
+                    let bus = UartBus::new(&device_path, &config, uart1, tx, rx)?;
                     peripheral_manager.add_uart(bus);
                     uart_used = true;
                     info!("UART bus initialized: {}", pcfg.name);

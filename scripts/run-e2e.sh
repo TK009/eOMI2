@@ -95,7 +95,7 @@ echo "Claimed DUT: $DUT_PORT (fd: $DUT_FD)"
 unset DEVICE_PORT DEVICE_FD
 echo "── Claiming bridge USB device ──"
 CLAIM_TIMEOUT=60
-if . "$SCRIPT_DIR/_claim-wait.sh" 2>/dev/null; then
+if . "$SCRIPT_DIR/_claim-wait.sh"; then
     BRIDGE_PORT="$DEVICE_PORT"
     BRIDGE_FD="$DEVICE_FD"
     HAS_BRIDGE=true

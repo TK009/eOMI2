@@ -6,7 +6,7 @@
 use std::io::{BufRead, BufReader, Write as _};
 
 use embedded_svc::http::client::Client as HttpClient;
-use embedded_svc::io::{Read as EmbRead, Write as EmbWrite};
+use embedded_svc::io::{Read as EmbRead, Write as _};
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::hal::peripherals::Peripherals;
 use esp_idf_svc::http::client::{Configuration as HttpConfig, EspHttpConnection};
@@ -129,7 +129,9 @@ fn cmd_connect(line: &str, wifi: &mut BlockingWifi<EspWifi<'static>>) {
         ..Default::default()
     };
 
-    wifi.set_configuration(&Configuration::Client(conf)).unwrap();
+    if let Err(e) = wifi.set_configuration(&Configuration::Client(conf)) {
+        return respond_err(&format!("set config failed: {}", e));
+    }
 
     if let Err(e) = wifi.connect() {
         return respond_err(&format!("connect failed: {}", e));
@@ -181,6 +183,7 @@ fn cmd_http(line: &str) {
     };
     let body = json_str(line, "body").unwrap_or_default();
     let content_type = json_str(line, "content_type").unwrap_or_default();
+    let authorization = json_str(line, "authorization").unwrap_or_default();
 
     let config = HttpConfig {
         buffer_size: Some(2048),
@@ -196,16 +199,21 @@ fn cmd_http(line: &str) {
 
     let mut client = HttpClient::wrap(conn);
 
+    // Build headers list from optional fields.
+    let mut hdrs: Vec<(&str, &str)> = Vec::new();
+    if !content_type.is_empty() {
+        hdrs.push(("Content-Type", &content_type));
+    }
+    if !authorization.is_empty() {
+        hdrs.push(("Authorization", &authorization));
+    }
+
     let result = match method.as_str() {
-        "GET" => client.get(&url).and_then(|r| r.submit()),
+        "GET" => client.request(embedded_svc::http::Method::Get, &url, &hdrs)
+            .and_then(|r| r.submit()),
         "POST" => {
-            let headers = if !content_type.is_empty() {
-                vec![("Content-Type", content_type.as_str())]
-            } else {
-                vec![]
-            };
             client
-                .post(&url, &headers)
+                .post(&url, &hdrs)
                 .and_then(|mut r| {
                     if !body.is_empty() {
                         r.write_all(body.as_bytes())?;
@@ -281,15 +289,28 @@ fn cmd_http(line: &str) {
 // ---------------------------------------------------------------------------
 
 /// Extract a string value for a given key from a JSON object string.
+/// Only matches keys at object boundaries (after `{` or `,`), not inside values.
 fn json_str(json: &str, key: &str) -> Option<String> {
-    // Look for "key":"value" or "key": "value"
     let pattern = format!("\"{}\"", key);
-    let idx = json.find(&pattern)?;
-    let rest = &json[idx + pattern.len()..];
-    // Skip optional whitespace and colon
-    let rest = rest.trim_start();
-    let rest = rest.strip_prefix(':')?;
-    let rest = rest.trim_start();
+    let mut search_from = 0;
+    loop {
+        let idx = json[search_from..].find(&pattern)?;
+        let abs_idx = search_from + idx;
+        // Verify this is a key position: preceded by `{` or `,` (ignoring whitespace)
+        let before = json[..abs_idx].trim_end();
+        if before.ends_with('{') || before.ends_with(',') {
+            let rest = &json[abs_idx + pattern.len()..];
+            let rest = rest.trim_start();
+            if let Some(rest) = rest.strip_prefix(':') {
+                let rest = rest.trim_start();
+                return parse_json_string_value(rest);
+            }
+        }
+        search_from = abs_idx + 1;
+    }
+}
+
+fn parse_json_string_value(rest: &str) -> Option<String> {
     if rest.starts_with('"') {
         // String value — parse until unescaped quote
         let rest = &rest[1..];

@@ -74,17 +74,21 @@ class SerialBridge:
     def status(self):
         return self.send_command({"cmd": "status"})
 
-    def http_get(self, url, timeout=15):
-        return self.send_command(
-            {"cmd": "http", "method": "GET", "url": url}, timeout=timeout
-        )
+    def http_get(self, url, timeout=15, authorization=""):
+        cmd = {"cmd": "http", "method": "GET", "url": url}
+        if authorization:
+            cmd["authorization"] = authorization
+        return self.send_command(cmd, timeout=timeout)
 
-    def http_post(self, url, body="", content_type="", timeout=15):
+    def http_post(self, url, body="", content_type="", timeout=15,
+                  authorization=""):
         cmd = {"cmd": "http", "method": "POST", "url": url}
         if body:
             cmd["body"] = body
         if content_type:
             cmd["content_type"] = content_type
+        if authorization:
+            cmd["authorization"] = authorization
         return self.send_command(cmd, timeout=timeout)
 
     def close(self):

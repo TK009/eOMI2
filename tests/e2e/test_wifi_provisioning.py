@@ -99,7 +99,7 @@ def wait_for_portal(bridge, timeout=PORTAL_BOOT_TIMEOUT):
             resp = bridge.http_get(f"{PORTAL_URL}/", timeout=5)
             if resp.get("status") == 200 and "Device Setup" in resp.get("body", ""):
                 return
-        except Exception:
+        except (RuntimeError, TimeoutError, OSError):
             pass
         time.sleep(1)
     raise TimeoutError(f"Portal did not become reachable within {timeout}s")
@@ -155,7 +155,7 @@ def poll_connection_status(bridge, target_state, timeout=30):
             last = get_portal_status(bridge)
             if last.get("state") == target_state:
                 return last
-        except Exception:
+        except (RuntimeError, TimeoutError, OSError):
             pass
         time.sleep(2)
     raise TimeoutError(
@@ -186,7 +186,7 @@ def factory_reset_to_portal(device_port, bridge):
     # Connect bridge to the DUT's setup AP
     try:
         bridge.disconnect()
-    except Exception:
+    except (RuntimeError, TimeoutError, OSError):
         pass
     time.sleep(2)  # Give the DUT time to start its soft-AP
     bridge.connect("setup-eOMI")
@@ -432,6 +432,7 @@ class TestApiDuringProvisioning:
 
     def test_omi_write_during_portal(self, bridge, token):
         """OMI write requests work while in provisioning mode."""
+        auth = f"Bearer {token}"
         headers_body = json.dumps({
             "omi": "1.0", "ttl": 0,
             "write": {"path": "/Test/Portal", "v": "during-setup"},
@@ -440,6 +441,7 @@ class TestApiDuringProvisioning:
             f"{PORTAL_URL}/omi",
             body=headers_body,
             content_type="application/json",
+            authorization=auth,
         )
         assert resp["status"] == 200
         data = json.loads(resp.get("body", "{}"))
@@ -523,6 +525,6 @@ class TestPortalAutoClose:
                     f"Saved SSID '{wifi_ssid}' not in scan results — "
                     "device may have already auto-reconnected and left portal mode"
                 )
-        except Exception:
+        except (RuntimeError, TimeoutError, OSError):
             # Portal may already be closed (device auto-reconnected) — that's OK
             pass

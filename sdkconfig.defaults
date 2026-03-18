@@ -34,16 +34,15 @@ CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 # OTA: enable app rollback support
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
-# ---------- mbedtls trimming (no TLS used — HTTP only) ----------
-# Disable TLS protocol support entirely; device uses plain HTTP
-CONFIG_MBEDTLS_TLS_CLIENT=n
-CONFIG_MBEDTLS_TLS_SERVER=n
+# ---------- mbedtls trimming ----------
+# Disable WiFi Enterprise (not needed; saves code that pulls extra TLS)
+CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT=n
 
 # No certificate bundle needed (saves ~60-100KB flash)
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
 
-# Disable unused cipher suites and key exchanges
-CONFIG_MBEDTLS_KEY_EXCHANGE_RSA=n
+# Keep only RSA key exchange (cheapest single suite that satisfies esp-tls)
+CONFIG_MBEDTLS_KEY_EXCHANGE_RSA=y
 CONFIG_MBEDTLS_KEY_EXCHANGE_DHE_RSA=n
 CONFIG_MBEDTLS_KEY_EXCHANGE_ELLIPTIC_CURVE=n
 CONFIG_MBEDTLS_KEY_EXCHANGE_ECDHE_RSA=n
@@ -56,8 +55,7 @@ CONFIG_MBEDTLS_RC4_DISABLED=y
 CONFIG_MBEDTLS_CCM_C=n
 CONFIG_MBEDTLS_GCM_C=n
 
-# Disable unused hash/MAC not needed without TLS
+# Disable unused ECC (not needed with RSA-only key exchange)
 CONFIG_MBEDTLS_ECP_C=n
 CONFIG_MBEDTLS_ECDH_C=n
 CONFIG_MBEDTLS_ECDSA_C=n
-CONFIG_MBEDTLS_RSA_C=n

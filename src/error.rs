@@ -42,6 +42,13 @@ impl From<esp_idf_svc::sys::EspError> for Error {
     }
 }
 
+#[cfg(feature = "esp")]
+impl From<esp_idf_svc::hal::io::EspIOError> for Error {
+    fn from(e: esp_idf_svc::hal::io::EspIOError) -> Self {
+        Error::Esp(e.0)
+    }
+}
+
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         Error::Io(e)
@@ -57,6 +64,12 @@ impl From<&'static str> for Error {
 impl From<String> for Error {
     fn from(s: String) -> Self {
         Error::Owned(s)
+    }
+}
+
+impl From<crate::odf::TreeError> for Error {
+    fn from(e: crate::odf::TreeError) -> Self {
+        Error::Owned(e.to_string())
     }
 }
 

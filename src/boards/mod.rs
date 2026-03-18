@@ -92,7 +92,7 @@ pub fn init_board(
         use esp_idf_svc::hal::gpio::{AnyIOPin, PinDriver, Output};
         let pin = unsafe { AnyIOPin::new(pin_num as i32) };
         let mut driver = PinDriver::<_, Output>::output(pin)
-            .map_err(|e| anyhow::anyhow!("neopixel pin GPIO{} init failed: {}", pin_num, e))?;
+            .map_err(|e| format!("neopixel pin GPIO{} init failed: {}", pin_num, e))?;
         driver.set_low().ok();
         // Leak the driver so the pin stays driven low for the lifetime of the
         // firmware. The WS2812 data line must not float.

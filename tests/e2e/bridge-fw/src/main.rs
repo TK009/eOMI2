@@ -27,6 +27,17 @@ fn main() {
     let sysloop = EspSystemEventLoop::take().unwrap();
     let nvs = EspDefaultNvsPartition::take().unwrap();
 
+    // Turn off the onboard WS2812 RGB LED (GPIO 18 on Saola-1 boards).
+    // Set output LOW *before* enabling output direction to avoid the glitch
+    // where PinDriver::output() enables the driver first, giving the WS2812
+    // time to latch a white pixel.
+    unsafe {
+        use esp_idf_svc::sys::{gpio_reset_pin, gpio_set_level, gpio_set_direction, gpio_mode_t_GPIO_MODE_OUTPUT};
+        gpio_reset_pin(18);
+        gpio_set_level(18, 0);
+        gpio_set_direction(18, gpio_mode_t_GPIO_MODE_OUTPUT);
+    }
+
     let mut wifi = BlockingWifi::wrap(
         EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs)).unwrap(),
         sysloop,

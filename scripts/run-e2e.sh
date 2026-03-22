@@ -123,6 +123,8 @@ done
 unset _envfile _val
 
 # ── 2. Build firmware ───────────────────────────────────────────────────
+BUILD_FEATURES="std,esp,gpio,lite-json,scripting,mem-stats,secure_onboarding"
+
 # Workaround: esp-idf-sys's cmake resolves partitions.csv relative to its own
 # output directory.  Copy it so builds succeed after target/ changes.
 for _dir in "$PROJECT_ROOT"/target/xtensa-esp32s2-espidf/*/build/esp-idf-sys-*/out/; do
@@ -131,7 +133,7 @@ done
 
 if [[ "$SKIP_BUILD" == false ]]; then
     echo "── Building firmware ──"
-    if ! (cd "$PROJECT_ROOT" && cargo build --no-default-features --features std,esp,gpio,lite-json,scripting,mem-stats); then
+    if ! (cd "$PROJECT_ROOT" && cargo build --no-default-features --features "$BUILD_FEATURES"); then
         echo "ERROR: firmware build failed" >&2
         exit 1
     fi
@@ -143,7 +145,6 @@ fi
 FIRMWARE="$PROJECT_ROOT/target/xtensa-esp32s2-espidf/debug/reconfigurable-device"
 FIRMWARE_A_BIN="$PROJECT_ROOT/target/xtensa-esp32s2-espidf/debug/firmware-a.bin"
 FIRMWARE_B_BIN="$PROJECT_ROOT/target/xtensa-esp32s2-espidf/debug/firmware-b.bin"
-BUILD_FEATURES="std,esp,gpio,lite-json,scripting,mem-stats"
 
 echo "── Building OTA binaries ──"
 # Save version "A" (current build) as OTA binary for restore step
@@ -254,6 +255,20 @@ if [[ "$HEALTHY" != true ]]; then
     exit 1
 fi
 echo "Device is healthy."
+
+# ── 5b. Flash joiner device for WSOP tests ─────────────────────────────
+# If a bridge device is available, flash it with the same eOMI firmware
+# (not the bridge firmware) so it can act as a WSOP joiner. The pytest
+# WSOP tests handle NVS erase/reboot themselves.
+if [[ "$HAS_BRIDGE" == true ]]; then
+    echo "── Flashing joiner (WSOP) on $BRIDGE_PORT ──"
+    if espflash flash --port "$BRIDGE_PORT" "$FIRMWARE"; then
+        echo "Joiner firmware flashed successfully"
+        export JOINER_PORT="$BRIDGE_PORT"
+    else
+        echo "WARNING: joiner flash failed — WSOP tests will skip" >&2
+    fi
+fi
 
 # ── 6. Run pytest ────────────────────────────────────────────────────────
 echo "── Running e2e tests ──"

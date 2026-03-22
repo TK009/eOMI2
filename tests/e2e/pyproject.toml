@@ -13,4 +13,5 @@ markers = [
     "provisioning: WiFi provisioning flow tests (portal, form submit, reconnect)",
     "mdns: mDNS and DNS-SD discovery tests",
     "ota: OTA firmware update tests (requires OTA_FIRMWARE_A_GZ and OTA_FIRMWARE_B_GZ)",
+    "wsop: WSOP secure onboarding tests (requires two devices: gateway + joiner)",
 ]

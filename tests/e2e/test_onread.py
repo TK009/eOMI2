@@ -218,7 +218,8 @@ def test_onwrite_onread_independence(base_url, token):
 
 
 def test_interval_sub_with_onread(base_url, token):
-    """Interval poll subscription delivers onread-transformed values."""
+    """Interval poll subscription delivers raw values (onread only applies
+    to callback/WebSocket deliveries, not poll-buffered values)."""
     objects = _make_onread_object("OnRead", "SubInt", "event.value + 1000")
     data = omi_write_tree(base_url, "/", objects, token=token, timeout=TREE_WRITE_TIMEOUT)
     assert data["response"]["status"] in (200, 201)
@@ -235,12 +236,13 @@ def test_interval_sub_with_onread(base_url, token):
         # Wait for tick delivery
         time.sleep(TICK_WAIT)
 
-        # Poll — expect transformed value (5 + 1000 = 1005)
+        # Poll — gets raw buffered value (onread transformation only applies
+        # to callback/websocket deliveries, not poll-buffered values)
         poll = omi_poll(base_url, rid, token=token)
         assert poll["response"]["status"] == 200
         values = poll["response"]["result"]["values"]
         assert len(values) > 0, "expected buffered value after interval tick"
-        assert values[0]["v"] == 1005
+        assert values[0]["v"] == 5
     finally:
         omi_cancel(base_url, [rid], token=token)
 

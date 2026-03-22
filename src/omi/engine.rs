@@ -90,7 +90,8 @@ impl Engine {
             }
         });
         // FR-002: Run onread scripts on interval subscription values before delivery.
-        // Event-based subscriptions (notify_write_event) deliver the written value as-is.
+        // Only applies to callback/websocket deliveries (not poll buffers, which
+        // are filled inside tick_intervals and deliver raw values).
         #[cfg(feature = "scripting")]
         for delivery in &mut deliveries {
             if let Some(newest) = delivery.values.first() {

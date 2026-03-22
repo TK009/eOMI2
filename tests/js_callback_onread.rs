@@ -109,7 +109,7 @@ fn interval_js_callback_runs_onread_on_subscribed_value() {
     let cb_url = install_callback_script(
         &mut e,
         "handler",
-        "odf.writeItem(event.values[0].value, '/Dev/Result');",
+        "odf.writeItem(event.value, '/Dev/Result');",
     );
 
     // Create interval subscription with javascript:// callback
@@ -151,7 +151,7 @@ fn interval_js_callback_receives_onread_transformed_value_in_script() {
     let cb_url = install_callback_script(
         &mut e,
         "capture",
-        "odf.writeItem(event.values[0].value, '/Dev/Captured');",
+        "odf.writeItem(event.value, '/Dev/Captured');",
     );
 
     // Create interval subscription
@@ -213,7 +213,7 @@ fn event_js_callback_does_not_run_onread() {
     let cb_url = install_callback_script(
         &mut e,
         "handler",
-        "odf.writeItem(event.values[0].value, '/Dev/Result');",
+        "odf.writeItem(event.value, '/Dev/Result');",
     );
 
     // Create event subscription with javascript:// callback
@@ -261,7 +261,7 @@ fn event_js_callback_delivers_raw_value_to_script() {
     let cb_url = install_callback_script(
         &mut e,
         "capture",
-        "odf.writeItem(event.values[0].value, '/Dev/Captured');",
+        "odf.writeItem(event.value, '/Dev/Captured');",
     );
 
     // Event subscription

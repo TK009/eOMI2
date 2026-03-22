@@ -285,7 +285,7 @@ fn callback_writeitem_triggers_onwrite_script() {
     store_callback_script(
         &mut e,
         "chain_start",
-        "odf.writeItem(event.values[0].value, '/Chain/A');",
+        "odf.writeItem(event.value, '/Chain/A');",
     );
     create_item(&mut e, "/Chain/A", 0.0);
     create_item(&mut e, "/Chain/B", 0.0);
@@ -331,7 +331,7 @@ fn callback_writeitem_triggers_event_subscription() {
     store_callback_script(
         &mut e,
         "ev_chain",
-        "odf.writeItem(event.values[0].value * 3, '/Chain/Mid');",
+        "odf.writeItem(event.value * 3, '/Chain/Mid');",
     );
     create_item(&mut e, "/Chain/Mid", 0.0);
     create_item(&mut e, "/Sensor/EvSrc", 0.0);
@@ -515,7 +515,7 @@ fn self_monitoring_pattern_reads_own_value() {
     store_callback_script(
         &mut e,
         "self_mon",
-        "let cur = odf.readItem('/Monitor/Sensor/value'); let avg = (cur + event.values[0].value) / 2; odf.writeItem(avg, '/Monitor/Avg');",
+        "let cur = odf.readItem('/Monitor/Sensor/value'); let avg = (cur + event.value) / 2; odf.writeItem(avg, '/Monitor/Avg');",
     );
     create_item(&mut e, "/Monitor/Sensor", 100.0);
     create_item(&mut e, "/Monitor/Avg", 0.0);
@@ -662,7 +662,7 @@ fn callback_handles_null_value_in_delivery() {
     store_callback_script(
         &mut e,
         "null_handler",
-        "let v = event.values[0].value; if (v === null) { odf.writeItem(-1, '/Target/NullResult'); } else { odf.writeItem(v, '/Target/NullResult'); }",
+        "let v = event.value; if (v === null) { odf.writeItem(-1, '/Target/NullResult'); } else { odf.writeItem(v, '/Target/NullResult'); }",
     );
     create_item(&mut e, "/Target/NullResult", 0.0);
 

@@ -91,8 +91,8 @@ fn event_sub_js_callback_fires_on_write() {
     let mut e = engine();
 
     // Script copies the first delivered value to /Target/EventDst
-    // Callback event format: event.values[0].value
-    store_callback_script(&mut e, "on_event", "odf.writeItem(event.values[0].value, '/Target/EventDst');");
+    // Callback event format: event.value
+    store_callback_script(&mut e, "on_event", "odf.writeItem(event.value, '/Target/EventDst');");
     create_item(&mut e, "/Target/EventDst", 0.0);
     create_item(&mut e, "/Sensor/Temp", 0.0);
 
@@ -140,7 +140,7 @@ fn event_sub_js_callback_receives_correct_values() {
     let mut e = engine();
 
     // Script writes the value multiplied by 2 to verify it receives the actual value
-    store_callback_script(&mut e, "double", "odf.writeItem(event.values[0].value * 2, '/Target/Doubled');");
+    store_callback_script(&mut e, "double", "odf.writeItem(event.value * 2, '/Target/Doubled');");
     create_item(&mut e, "/Target/Doubled", 0.0);
     create_item(&mut e, "/Sensor/Input", 0.0);
 
@@ -180,7 +180,7 @@ fn interval_sub_js_callback_fires_on_tick() {
     let mut e = engine();
 
     // Script copies the first delivered value to a destination
-    store_callback_script(&mut e, "on_tick", "odf.writeItem(event.values[0].value, '/Target/TickDst');");
+    store_callback_script(&mut e, "on_tick", "odf.writeItem(event.value, '/Target/TickDst');");
     create_item(&mut e, "/Target/TickDst", 0.0);
     create_item(&mut e, "/Sensor/Periodic", 55.0);
 
@@ -292,7 +292,7 @@ fn interval_sub_js_callback_ttl_expiry_stops_ticks() {
     let mut e = engine();
 
     // Script writes the delivered value to target
-    store_callback_script(&mut e, "tick_expired", "odf.writeItem(event.values[0].value, '/Target/TickExpired');");
+    store_callback_script(&mut e, "tick_expired", "odf.writeItem(event.value, '/Target/TickExpired');");
     create_item(&mut e, "/Target/TickExpired", 0.0);
     create_item(&mut e, "/Sensor/ShortLived", 77.0);
 
@@ -380,7 +380,7 @@ fn js_callback_delivery_has_callback_target_not_http() {
 fn js_and_http_callbacks_coexist_independently() {
     let mut e = engine();
 
-    store_callback_script(&mut e, "js_side", "odf.writeItem(event.values[0].value, '/Target/JsSide');");
+    store_callback_script(&mut e, "js_side", "odf.writeItem(event.value, '/Target/JsSide');");
     create_item(&mut e, "/Target/JsSide", 0.0);
     create_item(&mut e, "/Sensor/Dual", 0.0);
 
@@ -570,7 +570,7 @@ fn js_callback_cascade_triggers_event_subscription() {
     let mut e = engine();
 
     // Script writes value * 10 to /Cascade/Mid
-    store_callback_script(&mut e, "cascade_a", "odf.writeItem(event.values[0].value * 10, '/Cascade/Mid');");
+    store_callback_script(&mut e, "cascade_a", "odf.writeItem(event.value * 10, '/Cascade/Mid');");
     create_item(&mut e, "/Cascade/Src", 0.0);
     create_item(&mut e, "/Cascade/Mid", 0.0);
 

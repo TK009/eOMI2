@@ -97,16 +97,18 @@ pub unsafe fn omi_to_mjs_element(mjs: *mut ffi::mjs, item: &InfoItem) -> ffi::mj
 }
 
 /// Build a JS event object for subscription delivery:
-/// `{ values: [{value, path, timestamp}, ...] }`.
+/// `{ value, path, timestamp, values: [{value, path, timestamp}, ...] }`.
 ///
 /// Each entry in the `values` array corresponds to a `Value` from the
 /// delivery. The `path` is the same for all entries (single InfoItem
 /// subscriptions) — callers with Object subscriptions should invoke this
 /// once per InfoItem with the appropriate path.
 ///
-/// - `value`: the `OmiValue` converted to JS (null if the ring buffer was empty)
-/// - `path`: the O-DF path string
-/// - `timestamp`: the timestamp as a number, or null if absent
+/// Top-level `value`, `path`, and `timestamp` are convenience aliases for
+/// `values[0].value` etc. They always correspond to the first (newest)
+/// delivery entry. Scripts should prefer `event.value` over
+/// `event.values[0].value` because mJS numeric array indexing is broken
+/// on xtensa targets (ESP32).
 ///
 /// # Safety
 /// `mjs` must be a valid mJS instance pointer.
@@ -144,6 +146,26 @@ pub unsafe fn delivery_to_mjs_event(
 
     let (n, l) = mjs_name!("values");
     ffi::mjs_set(mjs, event, n, l, arr);
+
+    // Set top-level convenience aliases from the first entry.
+    // Scripts should prefer event.value over event.values[0].value
+    // because mJS numeric array indexing is broken on xtensa (ESP32).
+    if let Some(first) = values.first() {
+        let js_val = omi_to_mjs(mjs, &first.v);
+        let (n, l) = mjs_name!("value");
+        ffi::mjs_set(mjs, event, n, l, js_val);
+
+        let js_path = ffi::mjs_mk_string(mjs, path.as_ptr() as *const _, path.len(), 1);
+        let (n, l) = mjs_name!("path");
+        ffi::mjs_set(mjs, event, n, l, js_path);
+
+        let js_ts = match first.t {
+            Some(t) => ffi::mjs_mk_number(mjs, t),
+            None => ffi::mjs_mk_null(),
+        };
+        let (n, l) = mjs_name!("timestamp");
+        ffi::mjs_set(mjs, event, n, l, js_ts);
+    }
 
     event
 }
@@ -462,23 +484,26 @@ mod tests {
                 let (n, l) = mjs_name!("ev");
                 ffi::mjs_set(mjs, global, n, l, event);
 
-                // Check values[0].value
+                // Check top-level convenience properties (preferred API)
                 let mut res: ffi::mjs_val_t = 0;
-                let src = std::ffi::CString::new("ev.values[0].value").unwrap();
+                let src = std::ffi::CString::new("ev.value").unwrap();
                 ffi::mjs_exec(mjs, src.as_ptr(), &mut res);
                 assert_eq!(ffi::mjs_get_double(mjs, res), 22.5);
 
-                // Check values[0].path
-                let src = std::ffi::CString::new("ev.values[0].path").unwrap();
+                let src = std::ffi::CString::new("ev.path").unwrap();
                 ffi::mjs_exec(mjs, src.as_ptr(), &mut res);
                 assert_ne!(ffi::mjs_is_string(res), 0);
                 let omi = mjs_to_omi(mjs, res);
                 assert_eq!(omi, OmiValue::Str("/Dev/Temp".into()));
 
-                // Check values[0].timestamp
-                let src = std::ffi::CString::new("ev.values[0].timestamp").unwrap();
+                let src = std::ffi::CString::new("ev.timestamp").unwrap();
                 ffi::mjs_exec(mjs, src.as_ptr(), &mut res);
                 assert_eq!(ffi::mjs_get_double(mjs, res), 1000.0);
+
+                // Also verify values[0] array access (works on x86, broken on xtensa)
+                let src = std::ffi::CString::new("ev.values[0].value").unwrap();
+                ffi::mjs_exec(mjs, src.as_ptr(), &mut res);
+                assert_eq!(ffi::mjs_get_double(mjs, res), 22.5);
             });
         }
     }

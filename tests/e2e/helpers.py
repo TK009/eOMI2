@@ -9,7 +9,7 @@ import requests
 
 REQUEST_TIMEOUT = 15  # seconds – ESP32-S2 full tree reads can take 7+ seconds
 OTA_TIMEOUT = 120  # seconds – generous for ~1.2 MB compressed over LAN
-TREE_WRITE_TIMEOUT = 30  # seconds – tree writes with metadata need more time
+TREE_WRITE_TIMEOUT = 45  # seconds – tree writes with metadata need more time on ESP32-S2
 WS_TIMEOUT = 10  # seconds – WebSocket operation timeout
 DEVICE_RETRIES = 3  # retry count for transient connection resets (ESP32 has limited sockets)
 

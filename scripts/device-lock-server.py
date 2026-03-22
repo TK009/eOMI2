@@ -8,6 +8,7 @@ Usage:
     python3 scripts/device-lock-server.py                    # default :7357
     python3 scripts/device-lock-server.py --port 8080        # custom port
     python3 scripts/device-lock-server.py --ttl 120          # 2-min lease
+    python3 scripts/device-lock-server.py --no-tui           # plain log output
 
 Endpoints:
     POST   /lock                  Claim a device
@@ -18,9 +19,13 @@ Endpoints:
 """
 
 import argparse
+import datetime
 import glob
 import json
+import os
 import random
+import shutil
+import sys
 import threading
 import time
 import uuid
@@ -140,11 +145,12 @@ class LockManager:
             print(f"[reaper] expired lock {lid} on {info['device']}")
 
 
-def make_handler(manager: LockManager):
+def make_handler(manager: LockManager, quiet: bool = False):
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
-            print(f"[http] {self.address_string()} {format % args}")
+            if not quiet:
+                print(f"[http] {self.address_string()} {format % args}")
 
         def _send_json(self, code: int, data: dict):
             body = json.dumps(data).encode()
@@ -222,10 +228,130 @@ def reaper_loop(manager: LockManager, interval: int = 10):
         manager.list_devices()
 
 
+# ── TUI ────────────────────────────────────────────────────────────────────
+
+# ANSI helpers
+CSI = "\033["
+HIDE_CURSOR = f"{CSI}?25l"
+SHOW_CURSOR = f"{CSI}?25h"
+CLEAR_SCREEN = f"{CSI}2J{CSI}H"
+BOLD = f"{CSI}1m"
+DIM = f"{CSI}2m"
+RESET = f"{CSI}0m"
+GREEN = f"{CSI}32m"
+RED = f"{CSI}31m"
+YELLOW = f"{CSI}33m"
+CYAN = f"{CSI}36m"
+
+
+def _bar(fraction: float, width: int) -> str:
+    """Render a progress-style bar: [████░░░░]"""
+    filled = int(fraction * width)
+    empty = width - filled
+    color = GREEN if fraction < 0.6 else YELLOW if fraction < 0.9 else RED
+    return f"{DIM}[{RESET}{color}{'█' * filled}{'░' * empty}{RESET}{DIM}]{RESET}"
+
+
+def _fmt_duration(seconds: float) -> str:
+    """Format seconds as human-readable duration."""
+    if seconds < 0:
+        return "expired"
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    if h:
+        return f"{h}h{m:02d}m"
+    if m:
+        return f"{m}m{s:02d}s"
+    return f"{s}s"
+
+
+def _render_frame(manager: LockManager, port: int, ttl: int) -> str:
+    """Render one frame of the TUI status display."""
+    now = time.time()
+    data = manager.list_devices()
+    devices = data["devices"]
+    total = data["total"]
+    locked = data["locked"]
+    free = data["free"]
+
+    cols = shutil.get_terminal_size((80, 24)).columns
+    lines: list[str] = []
+
+    # Header
+    ts = datetime.datetime.now().strftime("%H:%M:%S")
+    title = f" Device Lock Server :{port} "
+    lines.append(f"{BOLD}{CYAN}{title}{RESET}{DIM} TTL={ttl}s  {ts}{RESET}")
+    lines.append(f"{DIM}{'─' * min(cols, 72)}{RESET}")
+
+    # Summary bar
+    frac = locked / total if total else 0
+    bar = _bar(frac, 20)
+    lines.append(f"  {bar}  {BOLD}{free}{RESET} free  {BOLD}{locked}{RESET} locked  {DIM}({total} total){RESET}")
+    lines.append("")
+
+    if not devices:
+        lines.append(f"  {DIM}No USB serial devices found{RESET}")
+    else:
+        # Column header
+        lines.append(f"  {DIM}{'DEVICE':<20} {'STATUS':<8} {'HOLDER':<32} {'TTL':>6}  {'HELD':>8}{RESET}")
+        lines.append(f"  {DIM}{'─' * 20} {'─' * 8} {'─' * 32} {'─' * 6}  {'─' * 8}{RESET}")
+
+        for d in devices:
+            dev = d["device"]
+            short = dev.split("/")[-1]
+            if d["status"] == "free":
+                lines.append(f"  {short:<20} {GREEN}{'FREE':<8}{RESET}")
+            else:
+                h = d.get("holder", {})
+                holder_parts = []
+                if h.get("host"):
+                    holder_parts.append(str(h["host"]))
+                if h.get("container") and h["container"] != "none" and h["container"] != h.get("host"):
+                    holder_parts.append(f"ctr:{h['container']}")
+                if h.get("pid"):
+                    holder_parts.append(f"pid:{h['pid']}")
+                holder_str = " ".join(holder_parts)[:32]
+
+                expires = d.get("expires_at", now)
+                ttl_left = expires - now
+                ttl_str = _fmt_duration(ttl_left)
+                ttl_color = GREEN if ttl_left > 20 else YELLOW if ttl_left > 5 else RED
+
+                acquired = d.get("acquired_at", now)
+                held_str = _fmt_duration(now - acquired)
+
+                lines.append(
+                    f"  {short:<20} {RED}{'LOCKED':<8}{RESET} "
+                    f"{holder_str:<32} {ttl_color}{ttl_str:>6}{RESET}  {DIM}{held_str:>8}{RESET}"
+                )
+
+    lines.append("")
+    lines.append(f"  {DIM}Ctrl-C to quit{RESET}")
+    return "\n".join(lines)
+
+
+def tui_loop(manager: LockManager, port: int, ttl: int):
+    """Run the TUI status display, refreshing every second."""
+    sys.stdout.write(HIDE_CURSOR)
+    sys.stdout.flush()
+    try:
+        while True:
+            frame = _render_frame(manager, port, ttl)
+            sys.stdout.write(CLEAR_SCREEN + frame)
+            sys.stdout.flush()
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        sys.stdout.write(SHOW_CURSOR + "\n")
+        sys.stdout.flush()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Device lock server")
     parser.add_argument("--port", type=int, default=7357, help="Listen port (default: 7357)")
     parser.add_argument("--ttl", type=int, default=60, help="Lock TTL in seconds (default: 60)")
+    parser.add_argument("--no-tui", action="store_true", help="Disable live TUI, log to stdout instead")
     args = parser.parse_args()
 
     manager = LockManager(ttl=args.ttl)
@@ -234,13 +360,27 @@ def main():
     reaper = threading.Thread(target=reaper_loop, args=(manager,), daemon=True)
     reaper.start()
 
-    server = HTTPServer(("0.0.0.0", args.port), make_handler(manager))
-    print(f"Device lock server listening on :{args.port} (TTL={args.ttl}s)")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nShutting down")
-        server.shutdown()
+    use_tui = not args.no_tui and sys.stdout.isatty()
+
+    server = HTTPServer(("0.0.0.0", args.port), make_handler(manager, quiet=use_tui))
+    http_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    http_thread.start()
+
+    if use_tui:
+        print(f"Device lock server listening on :{args.port} (TTL={args.ttl}s)")
+        # Brief pause so the server is ready before TUI takes over stdout
+        time.sleep(0.2)
+        try:
+            tui_loop(manager, args.port, args.ttl)
+        finally:
+            server.shutdown()
+    else:
+        print(f"Device lock server listening on :{args.port} (TTL={args.ttl}s)")
+        try:
+            http_thread.join()
+        except KeyboardInterrupt:
+            print("\nShutting down")
+            server.shutdown()
 
 
 if __name__ == "__main__":

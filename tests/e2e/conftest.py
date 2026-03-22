@@ -100,13 +100,16 @@ def device_ip(dut_lock):
     if not firmware:
         pytest.skip("FIRMWARE_PATH not set — cannot flash DUT")
 
-    # Erase flash first to remove stale NVS data from previous runs.
+    # Erase NVS partition to remove stale data from previous runs.
     # Without this, accumulated test data makes the tree too large for
     # the HTTP response buffer and full-tree reads hang.
+    # We erase only the NVS region (not full flash) so the chip never
+    # boots without firmware — a full erase leaves GPIO 18 floating,
+    # which the WS2812 RGB LED latches as full white.
     subprocess.run(
-        ["espflash", "erase-flash", "--port", port],
+        ["espflash", "erase-region", "--port", port, "0x10000", "0x6000"],
         check=True,
-        timeout=60,
+        timeout=30,
     )
 
     # Flash (ESP32-S2 with 2 MB firmware takes ~2 min over USB)

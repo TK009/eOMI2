@@ -32,6 +32,21 @@ import uuid
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 
+def _pid_alive(pid: int) -> bool:
+    """Check if a process is alive via /proc or kill(0).
+
+    Only checks local processes — PIDs from containers on the same host
+    are in the same PID namespace when the lock server runs on the host.
+    """
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # Process exists but we can't signal it
+
+
 class LockManager:
     """Thread-safe in-memory device lock manager with TTL-based expiry."""
 
@@ -94,15 +109,24 @@ class LockManager:
                 return True
             return False
 
-    def heartbeat(self, lock_id: str) -> bool:
+    def heartbeat(self, lock_id: str, pid: int | None = None) -> dict | None:
+        """Renew a lock's lease.  *pid* is required — it must be the PID of
+        the process sending the heartbeat so that liveness can be verified
+        via the OS process table.
+
+        Returns a status dict on success, or None if the lock doesn't exist.
+        """
         with self._mu:
             info = self._locks.get(lock_id)
-            if info:
-                now = time.time()
-                info["last_heartbeat"] = now
-                info["expires_at"] = now + self.ttl
-                return True
-            return False
+            if not info:
+                return None
+            if pid is None:
+                return {"error": "pid is required", "code": 400}
+            now = time.time()
+            info["last_heartbeat"] = now
+            info["expires_at"] = now + self.ttl
+            info["holder"]["pid"] = pid
+            return {"status": "renewed"}
 
     def list_devices(self) -> dict:
         with self._mu:
@@ -133,16 +157,24 @@ class LockManager:
             }
 
     def _reap_expired(self):
-        """Remove expired locks. Must be called with self._mu held."""
+        """Remove expired locks and locks held by dead processes.
+
+        Must be called with self._mu held.
+        """
         now = time.time()
-        expired = [
-            lid for lid, info in self._locks.items()
-            if info["expires_at"] <= now
-        ]
-        for lid in expired:
+        to_remove: list[tuple[str, str]] = []  # (lock_id, reason)
+        for lid, info in self._locks.items():
+            if info["expires_at"] <= now:
+                to_remove.append((lid, "expired"))
+                continue
+            # Check if the heartbeating process is still alive
+            pid = info.get("holder", {}).get("pid")
+            if pid is not None and not _pid_alive(int(pid)):
+                to_remove.append((lid, f"dead pid {pid}"))
+        for lid, reason in to_remove:
             info = self._locks.pop(lid)
             self._device_locks.pop(info["device"], None)
-            print(f"[reaper] expired lock {lid} on {info['device']}")
+            print(f"[reaper] {reason}: released lock {lid} on {info['device']}")
 
 
 def make_handler(manager: LockManager, quiet: bool = False):
@@ -199,10 +231,25 @@ def make_handler(manager: LockManager, quiet: bool = False):
 
             elif len(segments) == 3 and segments[0] == "lock" and segments[2] == "heartbeat":
                 lock_id = segments[1]
-                if manager.heartbeat(lock_id):
-                    self._send_json(200, {"status": "renewed"})
-                else:
+                body = self._read_body()
+                try:
+                    data = json.loads(body) if body else {}
+                except json.JSONDecodeError:
+                    data = {}
+                pid = data.get("pid")
+                if pid is not None:
+                    try:
+                        pid = int(pid)
+                    except (ValueError, TypeError):
+                        self._send_json(400, {"error": "pid must be an integer"})
+                        return
+                result = manager.heartbeat(lock_id, pid=pid)
+                if result is None:
                     self._send_json(404, {"error": "lock not found"})
+                elif "error" in result:
+                    self._send_json(result["code"], {"error": result["error"]})
+                else:
+                    self._send_json(200, result)
             else:
                 self._send_json(404, {"error": "not found"})
 

@@ -81,11 +81,17 @@ EOF
         return 1
     fi
 
-    # Start background heartbeat (every 30 s, well within 60 s TTL)
+    # Start background heartbeat (every 30 s, well within 60 s TTL).
+    # Each heartbeat sends the caller's PID ($$) so the server can verify
+    # the holding process is still alive via the OS process table.
+    local caller_pid=$$
     (
         while true; do
             sleep 30
-            if ! curl -sf -X POST "$lock_url/lock/$lock_id/heartbeat" > /dev/null 2>&1; then
+            if ! curl -sf -X POST \
+                -H "Content-Type: application/json" \
+                -d "{\"pid\": $caller_pid}" \
+                "$lock_url/lock/$lock_id/heartbeat" > /dev/null 2>&1; then
                 break  # lock gone, stop heartbeating
             fi
         done

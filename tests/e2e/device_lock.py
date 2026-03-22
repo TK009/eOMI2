@@ -222,13 +222,18 @@ class DeviceLock:
 
     @staticmethod
     def _heartbeat_loop(lock_id: str, stop_event: threading.Event):
-        """Send heartbeats every HEARTBEAT_INTERVAL until stopped."""
+        """Send heartbeats every HEARTBEAT_INTERVAL until stopped.
+
+        Each heartbeat includes the current PID so the server can verify
+        the holder is still alive via the OS process table.
+        """
         base_url = _lock_url()
         while not stop_event.wait(HEARTBEAT_INTERVAL):
             try:
                 status, _ = _http_json(
                     "POST",
                     f"{base_url}/lock/{lock_id}/heartbeat",
+                    body={"pid": os.getpid()},
                     timeout=10,
                 )
                 if status != 200:

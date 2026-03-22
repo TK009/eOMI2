@@ -8,6 +8,8 @@
 pub mod crypto;
 #[cfg(feature = "esp")]
 pub mod display;
+#[cfg(all(feature = "esp", feature = "secure_onboarding"))]
+pub mod joiner;
 #[cfg(feature = "secure_onboarding")]
 pub mod onboard_sm;
 #[cfg(feature = "secure_onboarding")]

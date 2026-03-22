@@ -125,6 +125,60 @@ fn main() -> Result<()> {
         sys_loop,
     )?;
 
+    // WSOP: If no credentials and secure_onboarding is enabled, run the joiner
+    // onboarding flow before constructing WifiSm (FR-150). On success, credentials
+    // are stored in NVS and WifiSm starts with num_creds > 0. On failure, WifiSm
+    // starts with num_creds == 0 (captive portal fallback).
+    #[cfg(feature = "secure_onboarding")]
+    let mut _wsop_ws2812: Option<reconfigurable_device::ws2812::Ws2812> = None;
+
+    #[cfg(feature = "secure_onboarding")]
+    if creds.is_empty() {
+        info!("WSOP: no WiFi credentials — attempting secure onboarding");
+
+        // Initialize WS2812 for verification display if board has neopixel
+        let ws2812_driver = reconfigurable_device::board::neopixel_pin()
+            .and_then(|pin| {
+                match reconfigurable_device::ws2812::Ws2812::new(pin) {
+                    Ok(ws) => Some(ws),
+                    Err(e) => {
+                        warn!("WSOP: failed to init WS2812 on pin {}: {}", pin, e);
+                        None
+                    }
+                }
+            });
+
+        match reconfigurable_device::wsop::joiner::run_onboarding(
+            &mut wifi,
+            &mut wifi_nvs,
+            &mut wifi_cfg,
+            &hostname,
+            ws2812_driver,
+        ) {
+            Ok(reconfigurable_device::wsop::joiner::OnboardResult::Success { num_creds, ws2812 }) => {
+                info!("WSOP: onboarding succeeded with {} credentials", num_creds);
+                // Reload credentials from updated wifi_cfg
+                creds.clear();
+                if let (Some(s), Some(p)) = (WIFI_SSID, WIFI_PASS) {
+                    creds.push((s.to_string(), p.to_string()));
+                }
+                for (s, p) in &wifi_cfg.ssids {
+                    if !creds.iter().any(|(existing, _)| existing == s) {
+                        creds.push((s.clone(), p.clone()));
+                    }
+                }
+                _wsop_ws2812 = ws2812;
+            }
+            Ok(reconfigurable_device::wsop::joiner::OnboardResult::Fallback { ws2812 }) => {
+                info!("WSOP: onboarding failed, falling back to captive portal");
+                _wsop_ws2812 = ws2812;
+            }
+            Err(e) => {
+                warn!("WSOP: onboarding error: {}, falling back to captive portal", e);
+            }
+        }
+    }
+
     // Initialize WiFi state machine
     let sm_config = WifiSmConfig::default();
     let mut wifi_sm = WifiSm::new(creds.len(), sm_config);

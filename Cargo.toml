@@ -59,3 +59,6 @@ object = { version = "0.36", default-features = false, features = ["read", "elf"
 
 [[package.metadata.esp-idf-sys.extra_components]]
 remote_component = { name = "espressif/mdns", version = "1.4" }
+
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/led_strip", version = "2.5" }

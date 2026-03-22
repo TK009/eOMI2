@@ -58,6 +58,17 @@ pub fn neopixel_pin() -> Option<u8> {
     { None }
 }
 
+/// Onboarding display mode from board TOML config.
+///
+/// Returns "color" (WS2812 RGB), "digit" (blink LED), or "none".
+/// Returns "none" if no board config was loaded.
+pub fn onboard_display_mode() -> &'static str {
+    #[cfg(has_board_config)]
+    { generated::ONBOARD_DISPLAY_MODE }
+    #[cfg(not(has_board_config))]
+    { "none" }
+}
+
 #[cfg(any(has_board_config, test))]
 fn parse_mode(s: &str) -> Option<GpioMode> {
     match s {
@@ -302,6 +313,21 @@ mod tests {
         let val = has_temp_sensor();
         if !has_board_config() {
             assert!(!val, "has_temp_sensor should be false without board config");
+        }
+    }
+
+    #[test]
+    fn onboard_display_mode_returns_value() {
+        let mode = onboard_display_mode();
+        if has_board_config() {
+            // When board config is loaded, mode should be one of the valid values
+            assert!(
+                ["color", "digit", "none"].contains(&mode),
+                "unexpected display mode: {}",
+                mode
+            );
+        } else {
+            assert_eq!(mode, "none");
         }
     }
 

@@ -15,6 +15,9 @@ pub mod error;
 pub mod board;
 #[cfg(feature = "esp")]
 pub mod boards;
+#[cfg(feature = "esp")]
+pub mod ws2812;
+pub mod wsop;
 pub mod device;
 #[cfg(feature = "std")]
 pub mod gpio;

@@ -7,6 +7,9 @@
 name = "ESP32-S2-WROVER"
 chip = "esp32s2"
 has_temp_sensor = true
+# Onboarding display mode: "color" (WS2812 RGB), "digit" (blink LED), or "none".
+# No neopixel on WROVER; falls back to digit mode (blinks LED GPIO).
+onboard_display = "digit"
 
 # GPIO pin definitions.
 # Each entry: pin number, mode, optional custom name.

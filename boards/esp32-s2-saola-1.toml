@@ -13,6 +13,9 @@ name = "ESP32-S2-Saola-1"
 chip = "esp32s2"
 has_temp_sensor = true
 neopixel_pin = 18
+# Onboarding display mode: "color" (WS2812 RGB), "digit" (blink LED), or "none".
+# Default: "color" when neopixel_pin is set, "digit" when LED GPIO exists, else "none".
+onboard_display = "color"
 
 # GPIO pin definitions.
 # Each entry: pin number, mode, optional custom name.

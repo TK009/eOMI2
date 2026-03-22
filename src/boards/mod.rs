@@ -28,13 +28,16 @@ use esp_idf_svc::hal::prelude::Peripherals;
 
 /// Result of board-specific HAL initialization.
 ///
-/// Contains the configured managers and the modem peripheral
-/// (needed by main.rs for WiFi init).
+/// Contains the configured managers, the modem peripheral
+/// (needed by main.rs for WiFi init), and the onboarding display.
 #[cfg(feature = "esp")]
 pub struct BoardPeripherals {
     pub modem: esp_idf_svc::hal::modem::Modem,
     pub gpio_manager: GpioManager,
     pub peripheral_manager: PeripheralManager,
+    /// Onboarding verification display, initialized from board config.
+    /// `None` if the display mode is "none" or board config not loaded.
+    pub onboard_display: crate::wsop::display::OnboardDisplay,
 }
 
 /// Initialize board GPIO and peripheral managers from HAL peripherals.
@@ -52,6 +55,7 @@ pub fn init_board(
     peripherals: Peripherals,
     hostname: &str,
 ) -> crate::error::Result<BoardPeripherals> {
+    use crate::wsop::display::{DisplayMode, OnboardDisplay};
     use log::info;
 
     // Suppress onboard WS2812/NeoPixel LED FIRST, before any other GPIO
@@ -104,9 +108,50 @@ pub fn init_board(
         hostname,
     )?;
 
+    // Initialize onboarding display from board config (FR-130..FR-133).
+    let display_mode = DisplayMode::from_str(crate::board::onboard_display_mode());
+    let onboard_display = match display_mode {
+        DisplayMode::Color => {
+            if let Some(pin) = crate::board::neopixel_pin() {
+                match crate::ws2812::Ws2812::new(pin) {
+                    Ok(ws) => {
+                        info!("Onboard display: color mode on GPIO {}", pin);
+                        OnboardDisplay::color(ws)
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to init WS2812 on GPIO {}: {}, falling back to none", pin, e);
+                        OnboardDisplay::none()
+                    }
+                }
+            } else {
+                log::warn!("Color display mode but no neopixel_pin, falling back to none");
+                OnboardDisplay::none()
+            }
+        }
+        DisplayMode::Digit => {
+            // Find the LED GPIO pin from board config for digit blink mode.
+            let led_pin = crate::board::gpio_configs()
+                .iter()
+                .find(|c| c.name.eq_ignore_ascii_case("led"))
+                .map(|c| c.pin);
+            match led_pin {
+                Some(pin) => {
+                    info!("Onboard display: digit mode using LED on GPIO {}", pin);
+                    OnboardDisplay::digit(pin)
+                }
+                None => {
+                    log::warn!("Digit display mode but no LED GPIO found, falling back to none");
+                    OnboardDisplay::none()
+                }
+            }
+        }
+        DisplayMode::None => OnboardDisplay::none(),
+    };
+
     Ok(BoardPeripherals {
         modem: peripherals.modem,
         gpio_manager,
         peripheral_manager,
+        onboard_display,
     })
 }

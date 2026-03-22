@@ -36,6 +36,10 @@ mod board_config {
         /// Firmware drives this pin low at boot to prevent the LED from
         /// interpreting noise or PWM signals as pixel data.
         pub neopixel_pin: Option<u8>,
+        /// Onboarding display mode: "color" (WS2812 RGB), "digit" (blink LED),
+        /// or "none". When omitted, defaults based on hardware: neopixel_pin
+        /// set → "color", LED GPIO exists → "digit", else "none".
+        pub onboard_display: Option<String>,
     }
 
     #[derive(Deserialize)]
@@ -134,6 +138,17 @@ mod board_config {
             }
         }
 
+        // Validate onboard_display mode
+        if let Some(ref mode) = board.board.onboard_display {
+            const VALID_DISPLAY_MODES: &[&str] = &["color", "digit", "none"];
+            if !VALID_DISPLAY_MODES.contains(&mode.as_str()) {
+                panic!(
+                    "board config: invalid onboard_display '{}'. Valid: {:?}",
+                    mode, VALID_DISPLAY_MODES
+                );
+            }
+        }
+
         // Validate unique InfoItem names
         let mut names = HashSet::new();
         for entry in &board.gpio {
@@ -177,6 +192,28 @@ mod board_config {
             )),
             None => code.push_str("pub const NEOPIXEL_PIN: Option<u8> = None;\n\n"),
         }
+
+        // Onboard display mode: resolve default from hardware config.
+        // neopixel_pin set → "color", LED GPIO exists → "digit", else "none".
+        let display_mode = match &board.board.onboard_display {
+            Some(mode) => mode.clone(),
+            None => {
+                if board.board.neopixel_pin.is_some() {
+                    "color".to_string()
+                } else if board.gpio.iter().any(|g| {
+                    g.mode == "digital_out"
+                        && g.name.as_deref().map(|n| n.eq_ignore_ascii_case("led")).unwrap_or(false)
+                }) {
+                    "digit".to_string()
+                } else {
+                    "none".to_string()
+                }
+            }
+        };
+        code.push_str(&format!(
+            "pub const ONBOARD_DISPLAY_MODE: &str = {:?};\n\n",
+            display_mode
+        ));
 
         // GPIO config: &[(pin, mode, name)]
         code.push_str("/// Build-time GPIO pin configurations.\n");

@@ -119,6 +119,12 @@ done
 unset _envfile _val
 
 # ── 2. Build firmware ───────────────────────────────────────────────────
+# Workaround: esp-idf-sys's cmake resolves partitions.csv relative to its own
+# output directory.  Copy it so builds succeed after target/ changes.
+for _dir in "$PROJECT_ROOT"/target/xtensa-esp32s2-espidf/*/build/esp-idf-sys-*/out/; do
+    [[ -d "$_dir" ]] && cp -n "$PROJECT_ROOT/partitions.csv" "$_dir/partitions.csv" 2>/dev/null || true
+done
+
 if [[ "$SKIP_BUILD" == false ]]; then
     echo "── Building firmware ──"
     if ! (cd "$PROJECT_ROOT" && cargo build --no-default-features --features std,esp,gpio,lite-json,scripting,mem-stats); then

@@ -17,6 +17,13 @@ panic = "abort"
 lto = true
 codegen-units = 1
 
+# Production profile: inherits release settings, strips backtrace/DWARF
+# symbolization (~110 KB flash savings). Use for shipping firmware:
+#   cargo build --profile production
+[profile.production]
+inherits = "release"
+strip = "symbols"
+
 [profile.dev]
 debug = true    # Symbols are nice, and they don't increase the size on Flash
 opt-level = "z"

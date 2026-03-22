@@ -283,6 +283,7 @@ fn main() {
 
     #[cfg(feature = "esp")]
     {
+        println!("cargo:rerun-if-changed=partitions.csv");
         embuild::espidf::sysenv::output();
 
         const ALLOWED_ENV_KEYS: &[&str] = &["WIFI_SSID", "WIFI_PASS", "API_TOKEN"];

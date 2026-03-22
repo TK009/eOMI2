@@ -59,3 +59,10 @@ CONFIG_MBEDTLS_GCM_C=n
 CONFIG_MBEDTLS_ECP_C=n
 CONFIG_MBEDTLS_ECDH_C=n
 CONFIG_MBEDTLS_ECDSA_C=n
+
+# ---------- Network trimming ----------
+# Disable IPv6 (saves ~10-15 KB in lwIP; device uses IPv4 only)
+CONFIG_LWIP_IPV6=n
+
+# Disable WPA3-SAE (not needed for WPA2 networks)
+CONFIG_ESP_WIFI_ENABLE_SAE=n

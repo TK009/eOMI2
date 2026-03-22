@@ -17,7 +17,6 @@ pub mod board;
 pub mod boards;
 #[cfg(feature = "esp")]
 pub mod ws2812;
-pub mod wsop;
 pub mod device;
 #[cfg(feature = "std")]
 pub mod gpio;
@@ -48,7 +47,6 @@ pub mod json;
 pub mod wifi_cfg;
 pub mod mem_stats;
 pub mod wifi_sm;
-#[cfg(feature = "secure_onboarding")]
 pub mod wsop;
 pub mod callback_url;
 pub mod callback;

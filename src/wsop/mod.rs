@@ -4,13 +4,16 @@
 // platform-independent joiner state machine, and verification display
 // for secure device onboarding.
 
+#[cfg(feature = "secure_onboarding")]
 pub mod crypto;
 #[cfg(feature = "esp")]
 pub mod display;
+#[cfg(feature = "secure_onboarding")]
 pub mod onboard_sm;
+#[cfg(feature = "secure_onboarding")]
 pub mod protocol;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "secure_onboarding"))]
 mod tests {
     use super::crypto::{self, Keypair, VerifyCode};
     use super::protocol::{

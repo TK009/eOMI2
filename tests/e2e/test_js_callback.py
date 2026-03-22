@@ -22,8 +22,11 @@ from helpers import (
     wait_for_values,
 )
 
-# Main loop ticks every ~5 s; generous timeout for interval delivery
-TICK_WAIT = 12
+# Subscription tick fires at 100ms cadence but next_sub_trigger is only
+# refreshed on the 5s main tick. Worst case: subscription created just after
+# a 5s tick → 5s wait for refresh + 5s interval = 10s before first fire.
+# Add margin for slow ESP32-S2 processing under load (many tree items).
+TICK_WAIT = 18
 
 
 @pytest.fixture(autouse=True, scope="module")

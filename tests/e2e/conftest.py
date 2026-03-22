@@ -106,11 +106,11 @@ def device_ip(dut_lock):
     if not firmware:
         pytest.skip("FIRMWARE_PATH not set — cannot flash DUT")
 
-    # Flash
+    # Flash (ESP32-S2 with 2 MB firmware takes ~2 min over USB)
     subprocess.run(
         ["espflash", "flash", "--port", port, firmware],
         check=True,
-        timeout=60,
+        timeout=180,
     )
 
     # Discover IP from serial
@@ -208,7 +208,7 @@ def bridge(bridge_port):
         subprocess.run(
             ["espflash", "flash", "--port", bridge_port, firmware],
             check=True,
-            timeout=60,
+            timeout=180,
         )
 
     from serial_bridge import SerialBridge

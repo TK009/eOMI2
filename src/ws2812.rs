@@ -34,33 +34,16 @@ impl Ws2812 {
         let rmt_config = led_strip_rmt_config_t {
             clk_src: soc_periph_rmt_clk_src_t_RMT_CLK_SRC_DEFAULT,
             resolution_hz: 10_000_000, // 10 MHz → 100 ns per tick
-            flags: led_strip_rmt_config_t__bindgen_ty_1 {
-                with_dma: 0,
-            },
+            flags: Default::default(),
             mem_block_symbols: 0, // use default
         };
 
         let strip_config = led_strip_config_t {
             strip_gpio_num: pin as i32,
             max_leds: 1,
+            led_pixel_format: led_pixel_format_t_LED_PIXEL_FORMAT_GRB,
             led_model: led_model_t_LED_MODEL_WS2812,
-            color_component_format: led_strip_color_component_format_t {
-                format: led_color_component_format_t {
-                    num_components: 3,
-                    __bindgen_anon_1: led_color_component_format_t__bindgen_ty_1 {
-                        g_r_b: led_color_component_format_t__bindgen_ty_1__bindgen_ty_1 {
-                            _bitfield_1:
-                                led_color_component_format_t__bindgen_ty_1__bindgen_ty_1::new_bitfield_1(
-                                    0, 1, 2,
-                                ),
-                            ..Default::default()
-                        },
-                    },
-                },
-            },
-            flags: led_strip_config_t__bindgen_ty_1 {
-                invert_out: 0,
-            },
+            flags: Default::default(),
         };
 
         let mut handle: led_strip_handle_t = core::ptr::null_mut();

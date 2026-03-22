@@ -22,7 +22,6 @@
 #
 # Environment:
 #   CLAIM_DEVICES    — pin to specific device(s), e.g. "/dev/ttyUSB0"
-#   DEVICE_IP        — skip flash/IP-discovery (device already running)
 #   DEVICE_LOCK_URL  — lock server URL (default: http://localhost:7357)
 
 set -euo pipefail
@@ -132,7 +131,6 @@ fi
 
 # ── 5. Export paths and env vars for pytest ─────────────────────────────
 # FIRMWARE_PATH tells conftest.py where the DUT firmware binary is.
-# If DEVICE_IP is already set, conftest.py skips flash + IP discovery.
 export FIRMWARE_PATH="$FIRMWARE"
 
 # Locate .env: project root > repo root > rig root (Gas Town worktrees).

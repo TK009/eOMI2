@@ -91,16 +91,10 @@ def device_port(dut_lock):
 def device_ip(dut_lock):
     """DUT IP address — flashes firmware, reads IP from serial, health-checks.
 
-    Skips the flash+discover cycle if DEVICE_IP is already set (e.g. when
-    the device was flashed manually or by an outer script).  The lock on
-    the DUT device is held regardless, preventing other agents from
-    grabbing the flashed device mid-session.
+    Always flashes the claimed device and discovers its IP from serial
+    output.  This guarantees the locked device is the one with the
+    correct firmware — no stale DEVICE_IP pointing at the wrong device.
     """
-    # Fast path: IP already known (manual flash or outer script)
-    ip = os.environ.get("DEVICE_IP")
-    if ip:
-        return ip
-
     port = dut_lock.port
     firmware = os.environ.get("FIRMWARE_PATH")
     if not firmware:
@@ -128,8 +122,6 @@ def device_ip(dut_lock):
     # Health check
     _health_check(ip, timeout=15)
 
-    # Publish for other fixtures/scripts that read env vars
-    os.environ["DEVICE_IP"] = ip
     return ip
 
 

@@ -7,7 +7,7 @@ import time
 import pytest
 import requests
 
-REQUEST_TIMEOUT = 10  # seconds – avoid hanging on unresponsive devices
+REQUEST_TIMEOUT = 15  # seconds – ESP32-S2 full tree reads can take 7+ seconds
 OTA_TIMEOUT = 120  # seconds – generous for ~1.2 MB compressed over LAN
 TREE_WRITE_TIMEOUT = 30  # seconds – tree writes with metadata need more time
 WS_TIMEOUT = 10  # seconds – WebSocket operation timeout

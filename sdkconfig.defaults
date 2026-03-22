@@ -4,6 +4,10 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 # Compiler: optimize for size (-Os) to reduce flash usage
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 
+# Use newlib nano printf (no float format support — saves ~25-50 KB flash).
+# All float formatting in this project uses integer-math helpers instead.
+CONFIG_NEWLIB_NANO_FORMAT=y
+
 # Wi-Fi
 CONFIG_ESP_WIFI_ENABLED=y
 

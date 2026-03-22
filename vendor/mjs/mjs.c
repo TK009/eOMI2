@@ -13930,13 +13930,75 @@ MJS_PRIVATE const char *mjs_stringify_type(enum mjs_type t) {
   }
 }
 
+/*
+ * Format a double without using float printf (allows CONFIG_NEWLIB_NANO_FORMAT).
+ * Prints up to 6 decimal digits (same default precision as %f).
+ */
+static void mjs_print_double(struct json_out *out, double d) {
+  char buf[32];
+  char *p = buf;
+  int64_t ipart;
+  int64_t fpart;
+  int i;
+
+  /* Guard against NaN/Infinity — casting these to int64_t is UB */
+  if (isnan(d)) { out->printer(out, "null", 4); return; }
+  if (d == INFINITY) { out->printer(out, "null", 4); return; }
+  if (d == -INFINITY) { out->printer(out, "null", 4); return; }
+
+  if (d < 0) {
+    *p++ = '-';
+    d = -d;
+  }
+
+  ipart = (int64_t) d;
+  /* 6 decimal digits, matching %f default precision */
+  fpart = (int64_t) ((d - (double) ipart) * 1000000.0 + 0.5);
+  if (fpart >= 1000000) {
+    /* Rounding overflow: e.g. 0.9999999 -> 1.000000 */
+    ipart++;
+    fpart = 0;
+  }
+
+  /* Integer part */
+  {
+    char tmp[21];
+    int len = 0;
+    int64_t v = ipart;
+    if (v == 0) {
+      tmp[len++] = '0';
+    } else {
+      while (v > 0) {
+        tmp[len++] = '0' + (char)(v % 10);
+        v /= 10;
+      }
+    }
+    for (i = len - 1; i >= 0; i--) *p++ = tmp[i];
+  }
+
+  *p++ = '.';
+
+  /* Fractional part: always 6 digits, zero-padded */
+  {
+    char tmp[7];
+    int64_t v = fpart;
+    for (i = 5; i >= 0; i--) {
+      tmp[i] = '0' + (char)(v % 10);
+      v /= 10;
+    }
+    for (i = 0; i < 6; i++) *p++ = tmp[i];
+  }
+
+  out->printer(out, buf, (int)(p - buf));
+}
+
 void mjs_jprintf(mjs_val_t v, struct mjs *mjs, struct json_out *out) {
   if (mjs_is_number(v)) {
     double iv, d = mjs_get_double(mjs, v);
     if (modf(d, &iv) == 0) {
       json_printf(out, "%" INT64_FMT, (int64_t) d);
     } else {
-      json_printf(out, "%f", mjs_get_double(mjs, v));
+      mjs_print_double(out, d);
     }
   } else if (mjs_is_boolean(v)) {
     json_printf(out, "%s", mjs_get_bool(mjs, v) ? "true" : "false");

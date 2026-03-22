@@ -185,7 +185,7 @@ fn fr002_interval_subscription_triggers_onread() {
     assert_eq!(response_status(&resp), 200);
 
     // Tick at interval — onread should transform
-    let deliveries = e.tick(BASE_TIME + 5.0);
+    let (deliveries, _) = e.tick(BASE_TIME + 5.0);
     assert_eq!(deliveries.len(), 1);
     assert_eq!(
         deliveries[0].values[0].v,
@@ -1456,7 +1456,7 @@ fn interval_poll_sub_delivers_raw_value() {
 
     // Tick at interval — poll subs buffer internally (onread transform
     // applies to callback deliveries returned by tick, not poll buffers)
-    let _deliveries = e.tick(BASE_TIME + 5.0);
+    let (_deliveries, _) = e.tick(BASE_TIME + 5.0);
 
     // Poll — gets raw buffered value (onread transformation only applies
     // to callback/websocket deliveries, not poll-buffered values)

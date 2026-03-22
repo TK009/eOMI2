@@ -120,7 +120,7 @@ fn interval_js_callback_runs_onread_on_subscribed_value() {
     assert_eq!(response_status(&resp), 200);
 
     // Tick at interval — onread should transform the value (100 * 2 = 200)
-    let deliveries = e.tick(BASE_TIME + 5.0);
+    let (deliveries, _) = e.tick(BASE_TIME + 5.0);
     assert_eq!(deliveries.len(), 1);
     assert_eq!(
         deliveries[0].values[0].v,
@@ -162,7 +162,7 @@ fn interval_js_callback_receives_onread_transformed_value_in_script() {
     assert_eq!(response_status(&resp), 200);
 
     // Tick at interval — delivery has onread-transformed value
-    let deliveries = e.tick(BASE_TIME + 5.0);
+    let (deliveries, _) = e.tick(BASE_TIME + 5.0);
     assert_eq!(deliveries.len(), 1);
 
     // Now execute the callback script with the delivery
@@ -336,7 +336,7 @@ fn same_item_interval_applies_onread_event_does_not() {
     assert_eq!(response_status(&resp), 200);
 
     // --- Interval delivery (tick) should apply onread ---
-    let interval_deliveries = e.tick(BASE_TIME + 5.0);
+    let (interval_deliveries, _) = e.tick(BASE_TIME + 5.0);
     assert_eq!(interval_deliveries.len(), 1);
     assert_eq!(
         interval_deliveries[0].values[0].v,
@@ -389,7 +389,7 @@ fn interval_js_callback_onread_error_falls_back_to_stored() {
     assert_eq!(response_status(&resp), 200);
 
     // Tick — broken onread should fall back to stored value
-    let deliveries = e.tick(BASE_TIME + 5.0);
+    let (deliveries, _) = e.tick(BASE_TIME + 5.0);
     assert_eq!(deliveries.len(), 1);
     assert_eq!(
         deliveries[0].values[0].v,
@@ -419,7 +419,7 @@ fn interval_js_callback_without_onread_delivers_raw() {
     let resp = process_at(&mut e, &sub_json, BASE_TIME, None);
     assert_eq!(response_status(&resp), 200);
 
-    let deliveries = e.tick(BASE_TIME + 5.0);
+    let (deliveries, _) = e.tick(BASE_TIME + 5.0);
     assert_eq!(deliveries.len(), 1);
     assert_eq!(
         deliveries[0].values[0].v,
@@ -461,7 +461,7 @@ fn interval_js_callback_onread_with_nested_readitem() {
     assert_eq!(response_status(&resp), 200);
 
     // Tick — onread should execute and add offset (20 + 10 = 30)
-    let deliveries = e.tick(BASE_TIME + 5.0);
+    let (deliveries, _) = e.tick(BASE_TIME + 5.0);
     assert_eq!(deliveries.len(), 1);
     assert_eq!(
         deliveries[0].values[0].v,

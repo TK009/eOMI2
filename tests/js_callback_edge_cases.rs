@@ -255,7 +255,7 @@ fn script_error_on_interval_sub_stays_active_next_tick_fires() {
     let rid = response_rid(&resp).to_string();
 
     // First tick — script errors but sub should stay alive
-    let deliveries = e.tick(BASE_TIME + 5.0);
+    let (deliveries, _) = e.tick(BASE_TIME + 5.0);
     assert_eq!(deliveries.len(), 1);
     assert_eq!(deliveries[0].rid, rid);
 
@@ -268,7 +268,7 @@ fn script_error_on_interval_sub_stays_active_next_tick_fires() {
     assert!(cascaded.is_empty(), "broken script produces no cascaded deliveries");
 
     // Second tick — subscription should still fire
-    let deliveries2 = e.tick(BASE_TIME + 10.0);
+    let (deliveries2, _) = e.tick(BASE_TIME + 10.0);
     assert_eq!(deliveries2.len(), 1, "subscription should fire on next tick after script error");
     assert_eq!(deliveries2[0].rid, rid);
 }
@@ -574,7 +574,7 @@ fn self_monitoring_readitem_sees_latest_written_value() {
     assert_eq!(response_status(&resp), 200);
 
     // Tick fires — readItem returns stored value (50), script writes 50*2=100
-    let deliveries = e.tick(BASE_TIME + 5.0);
+    let (deliveries, _) = e.tick(BASE_TIME + 5.0);
     assert_eq!(deliveries.len(), 1);
 
     e.run_callback_script(
@@ -753,7 +753,7 @@ fn interval_sub_missing_script_still_produces_deliveries() {
     let rid = response_rid(&resp).to_string();
 
     // Tick 1 — delivery produced even though script will fail
-    let deliveries = e.tick(BASE_TIME + 5.0);
+    let (deliveries, _) = e.tick(BASE_TIME + 5.0);
     assert_eq!(deliveries.len(), 1);
     assert_eq!(deliveries[0].rid, rid);
 
@@ -767,7 +767,7 @@ fn interval_sub_missing_script_still_produces_deliveries() {
     assert!(cascaded.is_empty());
 
     // Tick 2 — should still fire
-    let deliveries2 = e.tick(BASE_TIME + 10.0);
+    let (deliveries2, _) = e.tick(BASE_TIME + 10.0);
     assert_eq!(deliveries2.len(), 1, "interval sub should keep ticking despite missing script");
     assert_eq!(deliveries2[0].rid, rid);
 }

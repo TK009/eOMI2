@@ -396,10 +396,29 @@ fn main() -> Result<()> {
     let mut backoff_deadline: Option<Instant> = None;
     let mut wifi_rl = RateLimiter::new();
     let mut delivery_rl = RateLimiter::new();
+    // Track next subscription trigger time so we can tick at sub-5s intervals.
+    // Initialized to None (no subscriptions yet); updated each time Engine::tick() runs.
+    let mut next_sub_trigger: Option<f64> = None;
     loop {
         std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
         elapsed_ms += POLL_INTERVAL_MS;
         scan_elapsed_ms += POLL_INTERVAL_MS;
+
+        // Tick interval subscriptions when due (100ms cadence, gated by next_trigger_time).
+        // Zero overhead when no subscriptions are due: single Option check + float compare.
+        if let Some(trigger) = next_sub_trigger {
+            let now = now_secs();
+            if now >= trigger {
+                let (tick_deliveries, next_trigger) = {
+                    let mut eng = lock_or_recover(&engine, "engine");
+                    eng.tick(now)
+                };
+                next_sub_trigger = next_trigger;
+                if !tick_deliveries.is_empty() {
+                    dispatch_deliveries(&tick_deliveries, &ws_senders, &engine, &mut delivery_rl);
+                }
+            }
+        }
 
         // Drain write-triggered event deliveries (100ms cadence preserved)
         {
@@ -790,13 +809,11 @@ fn main() -> Result<()> {
             }
         }
 
-        // Tick interval subscriptions and dispatch
-        let tick_deliveries = {
-            let mut eng = lock_or_recover(&engine, "engine");
-            eng.tick(now_secs())
-        };
-        if !tick_deliveries.is_empty() {
-            dispatch_deliveries(&tick_deliveries, &ws_senders, &engine, &mut delivery_rl);
+        // Refresh next_sub_trigger on the 5s tick so newly-created subscriptions
+        // are picked up even if the fast-path above had no trigger scheduled.
+        {
+            let eng = lock_or_recover(&engine, "engine");
+            next_sub_trigger = eng.next_trigger_time();
         }
 
         // Persist writable items to NVS if dirty

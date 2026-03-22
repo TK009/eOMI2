@@ -236,13 +236,13 @@ fn write_u32(buf: &mut Vec<u8>, n: u32) {
 }
 
 fn write_f64(buf: &mut Vec<u8>, n: f64) {
-    use std::io::Write;
-    let start = buf.len();
-    write!(buf, "{}", n).unwrap();
+    let mut rbuf = ryu::Buffer::new();
+    let s = rbuf.format(n);
+    buf.extend_from_slice(s.as_bytes());
     // Ensure whole-number floats include a decimal point so they round-trip as
     // floats (not integers) when re-parsed.  NaN/Infinity are handled upstream
     // (emitted as `null`), so only finite integral values need the suffix.
-    if n.is_finite() && n.fract() == 0.0 && !buf[start..].contains(&b'.') {
+    if !s.contains('.') && !s.contains('e') && !s.contains('E') {
         buf.extend_from_slice(b".0");
     }
 }

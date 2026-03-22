@@ -23,7 +23,15 @@ const PERIPHERAL_CAPACITY: usize = 20;
 pub fn decode_tx_data(v: &OmiValue, encoding: DataEncoding) -> Result<Vec<u8>, String> {
     let s = match v {
         OmiValue::Str(s) => s.as_str(),
-        OmiValue::Number(n) => return Ok(n.to_string().into_bytes()),
+        OmiValue::Number(n) => {
+            // Use ryu instead of n.to_string() to avoid pulling in core::fmt's
+            // float formatting machinery (~10-20 KB on embedded targets).
+            let mut buf = ryu::Buffer::new();
+            let s = buf.format(*n);
+            // Strip trailing ".0" for whole numbers (compact form for wire TX).
+            let s = s.strip_suffix(".0").unwrap_or(s);
+            return Ok(s.as_bytes().to_vec());
+        }
         OmiValue::Bool(b) => return Ok(if *b { b"1".to_vec() } else { b"0".to_vec() }),
         OmiValue::Null => return Ok(Vec::new()),
     };
@@ -348,6 +356,20 @@ mod tests {
         let v = OmiValue::Number(42.0);
         let bytes = decode_tx_data(&v, DataEncoding::String).unwrap();
         assert_eq!(bytes, b"42");
+    }
+
+    #[test]
+    fn tx_number_fractional() {
+        let v = OmiValue::Number(3.14);
+        let bytes = decode_tx_data(&v, DataEncoding::String).unwrap();
+        assert_eq!(bytes, b"3.14");
+    }
+
+    #[test]
+    fn tx_number_negative() {
+        let v = OmiValue::Number(-1.5);
+        let bytes = decode_tx_data(&v, DataEncoding::String).unwrap();
+        assert_eq!(bytes, b"-1.5");
     }
 
     #[test]

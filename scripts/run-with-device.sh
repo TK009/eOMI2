@@ -21,7 +21,7 @@ fi
 
 # Release device on exit
 cleanup() {
-    if [[ -n "${DEVICE_FD:-}" ]]; then
+    if [[ -n "${LOCK_ID:-}" ]]; then
         . "$SCRIPT_DIR/release-device.sh"
     fi
 }

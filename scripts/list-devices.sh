@@ -1,77 +1,52 @@
 #!/usr/bin/env bash
-# Show USB serial devices and their lock status.
+# Show USB serial devices and their lock status via the HTTP lock server.
 #
 # Usage:
 #   ./scripts/list-devices.sh
 #
-# For each device, probes the actual flock state (not just lock file
-# existence) so the output is accurate even when a holder crashed without
-# cleaning up.
+# Environment:
+#   DEVICE_LOCK_URL — lock server URL (default: http://localhost:7357)
 
 set -euo pipefail
 
-# Lock directory: honour DEVICE_LOCK_DIR, then try git-common-dir, then cwd.
-if [[ -n "${DEVICE_LOCK_DIR:-}" ]]; then
-    lock_dir="$DEVICE_LOCK_DIR"
-elif _gc="$(git rev-parse --git-common-dir 2>/dev/null)"; then
-    lock_dir="$(cd "$_gc/.." && pwd)/.device-locks"
-    unset _gc
-else
-    lock_dir="$(pwd)/.device-locks"
-fi
-mkdir -p "$lock_dir"
+LOCK_URL="${DEVICE_LOCK_URL:-http://localhost:7357}"
 
-# ── Collect devices ──────────────────────────────────────────────────────
-devices=()
-for g in /dev/ttyUSB* /dev/ttyACM*; do
-    [[ -e "$g" ]] && devices+=("$g")
-done
+response=$(curl -sf "$LOCK_URL/devices" 2>/dev/null) || {
+    echo "ERROR: cannot reach lock server at $LOCK_URL" >&2
+    echo "Start it with: ./scripts/start-lock-server.sh" >&2
+    exit 1
+}
 
-if [[ ${#devices[@]} -eq 0 ]]; then
-    echo "No USB serial devices found."
-    exit 0
-fi
+# Format the JSON response
+python3 -c "
+import sys, json, time
 
-# ── Check each device ───────────────────────────────────────────────────
-locked=0
-free=0
+data = json.load(sys.stdin)
+devices = data.get('devices', [])
 
-for dev in "${devices[@]}"; do
-    base="${dev##*/}"
-    lockfile="$lock_dir/${base}.lock"
+if not devices:
+    print('No USB serial devices found.')
+    sys.exit(0)
 
-    if [[ ! -f "$lockfile" ]]; then
-        printf "  %-20s  FREE\n" "$dev"
-        : $(( free += 1 ))
-        continue
-    fi
+for d in devices:
+    dev = d['device']
+    if d['status'] == 'free':
+        print(f'  {dev:<20}  FREE')
+    else:
+        h = d.get('holder', {})
+        parts = []
+        if h.get('pid'): parts.append(f'PID={h[\"pid\"]}')
+        if h.get('host'): parts.append(f'HOST={h[\"host\"]}')
+        if h.get('container'): parts.append(f'CONTAINER={h[\"container\"]}')
+        if h.get('time'): parts.append(f'TIME={h[\"time\"]}')
+        ttl = d.get('expires_at', 0) - time.time()
+        parts.append(f'TTL={int(ttl)}s')
+        info = '  '.join(parts)
+        print(f'  {dev:<20}  LOCKED  {info}')
 
-    # Probe the real flock state: acquire in a subshell (released on exit).
-    if flock -n "$lockfile" true 2>/dev/null; then
-        printf "  %-20s  FREE\n" "$dev"
-        : $(( free += 1 ))
-    else
-        info=$(tr '\n' '  ' < "$lockfile" 2>/dev/null || echo "?")
-        printf "  %-20s  LOCKED  %s\n" "$dev" "$info"
-        : $(( locked += 1 ))
-    fi
-done
-
-# ── Stale lock files (device removed) ───────────────────────────────────
-stale=()
-for lf in "$lock_dir"/*.lock; do
-    [[ -f "$lf" ]] || continue
-    base="$(basename "$lf" .lock)"
-    [[ ! -e "/dev/$base" ]] && stale+=("$lf")
-done
-
-if [[ ${#stale[@]} -gt 0 ]]; then
-    echo ""
-    echo "Stale lock files (device removed):"
-    for lf in "${stale[@]}"; do
-        printf "  %s\n" "$(basename "$lf")"
-    done
-fi
-
-echo ""
-echo "Total: ${#devices[@]}  Locked: $locked  Free: $free"
+total = data.get('total', 0)
+locked = data.get('locked', 0)
+free = data.get('free', 0)
+print()
+print(f'Total: {total}  Locked: {locked}  Free: {free}')
+" <<< "$response"

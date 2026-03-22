@@ -31,11 +31,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERIAL_LOG=$(mktemp /tmp/e2e-serial.XXXXXX)
 MONITOR_PID=""
 DEVICE_PORT=""
-DEVICE_FD=""
+LOCK_ID=""
+HEARTBEAT_PID=""
 DUT_PORT=""
-DUT_FD=""
+DUT_LOCK_ID=""
+DUT_HEARTBEAT_PID=""
 BRIDGE_PORT=""
-BRIDGE_FD=""
+BRIDGE_LOCK_ID=""
+BRIDGE_HEARTBEAT_PID=""
 HAS_BRIDGE=false
 SKIP_BUILD=false
 PYTEST_ARGS=()
@@ -63,17 +66,17 @@ cleanup() {
     echo "── Cleaning up ──"
     stop_monitor
     # Release DUT device
-    if [[ -n "${DUT_FD:-}" ]]; then
-        DEVICE_PORT="$DUT_PORT"
-        DEVICE_FD="$DUT_FD"
+    if [[ -n "${DUT_LOCK_ID:-}" ]]; then
+        LOCK_ID="$DUT_LOCK_ID"
+        HEARTBEAT_PID="$DUT_HEARTBEAT_PID"
         . "$SCRIPT_DIR/release-device.sh"
-    elif [[ -n "${DEVICE_FD:-}" ]]; then
+    elif [[ -n "${LOCK_ID:-}" ]]; then
         . "$SCRIPT_DIR/release-device.sh"
     fi
     # Release bridge device
-    if [[ -n "${BRIDGE_FD:-}" ]]; then
-        DEVICE_PORT="$BRIDGE_PORT"
-        DEVICE_FD="$BRIDGE_FD"
+    if [[ -n "${BRIDGE_LOCK_ID:-}" ]]; then
+        LOCK_ID="$BRIDGE_LOCK_ID"
+        HEARTBEAT_PID="$BRIDGE_HEARTBEAT_PID"
         . "$SCRIPT_DIR/release-device.sh"
     fi
     rm -f "$SERIAL_LOG"
@@ -86,27 +89,28 @@ echo "── Claiming DUT USB device ──"
 CLAIM_TIMEOUT=240
 . "$SCRIPT_DIR/_claim-wait.sh"
 DUT_PORT="$DEVICE_PORT"
-DUT_FD="$DEVICE_FD"
-echo "Claimed DUT: $DUT_PORT (fd: $DUT_FD)"
+DUT_LOCK_ID="$LOCK_ID"
+DUT_HEARTBEAT_PID="$HEARTBEAT_PID"
+echo "Claimed DUT: $DUT_PORT (lock: $DUT_LOCK_ID)"
 
 # ── 1a. Claim bridge device (best-effort, 60 s) ──────────────────────
-# Unset DEVICE_PORT/DEVICE_FD so _claim-wait.sh picks a different device.
-# The flock on DUT stays held because DUT_FD is still open.
-unset DEVICE_PORT DEVICE_FD
+# Unset claim vars so _claim-wait.sh picks a different device.
+# The DUT lock is held server-side (heartbeat keeps it alive).
+unset DEVICE_PORT LOCK_ID HEARTBEAT_PID
 echo "── Claiming bridge USB device ──"
 CLAIM_TIMEOUT=60
 if . "$SCRIPT_DIR/_claim-wait.sh"; then
     BRIDGE_PORT="$DEVICE_PORT"
-    BRIDGE_FD="$DEVICE_FD"
+    BRIDGE_LOCK_ID="$LOCK_ID"
+    BRIDGE_HEARTBEAT_PID="$HEARTBEAT_PID"
     HAS_BRIDGE=true
-    echo "Claimed bridge: $BRIDGE_PORT (fd: $BRIDGE_FD)"
+    echo "Claimed bridge: $BRIDGE_PORT (lock: $BRIDGE_LOCK_ID)"
 else
     echo "WARNING: could not claim a second device for WiFi bridge — provisioning tests will skip"
     HAS_BRIDGE=false
 fi
 # Restore DUT as the active device for subsequent steps
 DEVICE_PORT="$DUT_PORT"
-DEVICE_FD="$DUT_FD"
 
 # ── 1b. Source build-time env vars from .env ──────────────────────────────
 # EOMI_BOARD is needed at build time by build.rs to select board config.

@@ -7,7 +7,7 @@
 #   CLAIM_TIMEOUT   — max wait in seconds (default: 120)
 #   CLAIM_INTERVAL  — retry interval in seconds (default: 5)
 #
-# On success: DEVICE_PORT and DEVICE_FD are set.
+# On success: DEVICE_PORT, LOCK_ID, and HEARTBEAT_PID are set.
 # On failure: returns 1.
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
@@ -18,6 +18,7 @@ fi
 _claim_wait() {
     local timeout="${CLAIM_TIMEOUT:-120}"
     local interval="${CLAIM_INTERVAL:-5}"
+    local lock_url="${DEVICE_LOCK_URL:-http://localhost:7357}"
     local waited=0 rc
 
     while true; do
@@ -37,14 +38,21 @@ _claim_wait() {
             return 1
         fi
 
+        # Show current holders from the server
         echo "All devices busy (waited ${waited}s/${timeout}s). Current holders:" >&2
-        local lock_dir
-        lock_dir="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)/.device-locks"
-        local lf
-        for lf in "$lock_dir"/*.lock; do
-            [[ -f "$lf" ]] || continue
-            echo "  $(basename "$lf"): $(tr '\n' ' ' < "$lf" 2>/dev/null)" >&2
-        done
+        curl -sf "$lock_url/devices" 2>/dev/null | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    for d in data.get('devices', []):
+        if d['status'] == 'locked':
+            h = d.get('holder', {})
+            info = ' '.join(f'{k}={v}' for k, v in h.items())
+            dev = d['device'].split('/')[-1]
+            print(f'  {dev}.lock: {info}', file=sys.stderr)
+except: pass
+" || true
+
         sleep "$interval"
         waited=$((waited + interval))
     done

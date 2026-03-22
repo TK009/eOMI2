@@ -67,15 +67,27 @@ pub fn init_board(
     // enabling the output direction, avoiding the glitch that PinDriver::
     // output() causes (it enables the driver before set_low, giving the
     // WS2812 time to latch a white pixel).
-    #[cfg(has_board_config)]
-    if let Some(pin_num) = crate::board::neopixel_pin() {
+    //
+    // Default: GPIO 18 (hardwired on all Saola-1 devkits). Board config
+    // can override via neopixel_pin.  Driving an unused pin low is harmless
+    // on boards without a neopixel (e.g. WROVER), so this is always safe.
+    {
         use esp_idf_svc::sys::{gpio_set_level, gpio_set_direction, gpio_mode_t_GPIO_MODE_OUTPUT, gpio_reset_pin};
+
+        const DEFAULT_NEOPIXEL_PIN: i32 = 18;
+        let pin_num: i32 = {
+            #[cfg(has_board_config)]
+            { crate::board::neopixel_pin().map(|p| p as i32).unwrap_or(DEFAULT_NEOPIXEL_PIN) }
+            #[cfg(not(has_board_config))]
+            { DEFAULT_NEOPIXEL_PIN }
+        };
+
         unsafe {
-            gpio_reset_pin(pin_num as i32);
-            gpio_set_level(pin_num as i32, 0);
-            gpio_set_direction(pin_num as i32, gpio_mode_t_GPIO_MODE_OUTPUT);
+            gpio_reset_pin(pin_num);
+            gpio_set_level(pin_num, 0);
+            gpio_set_direction(pin_num, gpio_mode_t_GPIO_MODE_OUTPUT);
         }
-        info!("Neopixel: GPIO{} driven low (WS2812 disabled)", pin_num);
+        info!("Neopixel: GPIO{} driven low (WS2812 suppressed)", pin_num);
     }
 
     let mut gpio_manager = GpioManager::new();

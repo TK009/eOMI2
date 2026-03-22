@@ -412,24 +412,38 @@ fn main() {
     {
         println!("cargo:rerun-if-env-changed=EOMI_BOARD");
 
-        if let Ok(board_name) = std::env::var("EOMI_BOARD") {
-            if !board_name.is_empty() {
-                let board_path =
-                    std::path::Path::new("boards").join(format!("{}.toml", board_name));
-                println!(
-                    "cargo:rerun-if-changed={}",
-                    board_path.display()
-                );
+        let board_name = std::env::var("EOMI_BOARD").unwrap_or_default();
+        if board_name.is_empty() {
+            panic!(
+                "EOMI_BOARD is not set. Set it in .env or the environment.\n\
+                 Available boards: {:?}",
+                std::fs::read_dir("boards")
+                    .map(|entries| entries
+                        .filter_map(|e| e.ok())
+                        .filter_map(|e| {
+                            let name = e.file_name().to_string_lossy().to_string();
+                            name.strip_suffix(".toml").map(|s| s.to_string())
+                        })
+                        .collect::<Vec<_>>())
+                    .unwrap_or_default()
+            );
+        }
+        {
+            let board_path =
+                std::path::Path::new("boards").join(format!("{}.toml", board_name));
+            println!(
+                "cargo:rerun-if-changed={}",
+                board_path.display()
+            );
 
-                let board = board_config::parse(&board_path);
-                board_config::validate(&board);
+            let board = board_config::parse(&board_path);
+            board_config::validate(&board);
 
-                let out_dir = std::path::Path::new(&out_dir);
-                board_config::generate(&board, out_dir);
+            let out_dir = std::path::Path::new(&out_dir);
+            board_config::generate(&board, out_dir);
 
-                // Tell downstream code that a board config was loaded
-                println!("cargo:rustc-cfg=has_board_config");
-            }
+            // Tell downstream code that a board config was loaded
+            println!("cargo:rustc-cfg=has_board_config");
         }
     }
 }

@@ -13941,14 +13941,29 @@ static void mjs_print_double(struct json_out *out, double d) {
   int64_t fpart;
   int i;
 
-  /* Guard against NaN/Infinity — casting these to int64_t is UB */
-  if (isnan(d)) { out->printer(out, "null", 4); return; }
-  if (d == INFINITY) { out->printer(out, "null", 4); return; }
-  if (d == -INFINITY) { out->printer(out, "null", 4); return; }
+  /* Guard against NaN/Infinity/huge values — casting to int64_t is UB */
+  if (isnan(d) || d == INFINITY || d == -INFINITY) {
+    out->printer(out, "null", 4);
+    return;
+  }
 
   if (d < 0) {
     *p++ = '-';
     d = -d;
+  }
+
+  /* Values too large for int64_t: emit with %e (nano printf supports it).
+   * Sign was already emitted above, so pass the positive magnitude. */
+  if (d > 9.2e18) {
+    char tmp[32];
+    int n = snprintf(tmp, sizeof(tmp), "%e", d);
+    if (n > 0 && n < (int) sizeof(tmp)) {
+      out->printer(out, buf, (int)(p - buf)); /* emit sign if any */
+      out->printer(out, tmp, n);
+    } else {
+      out->printer(out, "null", 4);
+    }
+    return;
   }
 
   ipart = (int64_t) d;

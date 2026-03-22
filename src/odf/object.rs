@@ -54,6 +54,33 @@ impl Object {
         self.objects.get_or_insert_with(BTreeMap::new).insert(id, obj);
     }
 
+    /// Merge another object's items and children into this one.
+    /// Existing items/children with the same key are replaced; others are kept.
+    pub fn merge_from(&mut self, other: Object) {
+        if let Some(other_items) = other.items {
+            let items = self.items.get_or_insert_with(BTreeMap::new);
+            for (name, item) in other_items {
+                items.insert(name, item);
+            }
+        }
+        if let Some(other_objects) = other.objects {
+            let objects = self.objects.get_or_insert_with(BTreeMap::new);
+            for (id, child) in other_objects {
+                if let Some(existing) = objects.get_mut(&id) {
+                    existing.merge_from(child);
+                } else {
+                    objects.insert(id, child);
+                }
+            }
+        }
+        if other.type_uri.is_some() {
+            self.type_uri = other.type_uri;
+        }
+        if other.desc.is_some() {
+            self.desc = other.desc;
+        }
+    }
+
     pub fn remove_item(&mut self, name: &str) -> Option<InfoItem> {
         let items = self.items.as_mut()?;
         let removed = items.remove(name);

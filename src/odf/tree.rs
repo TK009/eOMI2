@@ -354,10 +354,15 @@ impl ObjectTree {
         let segments = parse_path(path)?;
 
         if segments.is_empty() {
-            // Merge at root
+            // Merge at root: existing objects keep their items/children,
+            // new items/children from the incoming object are added.
             for (_, obj) in objects {
                 let id = obj.id.clone();
-                self.objects.insert(id, obj);
+                if let Some(existing) = self.objects.get_mut(&id) {
+                    existing.merge_from(obj);
+                } else {
+                    self.objects.insert(id, obj);
+                }
             }
             return Ok(());
         }
@@ -383,7 +388,12 @@ impl ObjectTree {
 
         // Merge children into the target object
         for (_, obj) in objects {
-            current.add_child(obj);
+            let id = obj.id.clone();
+            if let Some(existing) = current.get_child_mut(&id) {
+                existing.merge_from(obj);
+            } else {
+                current.add_child(obj);
+            }
         }
 
         Ok(())

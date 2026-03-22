@@ -31,6 +31,8 @@ use reconfigurable_device::gpio::pwm::EdgeType;
 use reconfigurable_device::wifi_ap;
 use reconfigurable_device::wifi_cfg;
 use reconfigurable_device::wifi_sm::{WifiSm, WifiSmConfig, WifiEvent, WifiAction, WifiState};
+#[cfg(feature = "secure_onboarding")]
+use reconfigurable_device::wsop::gateway;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -286,6 +288,21 @@ fn main() -> Result<()> {
 
         // Register UART/SPI RX/TX InfoItems in the O-DF tree (FR-008, FR-009)
         peripheral_manager.register_tree_items(&mut eng.tree);
+    }
+
+    // WSOP Gateway: register OnboardingGateway subtree if provisioned (FR-120–FR-126)
+    #[cfg(feature = "secure_onboarding")]
+    let mut gateway_state: Option<gateway::GatewayState> = None;
+    #[cfg(feature = "secure_onboarding")]
+    let mut gateway_ap_active = false;
+
+    #[cfg(feature = "secure_onboarding")]
+    if !creds.is_empty() {
+        let mut eng = lock_or_recover(&engine, "engine");
+        eng.tree.write_tree("/", gateway::build_gateway_tree())?;
+        info!("WSOP gateway: OnboardingGateway subtree registered");
+        drop(eng);
+        gateway_state = Some(gateway::GatewayState::new());
     }
 
     // Load and replay NVS-persisted writable items
@@ -550,6 +567,23 @@ fn main() -> Result<()> {
                     time_sync = TimeSync::start();
                 }
 
+                // WSOP gateway: start hidden AP alongside STA when connected (FR-120)
+                #[cfg(feature = "secure_onboarding")]
+                if gateway_state.is_some() && !gateway_ap_active {
+                    // Get current STA channel for hidden AP
+                    let channel = wifi.wifi().sta_netif().get_ip_info()
+                        .map(|_| {
+                            // ESP-IDF doesn't expose channel directly from netif,
+                            // use channel 1 as default (will be on same radio)
+                            1u8
+                        })
+                        .unwrap_or(1);
+                    match gateway::start_hidden_ap(&mut wifi, channel) {
+                        Ok(()) => gateway_ap_active = true,
+                        Err(e) => warn!("WSOP gateway: failed to start hidden AP: {}", e),
+                    }
+                }
+
                 // Check for IP change (DHCP renewal)
                 if let Ok(ip_info) = wifi.wifi().sta_netif().get_ip_info() {
                     let current_ip = ip_info.ip.to_string();
@@ -575,6 +609,15 @@ fn main() -> Result<()> {
                 if time_sync.take().is_some() {
                     info!("SNTP time sync stopped (WiFi disconnected)");
                 }
+
+                // WSOP gateway: stop hidden AP on disconnect
+                #[cfg(feature = "secure_onboarding")]
+                if gateway_ap_active {
+                    if let Err(e) = gateway::stop_hidden_ap(&mut wifi) {
+                        warn!("WSOP gateway: failed to stop hidden AP: {}", e);
+                    }
+                    gateway_ap_active = false;
+                }
             }
         }
 
@@ -598,6 +641,102 @@ fn main() -> Result<()> {
             let now = now_secs();
             let mut eng = lock_or_recover(&engine, "engine");
             gpio_manager.sample_adc(&mut eng.tree, now);
+        }
+
+        // WSOP gateway: process join requests, approvals, and timeouts (5s tick)
+        #[cfg(feature = "secure_onboarding")]
+        if let Some(ref mut gw_state) = gateway_state {
+            let gw_now = now_secs();
+            let gateway_time = gw_now as u32;
+
+            // Process new JoinRequest writes
+            {
+                let eng = lock_or_recover(&engine, "engine");
+                if let Ok(reconfigurable_device::odf::PathTarget::InfoItem(item)) =
+                    eng.tree.resolve(gateway::PATH_JOIN_REQUEST)
+                {
+                    let vals = item.query_values(Some(1), None, None, None);
+                    if let Some(val) = vals.first() {
+                        if let OmiValue::Str(ref b64) = val.v {
+                            match gw_state.process_join_request(b64, gateway_time, gw_now) {
+                                gateway::JoinResult::Queued => {
+                                    info!("WSOP gateway: join request queued ({} pending)", gw_state.pending_count());
+                                }
+                                gateway::JoinResult::Rejected => {}
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Process Approval writes
+            {
+                let eng = lock_or_recover(&engine, "engine");
+                let approval_b64 = if let Ok(reconfigurable_device::odf::PathTarget::InfoItem(item)) =
+                    eng.tree.resolve(gateway::PATH_APPROVAL)
+                {
+                    let vals = item.query_values(Some(1), None, None, None);
+                    vals.first().and_then(|val| {
+                        if let OmiValue::Str(ref s) = val.v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                } else {
+                    None
+                };
+                drop(eng);
+
+                if let Some(approval_json) = approval_b64 {
+                    let (ssid, password) = wifi_cfg.ssids.first()
+                        .map(|(s, p)| (s.as_str(), p.as_str()))
+                        .unwrap_or(("", ""));
+                    match gw_state.process_approval(&approval_json, ssid, password) {
+                        gateway::ApprovalResult::Approved { response_b64, .. } => {
+                            let mut eng = lock_or_recover(&engine, "engine");
+                            if let Err(e) = eng.tree.write_value(
+                                gateway::PATH_JOIN_RESPONSE,
+                                OmiValue::Str(response_b64),
+                                Some(gw_now),
+                            ) {
+                                warn!("WSOP gateway: failed to write JoinResponse: {}", e);
+                            }
+                            info!("WSOP gateway: approval processed");
+                        }
+                        gateway::ApprovalResult::NotFound => {}
+                    }
+                }
+            }
+
+            // Tick timeouts (auto-deny expired requests)
+            let timeout_result = gw_state.tick_timeouts(gw_now);
+            if !timeout_result.denials.is_empty() {
+                let mut eng = lock_or_recover(&engine, "engine");
+                for denial in &timeout_result.denials {
+                    if let Err(e) = eng.tree.write_value(
+                        gateway::PATH_JOIN_RESPONSE,
+                        OmiValue::Str(denial.response_b64.clone()),
+                        Some(gw_now),
+                    ) {
+                        warn!("WSOP gateway: failed to write denial: {}", e);
+                    }
+                }
+                info!("WSOP gateway: {} requests auto-denied (timeout)", timeout_result.denials.len());
+            }
+
+            // Update PendingRequests InfoItem
+            {
+                let pending_json = gw_state.pending_requests_json(gw_now);
+                let mut eng = lock_or_recover(&engine, "engine");
+                if let Err(e) = eng.tree.write_value(
+                    gateway::PATH_PENDING_REQUESTS,
+                    OmiValue::Str(pending_json),
+                    Some(gw_now),
+                ) {
+                    warn!("WSOP gateway: failed to write PendingRequests: {}", e);
+                }
+            }
         }
 
         // Record free heap memory (5s tick)

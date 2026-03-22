@@ -13,6 +13,8 @@ pub mod joiner;
 #[cfg(feature = "secure_onboarding")]
 pub mod onboard_sm;
 #[cfg(feature = "secure_onboarding")]
+pub mod gateway;
+#[cfg(feature = "secure_onboarding")]
 pub mod protocol;
 
 #[cfg(all(test, feature = "secure_onboarding"))]

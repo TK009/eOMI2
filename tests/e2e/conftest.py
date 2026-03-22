@@ -106,6 +106,15 @@ def device_ip(dut_lock):
     if not firmware:
         pytest.skip("FIRMWARE_PATH not set — cannot flash DUT")
 
+    # Erase flash first to remove stale NVS data from previous runs.
+    # Without this, accumulated test data makes the tree too large for
+    # the HTTP response buffer and full-tree reads hang.
+    subprocess.run(
+        ["espflash", "erase-flash", "--port", port],
+        check=True,
+        timeout=60,
+    )
+
     # Flash (ESP32-S2 with 2 MB firmware takes ~2 min over USB)
     subprocess.run(
         ["espflash", "flash", "--port", port, firmware],

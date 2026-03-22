@@ -77,12 +77,11 @@ impl Engine {
     /// For each due subscription, reads the newest value from the tree.
     /// Poll subscriptions buffer internally; callback subscriptions produce
     /// `Delivery` entries in the returned vec.
-    ///
-    /// Returns `(deliveries, next_trigger_time)` so the caller can schedule
-    /// the next wake-up instead of relying on a fixed tick interval.
-    pub fn tick(&mut self, now: f64) -> (Vec<super::subscriptions::Delivery>, Option<f64>) {
+    pub fn tick(&mut self, now: f64) -> Vec<super::subscriptions::Delivery> {
         let tree = &self.tree;
-        let (mut deliveries, next_trigger) = self.subscriptions.tick_intervals(now, &|path| {
+        // next_trigger_time intentionally discarded: the main loop ticks on a
+        // fixed interval rather than scheduling the next wake-up dynamically.
+        let (mut deliveries, _next_trigger) = self.subscriptions.tick_intervals(now, &|path| {
             match tree.resolve(path) {
                 Ok(PathTarget::InfoItem(item)) => {
                     Some(item.query_values(Some(1), None, None, None))
@@ -110,12 +109,7 @@ impl Engine {
                 }
             }
         }
-        (deliveries, next_trigger)
-    }
-
-    /// Returns the next interval trigger time, if any interval subs exist.
-    pub fn next_trigger_time(&self) -> Option<f64> {
-        self.subscriptions.next_trigger_time()
+        deliveries
     }
 
     /// Provide access to the subscription registry for event notification
@@ -2148,7 +2142,7 @@ mod tests {
             // Create interval callback subscription (interval=10s, ttl=60s)
             e.process(sub_msg("/Dev/TempC", 10.0, 60), 1000.0, None);
             // Tick past the interval
-            let (deliveries, _next) = e.tick(1011.0);
+            let deliveries = e.tick(1011.0);
             assert_eq!(deliveries.len(), 1);
             // Delivered value should be transformed: 100°C → 212°F
             assert_eq!(deliveries[0].values[0].v, OmiValue::Number(212.0));
@@ -2160,7 +2154,7 @@ mod tests {
             let mut e = Engine::new();
             e.process(write_msg("/Dev/Raw", OmiValue::Number(42.0)), 0.0, None);
             e.process(sub_msg("/Dev/Raw", 10.0, 60), 1000.0, None);
-            let (deliveries, _next) = e.tick(1011.0);
+            let deliveries = e.tick(1011.0);
             assert_eq!(deliveries.len(), 1);
             assert_eq!(deliveries[0].values[0].v, OmiValue::Number(42.0));
         }

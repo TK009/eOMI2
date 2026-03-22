@@ -195,7 +195,7 @@ fn interval_sub_js_callback_fires_on_tick() {
     let rid = response_rid(&resp).to_string();
 
     // Tick at BASE_TIME+10 — interval fires
-    let (deliveries, _) = e.tick(BASE_TIME + 10.0);
+    let deliveries = e.tick(BASE_TIME + 10.0);
     assert_eq!(deliveries.len(), 1);
     assert_eq!(deliveries[0].rid, rid);
     assert!(
@@ -235,7 +235,7 @@ fn interval_sub_js_callback_fires_multiple_ticks() {
     // Tick 3 times
     for i in 1..=3 {
         let tick_time = BASE_TIME + (i as f64 * 5.0);
-        let (deliveries, _) = e.tick(tick_time);
+        let deliveries = e.tick(tick_time);
         assert_eq!(deliveries.len(), 1, "tick {} should produce 1 delivery", i);
 
         e.run_callback_script(
@@ -306,7 +306,7 @@ fn interval_sub_js_callback_ttl_expiry_stops_ticks() {
     assert_eq!(response_status(&resp), 200);
 
     // First tick at +10s — within TTL, should fire
-    let (deliveries, _) = e.tick(BASE_TIME + 10.0);
+    let deliveries = e.tick(BASE_TIME + 10.0);
     assert_eq!(deliveries.len(), 1, "first tick within TTL should fire");
 
     e.run_callback_script(
@@ -321,7 +321,7 @@ fn interval_sub_js_callback_ttl_expiry_stops_ticks() {
     create_item(&mut e, "/Sensor/ShortLived", 88.0);
 
     // Second tick at +20s — beyond TTL (BASE_TIME + 15), should NOT fire
-    let (deliveries, _) = e.tick(BASE_TIME + 20.0);
+    let deliveries = e.tick(BASE_TIME + 20.0);
     assert!(deliveries.is_empty(), "tick after TTL expiry should produce no deliveries");
 
     // Target should still have old value

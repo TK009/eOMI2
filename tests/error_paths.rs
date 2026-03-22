@@ -1242,7 +1242,7 @@ mod subscription_errors {
         );
         assert_eq!(response_status(&resp), 200);
         let rid = response_rid(&resp).to_string();
-        let (deliveries, _) = e.tick(10.0);
+        let deliveries = e.tick(10.0);
         assert!(deliveries.is_empty());
         let poll_json = format!(r#"{{"omi":"1.0","ttl":0,"read":{{"rid":"{}"}}}}"#, rid);
         let resp = process_at(&mut e, &poll_json, 10.0, None);
@@ -1262,7 +1262,7 @@ mod subscription_errors {
         parse_and_process(&mut e, r#"{"omi":"1.0","ttl":0,"delete":{"path":"/t"}}"#);
         // Tick should not panic; delivery may fire with empty values
         // since the path no longer exists (read returns None → empty vec)
-        let (deliveries, _) = e.tick(3.0);
+        let deliveries = e.tick(3.0);
         if !deliveries.is_empty() {
             assert!(deliveries[0].values.is_empty(), "deleted path should yield no values");
         }

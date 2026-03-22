@@ -247,7 +247,7 @@ fn interval_sub_fires_on_tick() {
 
     // Tick at BASE_TIME+10 (exactly when the interval fires).
     // Poll-target subs buffer internally, so tick returns no deliveries.
-    let (deliveries, _) = e.tick(BASE_TIME + 10.0);
+    let deliveries = e.tick(BASE_TIME + 10.0);
     assert!(deliveries.is_empty(), "poll-target tick should produce no deliveries");
 
     // Poll to retrieve the buffered value
@@ -278,7 +278,7 @@ fn interval_sub_skips_before_due() {
     let rid = response_rid(&resp).to_string();
 
     // Tick at +5s (before the 10s interval is due)
-    let (deliveries, _) = e.tick(BASE_TIME + 5.0);
+    let deliveries = e.tick(BASE_TIME + 5.0);
     assert!(deliveries.is_empty(), "tick before interval due should produce no deliveries");
 
     // Poll — should be empty since interval hasn't fired yet
@@ -309,7 +309,7 @@ fn interval_sub_callback_delivery() {
     let rid = response_rid(&resp).to_string();
 
     // Tick at BASE_TIME+10 (interval fires)
-    let (deliveries, _) = e.tick(BASE_TIME + 10.0);
+    let deliveries = e.tick(BASE_TIME + 10.0);
 
     // Callback subscription should produce a Delivery (not buffer internally)
     assert_eq!(deliveries.len(), 1);

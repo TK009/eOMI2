@@ -145,7 +145,7 @@ def test_interval_js_callback_executes_script(base_url, token):
     # 1. Store callback script: reads source value and writes it +1 to dest
     store_callback_script(
         base_url, "on_interval",
-        "var v = odf.readItem('/JsCb/Src/value'); odf.writeItem(v + 1, '/JsCb/IntervalDst');",
+        "odf.writeItem(odf.readItem('/JsCb/Src/value') + 1, '/JsCb/IntervalDst');",
         token=token,
     )
 
@@ -184,7 +184,7 @@ def test_interval_js_callback_fires_multiple_ticks(base_url, token):
     # Script increments the destination value each time it fires
     store_callback_script(
         base_url, "counter",
-        "var c = odf.readItem('/JsCb/Counter/value'); odf.writeItem(c + 1, '/JsCb/Counter');",
+        "odf.writeItem(odf.readItem('/JsCb/Counter/value') + 1, '/JsCb/Counter');",
         token=token,
     )
 

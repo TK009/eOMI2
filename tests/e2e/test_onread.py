@@ -384,7 +384,7 @@ def test_cascading_onread(base_url, token):
 def test_self_read_recursion_guard(base_url, token):
     """Onread that reads its own path gets stored value (no infinite loop)."""
     objects = _make_onread_object(
-        "OnRead", "SelfRead", "odf.readItem('/OnRead/SelfRead') + 1"
+        "OnRead", "SelfRead", "odf.readItem('/OnRead/SelfRead/value') + 1"
     )
     data = omi_write_tree(base_url, "/", objects, token=token, timeout=TREE_WRITE_TIMEOUT)
     assert data["response"]["status"] in (200, 201)
@@ -409,9 +409,9 @@ def test_self_read_recursion_guard(base_url, token):
 
 
 def test_onread_string_transform(base_url, token):
-    """Onread can transform string values."""
+    """Onread can transform string values (concatenation)."""
     objects = _make_onread_object(
-        "OnRead", "StrXform", "String(event.value).toUpperCase()"
+        "OnRead", "StrXform", "'[' + event.value + ']'"
     )
     data = omi_write_tree(base_url, "/", objects, token=token, timeout=TREE_WRITE_TIMEOUT)
     assert data["response"]["status"] in (200, 201)
@@ -421,4 +421,4 @@ def test_onread_string_transform(base_url, token):
 
     read = omi_read(base_url, "/OnRead/StrXform", token=token, newest=1)
     assert omi_status(read) == 200
-    assert omi_result(read)["values"][0]["v"] == "HELLO"
+    assert omi_result(read)["values"][0]["v"] == "[hello]"

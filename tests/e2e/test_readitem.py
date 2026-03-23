@@ -83,7 +83,7 @@ def test_readitem_element_structure(base_url, token):
                 "writable": True,
                 "onwrite": (
                     "let elem = odf.readItem('/ReadItem/Target');"
-                    "odf.writeItem(elem.values[0].v, '/ReadItem/Result');"
+                    "odf.writeItem(elem.value, '/ReadItem/Result');"
                 ),
             },
         },

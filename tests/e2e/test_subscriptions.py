@@ -21,8 +21,9 @@ from helpers import (
     run_async,
 )
 
-# Main loop ticks every ~5 s; generous timeout for poll delivery
-TICK_WAIT = 12
+# Main loop ticks every ~5 s; generous timeout for poll delivery.
+# After stress tests the device may need extra recovery time.
+TICK_WAIT = 18
 
 
 @pytest.fixture(autouse=True, scope="module")

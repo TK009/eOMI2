@@ -49,9 +49,23 @@ def _assert_wall_clock(timestamp, label="timestamp"):
 # -- tests -------------------------------------------------------------------
 
 
+def _wait_for_ntp_sync(base_url, timeout=60):
+    """Poll FreeHeap until timestamps reflect wall-clock time (NTP synced)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            values = wait_for_values(base_url, path="/System/FreeHeap")
+            if values and values[0].get("t", 0) > WALL_CLOCK_FLOOR:
+                return values
+        except Exception:
+            pass
+        time.sleep(5)
+    pytest.fail(f"NTP did not sync within {timeout}s")
+
+
 def test_sensor_timestamp_is_wall_clock(base_url):
     """A system sensor reading has a wall-clock timestamp (> 2025-01-01)."""
-    values = wait_for_values(base_url, path="/System/FreeHeap")
+    values = _wait_for_ntp_sync(base_url, timeout=60)
     _assert_wall_clock(values[0]["t"], "FreeHeap timestamp")
 
 

@@ -62,9 +62,11 @@ for _dir in "$PROJECT_ROOT"/target/xtensa-esp32s2-espidf/*/build/esp-idf-sys-*/o
     [[ -d "$_dir" ]] && cp -n "$PROJECT_ROOT/partitions.csv" "$_dir/partitions.csv" 2>/dev/null || true
 done
 
+BUILD_FEATURES="std,esp,gpio,lite-json,scripting,mem-stats"
+
 if [[ "$SKIP_BUILD" == false ]]; then
     echo "── Building firmware ──"
-    if ! (cd "$PROJECT_ROOT" && cargo build --no-default-features --features std,esp,gpio,lite-json,scripting,mem-stats); then
+    if ! (cd "$PROJECT_ROOT" && cargo build --no-default-features --features "$BUILD_FEATURES"); then
         echo "ERROR: firmware build failed" >&2
         exit 1
     fi
@@ -73,31 +75,31 @@ else
 fi
 
 # ── 2. Build OTA binaries (firmware A and B) ─────────────────────────
+# OTA binaries use release profile — debug builds (~2 MB) exceed the OTA
+# partition size (0x1E0000 = 1920 KB).
 FIRMWARE="$PROJECT_ROOT/target/xtensa-esp32s2-espidf/debug/reconfigurable-device"
-FIRMWARE_A_BIN="$PROJECT_ROOT/target/xtensa-esp32s2-espidf/debug/firmware-a.bin"
-FIRMWARE_B_BIN="$PROJECT_ROOT/target/xtensa-esp32s2-espidf/debug/firmware-b.bin"
-BUILD_FEATURES="std,esp,gpio,lite-json,scripting,mem-stats"
+OTA_FIRMWARE="$PROJECT_ROOT/target/xtensa-esp32s2-espidf/release/reconfigurable-device"
+FIRMWARE_A_BIN="$PROJECT_ROOT/target/xtensa-esp32s2-espidf/release/firmware-a.bin"
+FIRMWARE_B_BIN="$PROJECT_ROOT/target/xtensa-esp32s2-espidf/release/firmware-b.bin"
 
-echo "── Building OTA binaries ──"
-# Save version "A" (current build) as OTA binary for restore step
-espflash save-image --chip esp32s2 --format esp-idf "$FIRMWARE" "$FIRMWARE_A_BIN"
+echo "── Building OTA binaries (release) ──"
+# Build release version "A" for OTA
+if ! (cd "$PROJECT_ROOT" && cargo build --release \
+    --no-default-features --features "$BUILD_FEATURES"); then
+    echo "ERROR: firmware A release build failed" >&2
+    exit 1
+fi
+espflash save-image --chip esp32s2 --format esp-idf "$OTA_FIRMWARE" "$FIRMWARE_A_BIN"
 gzip -c "$FIRMWARE_A_BIN" > "$FIRMWARE_A_BIN.gz"
 
-# Build version "B" with a different FIRMWARE_VERSION for OTA test
-if ! (cd "$PROJECT_ROOT" && FIRMWARE_VERSION="e2e-ota-test" cargo build \
+# Build release version "B" with a different FIRMWARE_VERSION for OTA test
+if ! (cd "$PROJECT_ROOT" && FIRMWARE_VERSION="e2e-ota-test" cargo build --release \
     --no-default-features --features "$BUILD_FEATURES"); then
-    echo "ERROR: firmware B build failed" >&2
+    echo "ERROR: firmware B release build failed" >&2
     exit 1
 fi
-espflash save-image --chip esp32s2 --format esp-idf "$FIRMWARE" "$FIRMWARE_B_BIN"
+espflash save-image --chip esp32s2 --format esp-idf "$OTA_FIRMWARE" "$FIRMWARE_B_BIN"
 gzip -c "$FIRMWARE_B_BIN" > "$FIRMWARE_B_BIN.gz"
-
-# Rebuild original version "A" to leave the build dir clean
-if ! (cd "$PROJECT_ROOT" && unset FIRMWARE_VERSION && cargo build \
-    --no-default-features --features "$BUILD_FEATURES"); then
-    echo "ERROR: firmware A rebuild failed" >&2
-    exit 1
-fi
 
 export OTA_FIRMWARE_A_GZ="$FIRMWARE_A_BIN.gz"
 export OTA_FIRMWARE_B_GZ="$FIRMWARE_B_BIN.gz"

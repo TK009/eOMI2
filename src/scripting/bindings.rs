@@ -230,6 +230,14 @@ unsafe fn info_item_to_mjs(mjs: *mut ffi::mjs, item: &InfoItem) -> ffi::mjs_val_
     let (vals_name, vals_len) = mjs_name!("values");
     ffi::mjs_set(mjs, obj, vals_name, vals_len, arr);
 
+    // Top-level "value" shortcut — newest value accessible without array
+    // indexing, which works around the mJS array indexing bug on xtensa.
+    if !values.is_empty() {
+        let (vname, vlen) = mjs_name!("value");
+        let vval = convert::omi_to_mjs(mjs, &values[0].v);
+        ffi::mjs_set(mjs, obj, vname, vlen, vval);
+    }
+
     obj
 }
 

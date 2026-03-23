@@ -54,7 +54,21 @@ PORTAL_URL = f"http://{PORTAL_IP}"
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
-def device_hostname():
+def device_hostname(device_ip):
+    """Discover the DUT's actual mDNS hostname by matching its IP in browse results.
+
+    In multi-device environments, the default hostname "eomi" may resolve to a
+    different device.  We browse _omi._tcp, find the service advertising the
+    DUT's IP, and extract the instance name to use as the hostname.
+    """
+    services = browse_omi_services(timeout=BROWSE_TIMEOUT)
+    for svc in services:
+        if svc["ip"] == device_ip:
+            # Instance name is e.g. "eOMI-2._omi._tcp.local." — extract the
+            # part before the first dot.
+            instance = svc["name"].split(".")[0]
+            return instance
+    # Fallback to env / default if mDNS browse didn't find the DUT IP.
     return DEVICE_HOSTNAME
 
 
@@ -183,42 +197,36 @@ class TestDnsSdBrowse:
         """Browse for _omi._tcp services."""
         return browse_omi_services(timeout=BROWSE_TIMEOUT)
 
-    def test_service_found(self, discovered_services, device_hostname):
+    def _find_dut_service(self, discovered_services, device_ip):
+        """Find the DUT's service by IP (exact match, avoids hostname substring ambiguity)."""
+        return [s for s in discovered_services if s["ip"] == device_ip]
+
+    def test_service_found(self, discovered_services, device_ip):
         """SC-002: Device appears in _omi._tcp browse within 10s."""
         names = [s["name"] for s in discovered_services]
-        matching = [
-            s for s in discovered_services
-            if device_hostname in s["name"]
-        ]
+        matching = self._find_dut_service(discovered_services, device_ip)
         assert matching, (
-            f"Device '{device_hostname}' not found in _omi._tcp browse. "
+            f"Device IP {device_ip} not found in _omi._tcp browse. "
             f"Found: {names}"
         )
 
     def test_service_ip_matches(self, discovered_services, device_ip, device_hostname):
-        """Discovered service IP matches the known device IP."""
-        matching = [
-            s for s in discovered_services
-            if device_hostname in s["name"]
-        ]
+        """Discovered service name contains the device hostname."""
+        matching = self._find_dut_service(discovered_services, device_ip)
         assert matching, "Device not found in browse results"
-        assert matching[0]["ip"] == device_ip
+        assert device_hostname.lower() in matching[0]["name"].lower(), (
+            f"Service name '{matching[0]['name']}' doesn't contain '{device_hostname}'"
+        )
 
-    def test_service_port(self, discovered_services, device_hostname):
+    def test_service_port(self, discovered_services, device_ip):
         """Discovered service advertises port 80."""
-        matching = [
-            s for s in discovered_services
-            if device_hostname in s["name"]
-        ]
+        matching = self._find_dut_service(discovered_services, device_ip)
         assert matching, "Device not found in browse results"
         assert matching[0]["port"] == 80
 
-    def test_txt_record_has_path(self, discovered_services, device_hostname):
+    def test_txt_record_has_path(self, discovered_services, device_ip):
         """SC-003: TXT record contains the O-DF object path."""
-        matching = [
-            s for s in discovered_services
-            if device_hostname in s["name"]
-        ]
+        matching = self._find_dut_service(discovered_services, device_ip)
         assert matching, "Device not found in browse results"
         txt = matching[0]["txt"]
         assert "path" in txt, f"TXT record missing 'path' key: {txt}"
@@ -304,7 +312,7 @@ class TestMdnsApMode:
     def _needs_serial(self, device_port):
         """These tests require serial access for reset."""
 
-    def test_mdns_stops_in_ap_mode(self, device_port, device_hostname):
+    def test_mdns_stops_in_ap_mode(self, device_port, device_hostname, device_ip):
         """SC-005: After factory reset (entering portal mode), mDNS hostname
         no longer resolves on the STA network."""
         import subprocess
@@ -319,24 +327,24 @@ class TestMdnsApMode:
         )
         reboot_device(device_port)
 
-        # Wait for portal to come up (device is now in AP mode)
-        time.sleep(10)
+        # Wait for the device to actually go offline on STA
+        wait_for_device_down(f"http://{device_ip}", timeout=15)
 
-        # mDNS should NOT resolve on the STA network anymore
-        resolved = resolve_mdns_hostname(device_hostname, timeout=5)
-        assert resolved is None, (
-            f"{device_hostname}.local still resolves to {resolved} in AP mode"
+        # Fresh browse — the DUT's IP should no longer appear.
+        # mDNS resolution can return stale cached records (TTL ~120s),
+        # so we check via browse + IP match instead.
+        services = browse_omi_services(timeout=5)
+        matching = [s for s in services if s["ip"] == device_ip]
+        assert not matching, (
+            f"Device IP {device_ip} still advertising _omi._tcp in AP mode: {matching}"
         )
 
-    def test_dns_sd_stops_in_ap_mode(self, device_hostname):
+    def test_dns_sd_stops_in_ap_mode(self, device_hostname, device_ip):
         """_omi._tcp service should not be browseable when in AP mode."""
         services = browse_omi_services(timeout=5)
-        matching = [
-            s for s in services
-            if device_hostname in s["name"]
-        ]
+        matching = [s for s in services if s["ip"] == device_ip]
         assert not matching, (
-            f"Device still advertising _omi._tcp in AP mode: {matching}"
+            f"Device IP {device_ip} still advertising _omi._tcp in AP mode: {matching}"
         )
 
 
@@ -402,7 +410,7 @@ class TestMdnsResumeAfterProvisioning:
         services = browse_omi_services(timeout=BROWSE_TIMEOUT)
         matching = [
             s for s in services
-            if device_hostname in s["name"]
+            if device_hostname.lower() in s["name"].lower()
         ]
         assert matching, (
             f"Device not found in _omi._tcp browse after re-provisioning"

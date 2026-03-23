@@ -218,10 +218,10 @@ def nvs_binary_rebooted(base_url, token, device_port):
     # Wait for NVS dirty-flag flush
     time.sleep(NVS_FLUSH_WAIT_S)
 
-    # Hardware reset
+    # Hardware reset — generous timeout: WiFi reconnect + DHCP + OMI init
     reboot_device(device_port)
     wait_for_device_down(base_url, timeout=10)
-    wait_for_device(base_url, timeout=30)
+    wait_for_device(base_url, timeout=60)
 
     yield
 

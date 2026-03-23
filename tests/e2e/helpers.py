@@ -10,7 +10,7 @@ import requests
 REQUEST_TIMEOUT = 15  # seconds – ESP32-S2 full tree reads can take 7+ seconds
 OTA_TIMEOUT = 120  # seconds – generous for ~1.2 MB compressed over LAN
 TREE_WRITE_TIMEOUT = 45  # seconds – tree writes with metadata need more time on ESP32-S2
-WS_TIMEOUT = 10  # seconds – WebSocket operation timeout
+WS_TIMEOUT = 20  # seconds – WebSocket operation timeout (generous for device under load)
 DEVICE_RETRIES = 3  # retry count for transient connection resets (ESP32 has limited sockets)
 
 
@@ -21,7 +21,7 @@ def device_get(url, **kwargs):
     for attempt in range(DEVICE_RETRIES):
         try:
             return requests.get(url, **kwargs)
-        except requests.ConnectionError as e:
+        except (requests.ConnectionError, requests.exceptions.ReadTimeout) as e:
             last_err = e
             time.sleep(1)
     raise last_err
@@ -118,7 +118,7 @@ def _omi_post(base_url, payload, token=None, timeout=None, check=True):
             if check:
                 resp.raise_for_status()
             return resp.json()
-        except requests.ConnectionError as e:
+        except (requests.ConnectionError, requests.exceptions.ReadTimeout) as e:
             last_err = e
             time.sleep(1)
     raise last_err

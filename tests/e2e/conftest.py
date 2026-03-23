@@ -42,15 +42,27 @@ def _discover_ip(port: str, timeout: float = 30) -> str:
     raise TimeoutError(f"Device on {port} did not report an IP within {timeout}s")
 
 
-def _health_check(ip: str, timeout: float = 15) -> None:
-    """Poll ``http://<ip>/`` until it responds 200."""
+def _health_check(ip: str, timeout: float = 30) -> None:
+    """Poll OMI read on ``/`` until the tree is populated.
+
+    A simple HTTP 200 on ``/`` only proves the HTTP server is up, but GPIO
+    and sensor initialization may still be in progress, leaving the OMI tree
+    empty.  We wait until the OMI root read returns at least one child.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            resp = requests.get(f"http://{ip}/", timeout=5)
+            resp = requests.post(
+                f"http://{ip}/omi",
+                json={"omi": "1.0", "ttl": 0, "read": {"path": "/"}},
+                timeout=5,
+            )
             if resp.status_code == 200:
-                return
-        except requests.RequestException:
+                data = resp.json()
+                result = data.get("response", {}).get("result")
+                if result and len(result) > 0:
+                    return
+        except (requests.RequestException, ValueError):
             pass
         time.sleep(1)
     raise TimeoutError(f"Health check failed for {ip} within {timeout}s")
@@ -123,7 +135,7 @@ def device_ip(dut_lock):
     ip = _discover_ip(port, timeout=30)
 
     # Health check
-    _health_check(ip, timeout=15)
+    _health_check(ip, timeout=60)
 
     return ip
 

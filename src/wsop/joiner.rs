@@ -84,7 +84,14 @@ pub fn run_onboarding(
                 OnboardDisplay::none()
             }
         }
-        "digit" => OnboardDisplay::digit(board::neopixel_pin().unwrap_or(2)),
+        "digit" => {
+            if let Some(pin) = board::led_pin() {
+                OnboardDisplay::digit(pin)
+            } else {
+                warn!("WSOP: digit mode configured but no LED pin found in board config");
+                OnboardDisplay::none()
+            }
+        }
         _ => OnboardDisplay::none(),
     };
 
@@ -399,11 +406,14 @@ fn send_join_request(request: &JoinRequest, display_mode: DisplayMode) -> Result
 
     let encoded = protocol::base64_encode(&request_bytes);
 
-    // Include display_mode in the OMI value
+    // Prefix the base64 payload with the display mode so the gateway
+    // can include it in the PendingRequests JSON for the owner.
+    // Format: "color:<base64>" or "digit:<base64>"
     let display_mode_str = display_mode.as_str();
+    let prefixed_value = format!("{}:{}", display_mode_str, encoded);
     let body = format!(
-        r#"{{"{}": {{"value": "{}", "display_mode": "{}"}}}}"#,
-        JOIN_REQUEST_PATH, encoded, display_mode_str,
+        r#"{{"{}": {{"value": "{}"}}}}"#,
+        JOIN_REQUEST_PATH, prefixed_value,
     );
 
     let url = format!("{}/write", GATEWAY_BASE_URL);

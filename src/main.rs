@@ -657,8 +657,11 @@ fn main() -> Result<()> {
                 {
                     let vals = item.query_values(Some(1), None, None, None);
                     if let Some(val) = vals.first() {
-                        if let OmiValue::Str(ref b64) = val.v {
-                            match gw_state.process_join_request(b64, gateway_time, gw_now) {
+                        if let OmiValue::Str(ref raw) = val.v {
+                            // Value format: "display_mode:base64" or just "base64"
+                            // (display_mode prefix added by WSOP joiners).
+                            let (display_mode, b64) = gateway::split_display_mode(raw);
+                            match gw_state.process_join_request(b64, gateway_time, gw_now, display_mode) {
                                 gateway::JoinResult::Queued => {
                                     info!("WSOP gateway: join request queued ({} pending)", gw_state.pending_count());
                                 }

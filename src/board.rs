@@ -69,6 +69,22 @@ pub fn onboard_display_mode() -> &'static str {
     { "none" }
 }
 
+/// GPIO pin for the board's default LED (named "LED" in the board TOML).
+///
+/// Used by WSOP digit-mode verification display. Returns `None` if no
+/// board config is loaded or no GPIO is named "LED".
+pub fn led_pin() -> Option<u8> {
+    #[cfg(has_board_config)]
+    {
+        generated::GPIO_CONFIGS
+            .iter()
+            .find(|(_, _, name)| name.eq_ignore_ascii_case("led"))
+            .map(|(pin, _, _)| *pin)
+    }
+    #[cfg(not(has_board_config))]
+    { None }
+}
+
 #[cfg(any(has_board_config, test))]
 fn parse_mode(s: &str) -> Option<GpioMode> {
     match s {

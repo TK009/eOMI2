@@ -149,7 +149,7 @@ pubkey           bytes         32    X25519 public key
 nonce            bytes          8    Random nonce (replay protection)
 timestamp        uint32         4    Unix timestamp (seconds), device's best estimate
 ─────────────────────────────────────────────────────────
-Total                     max 83 bytes
+Total                     max 84 bytes
 ```
 
 ### 6.2 JOIN_RESPONSE (AP → Device)
@@ -330,7 +330,7 @@ For most IoT onboarding scenarios, the single-mode verification (color or digit)
 | Component | Bytes |
 |-----------|-------|
 | X25519 public key | 32 |
-| JOIN_REQUEST (max) | 83 |
+| JOIN_REQUEST (max) | 84 |
 | JOIN_RESPONSE ciphertext overhead | 48 |
 | JOIN_RESPONSE total (max, approved) | 155 |
 | Verification code | 1 (derived, not transmitted) |

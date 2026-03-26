@@ -60,6 +60,7 @@ pub struct PendingRequest {
     pub nonce: [u8; 8],
     pub verify_color: &'static str,
     pub verify_digit: u8,
+    pub display_mode: String,
     pub queued_at_secs: f64,
 }
 
@@ -128,11 +129,16 @@ impl GatewayState {
     ///
     /// Decodes base64 → wire bytes → JoinRequest, validates timestamp,
     /// computes verify code, and queues the request.
+    ///
+    /// `display_mode` is the joiner's verification display type ("color",
+    /// "digit", or "none"), sent in the OMI JSON envelope alongside the
+    /// base64-encoded wire payload.
     pub fn process_join_request(
         &mut self,
         b64_value: &str,
         gateway_time_secs: u32,
         now_secs: f64,
+        display_mode: &str,
     ) -> JoinResult {
         // Decode base64 → wire bytes
         let wire_bytes = match protocol::base64_decode(b64_value) {
@@ -176,6 +182,7 @@ impl GatewayState {
             nonce: req.nonce,
             verify_color,
             verify_digit,
+            display_mode: String::from(display_mode),
             queued_at_secs: now_secs,
         });
 
@@ -195,8 +202,8 @@ impl GatewayState {
                 p.mac[0], p.mac[1], p.mac[2], p.mac[3], p.mac[4], p.mac[5]
             );
             json.push_str(&format!(
-                "{{\"mac\":\"{}\",\"name\":\"{}\",\"color\":\"{}\",\"digit\":{},\"remaining\":{}}}",
-                mac_str, p.name, p.verify_color, p.verify_digit, remaining
+                "{{\"mac\":\"{}\",\"name\":\"{}\",\"color\":\"{}\",\"digit\":{},\"display_mode\":\"{}\",\"expires_in\":{}}}",
+                mac_str, p.name, p.verify_color, p.verify_digit, p.display_mode, remaining
             ));
         }
         json.push(']');
@@ -302,6 +309,21 @@ impl GatewayState {
 
         TimeoutResult { denials }
     }
+}
+
+// ---------- Value format helpers ----------
+
+/// Split a JoinRequest InfoItem value into display_mode and base64 payload.
+///
+/// Format: `"color:<base64>"` or `"digit:<base64>"` or just `"<base64>"`.
+/// Returns `(display_mode, base64_payload)`. Defaults to `"color"` if no prefix.
+pub fn split_display_mode(raw: &str) -> (&str, &str) {
+    for prefix in &["color:", "digit:", "none:"] {
+        if let Some(rest) = raw.strip_prefix(prefix) {
+            return (&prefix[..prefix.len() - 1], rest);
+        }
+    }
+    ("color", raw)
 }
 
 // ---------- Minimal JSON parsing helpers ----------
@@ -502,7 +524,7 @@ mod tests {
     fn queue_join_request() {
         let mut gw = GatewayState::new();
         let b64 = make_join_request_b64("sensor-1", [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01], 1000);
-        let result = gw.process_join_request(&b64, 1000, 100.0);
+        let result = gw.process_join_request(&b64, 1000, 100.0, "color");
         assert_eq!(result, JoinResult::Queued);
         assert_eq!(gw.pending_count(), 1);
     }
@@ -512,7 +534,7 @@ mod tests {
         let mut gw = GatewayState::new();
         let b64 = make_join_request_b64("sensor-1", [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01], 1000);
         // Gateway time is 2000, drift = 1000 > 300
-        let result = gw.process_join_request(&b64, 2000, 100.0);
+        let result = gw.process_join_request(&b64, 2000, 100.0, "color");
         assert_eq!(result, JoinResult::Rejected);
         assert_eq!(gw.pending_count(), 0);
     }
@@ -526,11 +548,11 @@ mod tests {
                 [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, i],
                 1000,
             );
-            assert_eq!(gw.process_join_request(&b64, 1000, 100.0), JoinResult::Queued);
+            assert_eq!(gw.process_join_request(&b64, 1000, 100.0, "color"), JoinResult::Queued);
         }
         // 5th request should be rejected
         let b64 = make_join_request_b64("sensor", [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], 1000);
-        assert_eq!(gw.process_join_request(&b64, 1000, 100.0), JoinResult::Rejected);
+        assert_eq!(gw.process_join_request(&b64, 1000, 100.0, "color"), JoinResult::Rejected);
     }
 
     #[test]
@@ -540,8 +562,8 @@ mod tests {
         let b64_1 = make_join_request_b64("first", mac, 1000);
         let b64_2 = make_join_request_b64("second", mac, 1001);
 
-        gw.process_join_request(&b64_1, 1000, 100.0);
-        gw.process_join_request(&b64_2, 1001, 101.0);
+        gw.process_join_request(&b64_1, 1000, 100.0, "color");
+        gw.process_join_request(&b64_2, 1001, 101.0, "color");
 
         assert_eq!(gw.pending_count(), 1);
         assert_eq!(gw.pending[0].name, "second");
@@ -551,14 +573,15 @@ mod tests {
     fn pending_requests_json_format() {
         let mut gw = GatewayState::new();
         let b64 = make_join_request_b64("sensor-1", [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01], 1000);
-        gw.process_join_request(&b64, 1000, 100.0);
+        gw.process_join_request(&b64, 1000, 100.0, "color");
 
         let json = gw.pending_requests_json(100.0);
         assert!(json.starts_with('['));
         assert!(json.ends_with(']'));
         assert!(json.contains("\"mac\":\"AA:BB:CC:DD:EE:01\""));
         assert!(json.contains("\"name\":\"sensor-1\""));
-        assert!(json.contains("\"remaining\":60"));
+        assert!(json.contains("\"expires_in\":60"));
+        assert!(json.contains("\"display_mode\":\"color\""));
     }
 
     #[test]
@@ -571,7 +594,7 @@ mod tests {
         let b64 = make_join_request_b64_with_key(
             "sensor", mac, 1000, device_kp.public_bytes(), nonce,
         );
-        gw.process_join_request(&b64, 1000, 100.0);
+        gw.process_join_request(&b64, 1000, 100.0, "color");
 
         let approval = r#"{"mac": "AA:BB:CC:DD:EE:FF", "action": "approve"}"#;
         let result = gw.process_approval(approval, "HomeNet", "secret123");
@@ -608,7 +631,7 @@ mod tests {
     fn timeout_auto_denies() {
         let mut gw = GatewayState::new();
         let b64 = make_join_request_b64("sensor", [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01], 1000);
-        gw.process_join_request(&b64, 1000, 100.0);
+        gw.process_join_request(&b64, 1000, 100.0, "color");
         assert_eq!(gw.pending_count(), 1);
 
         // Tick at 161s (past 60s timeout from queued_at=100)
@@ -626,7 +649,7 @@ mod tests {
     fn timeout_does_not_expire_fresh() {
         let mut gw = GatewayState::new();
         let b64 = make_join_request_b64("sensor", [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01], 1000);
-        gw.process_join_request(&b64, 1000, 100.0);
+        gw.process_join_request(&b64, 1000, 100.0, "color");
 
         // Tick at 130s (only 30s elapsed, not expired)
         let result = gw.tick_timeouts(130.0);
@@ -638,7 +661,7 @@ mod tests {
     fn reject_invalid_base64() {
         let mut gw = GatewayState::new();
         assert_eq!(
-            gw.process_join_request("not-valid-base64!!!", 1000, 100.0),
+            gw.process_join_request("not-valid-base64!!!", 1000, 100.0, "color"),
             JoinResult::Rejected,
         );
     }
@@ -698,5 +721,18 @@ mod tests {
         // JoinResponse and PendingRequests must NOT be writable
         assert!(!items["JoinResponse"].is_writable());
         assert!(!items["PendingRequests"].is_writable());
+    }
+
+    #[test]
+    fn split_display_mode_with_prefix() {
+        assert_eq!(split_display_mode("color:AQID"), ("color", "AQID"));
+        assert_eq!(split_display_mode("digit:AQID"), ("digit", "AQID"));
+        assert_eq!(split_display_mode("none:AQID"), ("none", "AQID"));
+    }
+
+    #[test]
+    fn split_display_mode_no_prefix() {
+        assert_eq!(split_display_mode("AQID"), ("color", "AQID"));
+        assert_eq!(split_display_mode("SGVsbG8="), ("color", "SGVsbG8="));
     }
 }

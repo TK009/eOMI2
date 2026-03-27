@@ -118,6 +118,13 @@ impl Drop for Ws2812 {
         unsafe {
             led_strip_del(self.handle);
         }
-        info!("WS2812: released GPIO {}", self.pin);
+        // After led_strip_del the RMT peripheral no longer drives the pin.
+        // Re-assert GPIO output LOW so the WS2812 doesn't latch random data
+        // from a floating line (which shows as a bright white/random pixel).
+        unsafe {
+            gpio_set_level(self.pin as i32, 0);
+            gpio_set_direction(self.pin as i32, gpio_mode_t_GPIO_MODE_OUTPUT);
+        }
+        info!("WS2812: released GPIO {} (pin held low)", self.pin);
     }
 }

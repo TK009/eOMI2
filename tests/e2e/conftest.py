@@ -119,7 +119,7 @@ def device_ip(dut_lock):
     # boots without firmware — a full erase leaves GPIO 18 floating,
     # which the WS2812 RGB LED latches as full white.
     subprocess.run(
-        ["espflash", "erase-region", "--port", port, "0x10000", "0x6000"],
+        ["espflash", "erase-region", "--port", port, "0x9000", "0x6000"],
         check=True,
         timeout=30,
     )

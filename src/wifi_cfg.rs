@@ -226,6 +226,7 @@ mod nvs_impl {
 
     const NVS_NAMESPACE: &str = "wifi_cfg";
     const NVS_KEY: &str = "config";
+    const NVS_FORCE_PORTAL_KEY: &str = "force_portal";
 
     /// Open the NVS namespace for WiFi configuration.
     pub fn open_wifi_cfg_nvs(
@@ -315,10 +316,43 @@ mod nvs_impl {
             }
         }
     }
+
+    /// Check and consume the "force portal" NVS flag.
+    ///
+    /// Returns `true` if the flag was set (and clears it). Used by the boot
+    /// sequence to enter captive portal mode regardless of compile-time
+    /// credentials — e.g. after a factory reset triggered via HTTP API.
+    pub fn take_force_portal(nvs: &mut EspNvs<NvsDefault>) -> bool {
+        match nvs.get_u8(NVS_FORCE_PORTAL_KEY) {
+            Ok(Some(1)) => {
+                info!("wifi_cfg NVS: force_portal flag found — entering portal mode");
+                match nvs.remove(NVS_FORCE_PORTAL_KEY) {
+                    Ok(_) => info!("wifi_cfg NVS: force_portal flag cleared"),
+                    Err(e) => warn!("wifi_cfg NVS: failed to clear force_portal: {}", e),
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Set the "force portal" NVS flag so the next boot enters portal mode.
+    pub fn set_force_portal(nvs: &mut EspNvs<NvsDefault>) -> bool {
+        match nvs.set_u8(NVS_FORCE_PORTAL_KEY, 1) {
+            Ok(()) => {
+                info!("wifi_cfg NVS: force_portal flag set");
+                true
+            }
+            Err(e) => {
+                warn!("wifi_cfg NVS: failed to set force_portal: {}", e);
+                false
+            }
+        }
+    }
 }
 
 #[cfg(feature = "esp")]
-pub use nvs_impl::{load_wifi_config, load_wifi_config_or_default, open_wifi_cfg_nvs, save_wifi_config};
+pub use nvs_impl::{load_wifi_config, load_wifi_config_or_default, open_wifi_cfg_nvs, save_wifi_config, set_force_portal, take_force_portal};
 
 // ---------------------------------------------------------------------------
 // Tests

@@ -27,6 +27,7 @@ import socket
 import time
 
 import pytest
+import requests
 from zeroconf import ServiceBrowser, ServiceStateChange, Zeroconf
 
 from helpers import (
@@ -308,38 +309,70 @@ class TestDiscoveryOdfTree:
 class TestMdnsApMode:
     """Verify mDNS is not active when the device enters AP/portal mode."""
 
-    @pytest.fixture(autouse=True)
-    def _needs_serial(self, device_port):
-        """These tests require serial access for reset."""
-
-    def test_mdns_stops_in_ap_mode(self, device_port, device_hostname, device_ip):
-        """SC-005: After factory reset (entering portal mode), mDNS hostname
-        no longer resolves on the STA network."""
+    @pytest.fixture(autouse=True, scope="class")
+    def _enter_ap_mode(self, device_port, device_ip, base_url, token):
+        """Put the device in AP/portal mode for the whole test class,
+        then restore it to STA mode afterward."""
         import subprocess
 
-        # Erase NVS to force portal mode
+        # Use the API-driven factory reset to cleanly enter portal mode.
+        api_triggered = False
+        try:
+            resp = requests.post(
+                f"{base_url}/api/factory-reset",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                api_triggered = True
+                wait_for_device_down(f"http://{device_ip}", timeout=10)
+        except requests.RequestException:
+            pass
+
+        if not api_triggered:
+            subprocess.run(
+                ["espflash", "erase-region", "--port", device_port,
+                 "0x9000", "0x6000"],
+                check=True,
+                capture_output=True,
+                timeout=15,
+            )
+            reboot_device(device_port)
+
+        # Wait for the device to actually go offline on STA
+        wait_for_device_down(f"http://{device_ip}", timeout=15)
+        # Give the device time to fully enter AP mode
+        time.sleep(5)
+
+        yield
+
+        # Teardown: erase NVS and reboot to restore the device to normal
+        # STA mode. The force_portal flag was consumed, but we erase NVS
+        # for a clean slate.
+        import subprocess
         subprocess.run(
             ["espflash", "erase-region", "--port", device_port,
              "0x9000", "0x6000"],
-            check=True,
+            check=False,
             capture_output=True,
             timeout=15,
         )
         reboot_device(device_port)
+        try:
+            wait_for_device(base_url, timeout=60)
+        except TimeoutError:
+            pass
 
-        # Wait for the device to actually go offline on STA
-        wait_for_device_down(f"http://{device_ip}", timeout=15)
-
-        # Fresh browse — the DUT's IP should no longer appear.
-        # mDNS resolution can return stale cached records (TTL ~120s),
-        # so we check via browse + IP match instead.
+    def test_mdns_stops_in_ap_mode(self, device_ip):
+        """SC-005: After factory reset (entering portal mode), mDNS hostname
+        no longer resolves on the STA network."""
         services = browse_omi_services(timeout=5)
         matching = [s for s in services if s["ip"] == device_ip]
         assert not matching, (
             f"Device IP {device_ip} still advertising _omi._tcp in AP mode: {matching}"
         )
 
-    def test_dns_sd_stops_in_ap_mode(self, device_hostname, device_ip):
+    def test_dns_sd_stops_in_ap_mode(self, device_ip):
         """_omi._tcp service should not be browseable when in AP mode."""
         services = browse_omi_services(timeout=5)
         matching = [s for s in services if s["ip"] == device_ip]
@@ -356,20 +389,34 @@ class TestMdnsResumeAfterProvisioning:
     """Verify mDNS restarts after the device is re-provisioned."""
 
     @pytest.fixture(autouse=True)
-    def _reprovision(self, device_port, wifi_ssid, wifi_pass, base_url):
+    def _reprovision(self, device_port, wifi_ssid, wifi_pass, base_url, token):
         """Factory reset, re-provision via portal, wait for STA connection."""
         import subprocess
         import requests as req
 
-        # Erase NVS and reboot into portal mode
-        subprocess.run(
-            ["espflash", "erase-region", "--port", device_port,
-             "0x9000", "0x6000"],
-            check=True,
-            capture_output=True,
-            timeout=15,
-        )
-        reboot_device(device_port)
+        # API-driven factory reset into portal mode
+        api_triggered = False
+        try:
+            resp = req.post(
+                f"{base_url}/api/factory-reset",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                api_triggered = True
+                wait_for_device_down(base_url, timeout=10)
+        except req.RequestException:
+            pass
+
+        if not api_triggered:
+            subprocess.run(
+                ["espflash", "erase-region", "--port", device_port,
+                 "0x9000", "0x6000"],
+                check=True,
+                capture_output=True,
+                timeout=15,
+            )
+            reboot_device(device_port)
 
         # Wait for portal
         deadline = time.monotonic() + 30

@@ -163,33 +163,68 @@ def poll_connection_status(bridge, target_state, timeout=30):
     )
 
 
-def factory_reset_to_portal(device_port, bridge):
-    """Erase NVS WiFi config and reboot so the device enters portal mode.
+def factory_reset_to_portal(device_port, bridge, base_url=None, token=None):
+    """Trigger a factory reset so the device reboots into portal mode.
 
-    Uses espflash to erase the NVS partition, then reboots.
-    The bridge disconnects from any previous AP and connects to the DUT's
-    setup AP to reach the portal.
+    Calls the /api/factory-reset endpoint which sets a force_portal NVS flag,
+    then reboots.  The bridge disconnects from any previous AP and connects
+    to the DUT's setup AP to reach the captive portal.
+
+    Falls back to NVS erase + reboot if the API endpoint is unreachable
+    (e.g. device is already in portal mode).
     """
     import subprocess
 
-    # Erase NVS partition to force unconfigured state
-    subprocess.run(
-        ["espflash", "erase-region", "--port", device_port,
-         "0x9000", "0x6000"],
-        check=True,
-        capture_output=True,
-        timeout=15,
-    )
-    # Reset the device
-    reboot_device(device_port)
+    api_triggered = False
 
-    # Connect bridge to the DUT's setup AP
+    # Try the clean API-driven factory reset first
+    if base_url and token:
+        try:
+            resp = requests.post(
+                f"{base_url}/api/factory-reset",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                api_triggered = True
+                # Wait for the device to go down (confirms reboot started)
+                wait_for_device_down(base_url, timeout=10)
+        except requests.RequestException:
+            pass
+
+    if not api_triggered:
+        # Fallback: erase NVS partition to force unconfigured state
+        subprocess.run(
+            ["espflash", "erase-region", "--port", device_port,
+             "0x9000", "0x6000"],
+            check=True,
+            capture_output=True,
+            timeout=15,
+        )
+        reboot_device(device_port)
+
+    # Connect bridge to the DUT's setup AP (retry — the DUT needs time to
+    # boot, detect missing credentials, and start its soft-AP).
     try:
         bridge.disconnect()
     except (RuntimeError, TimeoutError, OSError):
         pass
-    time.sleep(2)  # Give the DUT time to start its soft-AP
-    bridge.connect("setup-eOMI")
+    time.sleep(8)  # Initial wait for DUT to reboot and start soft-AP
+
+    deadline = time.monotonic() + PORTAL_BOOT_TIMEOUT + 15
+    last_err = None
+    while time.monotonic() < deadline:
+        try:
+            bridge.connect("setup-eOMI")
+            break
+        except (RuntimeError, TimeoutError, OSError) as e:
+            last_err = e
+            time.sleep(2)
+    else:
+        raise TimeoutError(
+            f"Bridge could not connect to setup-eOMI within "
+            f"{PORTAL_BOOT_TIMEOUT + 15}s: {last_err}"
+        )
 
     # Wait for portal to come up
     wait_for_portal(bridge)
@@ -203,9 +238,9 @@ class TestFirstTimeProvisioning:
     """Connect to the captive portal AP, submit the form, verify STA connection."""
 
     @pytest.fixture(autouse=True)
-    def _enter_portal_mode(self, device_port, bridge):
+    def _enter_portal_mode(self, device_port, bridge, base_url, token):
         """Ensure device is in portal (unconfigured) mode before each test."""
-        factory_reset_to_portal(device_port, bridge)
+        factory_reset_to_portal(device_port, bridge, base_url, token)
 
     def test_portal_landing_page(self, bridge):
         """GET / on the portal returns the provisioning form."""
@@ -284,7 +319,7 @@ class TestReprovisioning:
     def _provision_first(self, device_port, bridge, wifi_ssid, wifi_pass,
                          base_url, token):
         """Provision the device, write some user data, then enter portal again."""
-        factory_reset_to_portal(device_port, bridge)
+        factory_reset_to_portal(device_port, bridge, base_url, token)
         submit_provision_form(
             bridge,
             [(wifi_ssid, wifi_pass)],
@@ -332,8 +367,8 @@ class TestMultiApFailover:
     """Device falls back to the second SSID when the first is unreachable."""
 
     @pytest.fixture(autouse=True)
-    def _enter_portal(self, device_port, bridge):
-        factory_reset_to_portal(device_port, bridge)
+    def _enter_portal(self, device_port, bridge, base_url, token):
+        factory_reset_to_portal(device_port, bridge, base_url, token)
 
     def test_provision_two_ssids(self, bridge, wifi_ssid, wifi_pass,
                                  wifi_ssid_2, wifi_pass_2):
@@ -372,8 +407,9 @@ class TestPowerLossResilience:
     partial-write corruption."""
 
     @pytest.fixture(autouse=True)
-    def _provision_and_flush(self, device_port, bridge, wifi_ssid, wifi_pass):
-        factory_reset_to_portal(device_port, bridge)
+    def _provision_and_flush(self, device_port, bridge, wifi_ssid, wifi_pass,
+                             base_url, token):
+        factory_reset_to_portal(device_port, bridge, base_url, token)
         submit_provision_form(
             bridge,
             [(wifi_ssid, wifi_pass)],
@@ -414,8 +450,8 @@ class TestApiDuringProvisioning:
     """OMI API endpoints remain accessible while the captive portal is active."""
 
     @pytest.fixture(autouse=True)
-    def _enter_portal(self, device_port, bridge):
-        factory_reset_to_portal(device_port, bridge)
+    def _enter_portal(self, device_port, bridge, base_url, token):
+        factory_reset_to_portal(device_port, bridge, base_url, token)
 
     def test_omi_read_during_portal(self, bridge):
         """OMI read requests work while in provisioning mode."""
@@ -486,9 +522,9 @@ class TestPortalAutoClose:
 
     @pytest.fixture(autouse=True)
     def _provision_then_portal(self, device_port, bridge, wifi_ssid, wifi_pass,
-                               base_url):
+                               base_url, token):
         """Provision once (so creds are saved), then force portal mode."""
-        factory_reset_to_portal(device_port, bridge)
+        factory_reset_to_portal(device_port, bridge, base_url, token)
         submit_provision_form(
             bridge,
             [(wifi_ssid, wifi_pass)],

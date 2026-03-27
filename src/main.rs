@@ -95,15 +95,24 @@ fn main() -> Result<()> {
 
     // Keep a writable NVS handle for persisting WiFi config after provisioning (SC-004)
     let mut wifi_nvs = wifi_cfg::open_wifi_cfg_nvs(nvs_wifi_persist)?;
+
+    // Check for "force portal" flag (set by /api/factory-reset endpoint).
+    // When present, skip all credentials to force captive portal mode.
+    let force_portal = wifi_cfg::take_force_portal(&mut wifi_nvs);
+
     let mut creds: Vec<(String, String)> = Vec::new();
 
-    if let (Some(s), Some(p)) = (WIFI_SSID, WIFI_PASS) {
-        creds.push((s.to_string(), p.to_string()));
-    }
-    for (s, p) in &wifi_cfg.ssids {
-        if !creds.iter().any(|(existing, _)| existing == s) {
-            creds.push((s.clone(), p.clone()));
+    if !force_portal {
+        if let (Some(s), Some(p)) = (WIFI_SSID, WIFI_PASS) {
+            creds.push((s.to_string(), p.to_string()));
         }
+        for (s, p) in &wifi_cfg.ssids {
+            if !creds.iter().any(|(existing, _)| existing == s) {
+                creds.push((s.clone(), p.clone()));
+            }
+        }
+    } else {
+        info!("Force portal mode — ignoring all stored/compile-time credentials");
     }
 
     info!("WiFi credentials: {} available", creds.len());
@@ -482,6 +491,15 @@ fn main() -> Result<()> {
             }
         }
 
+        // Check for factory reset request (from /api/factory-reset endpoint)
+        if portal.take_factory_reset() {
+            info!("Factory reset requested — setting force_portal flag and rebooting");
+            wifi_cfg::set_force_portal(&mut wifi_nvs);
+            // Brief delay to allow the HTTP response to be sent
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            break;
+        }
+
         // Check backoff timer completion
         if let Some(deadline) = backoff_deadline {
             if Instant::now() >= deadline {
@@ -809,6 +827,15 @@ fn main() -> Result<()> {
             save_writable_items(&mut nvs_store, &items);
         }
     }
+
+    // If the loop exited (factory reset), restart the device.
+    // Drop all resources first to ensure NVS writes are flushed.
+    info!("Main loop exited — restarting device");
+    drop(wifi_nvs);
+    drop(nvs_store);
+    unsafe { esp_idf_svc::sys::esp_restart() };
+    #[allow(unreachable_code)]
+    Ok(())
 }
 
 /// Start DNS server for captive portal redirect, logging errors.

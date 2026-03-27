@@ -127,6 +127,20 @@ fn cmd_connect(line: &str, wifi: &mut BlockingWifi<EspWifi<'static>>) {
     };
     let pass = json_str(line, "pass").unwrap_or_default();
 
+    // Quick scan to verify the target SSID is visible before attempting
+    // a potentially long-blocking connect().
+    match wifi.scan() {
+        Ok(aps) => {
+            let found = aps.iter().any(|ap| ap.ssid.as_str() == ssid.as_str());
+            if !found {
+                return respond_err(&format!("SSID '{}' not found in scan", ssid));
+            }
+        }
+        Err(e) => {
+            warn!("pre-connect scan failed: {} — trying connect anyway", e);
+        }
+    }
+
     let auth = if pass.is_empty() {
         AuthMethod::None
     } else {

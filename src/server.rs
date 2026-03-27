@@ -72,6 +72,7 @@ pub struct PortalState {
     pub pending_provision: Mutex<Option<PendingProvision>>,
     pub scan_results: Mutex<Vec<ScannedNetwork>>,
     form_config: Mutex<FormConfig>,
+    factory_reset_requested: AtomicBool,
 }
 
 impl PortalState {
@@ -98,6 +99,7 @@ impl PortalState {
                 is_first_setup,
                 error_message: None,
             }),
+            factory_reset_requested: AtomicBool::new(false),
         }
     }
 
@@ -122,6 +124,11 @@ impl PortalState {
     /// Update the form error message (shown on next GET /).
     pub fn set_form_error(&self, msg: Option<String>) {
         lock_or_recover(&self.form_config, "form_config").error_message = msg;
+    }
+
+    /// Check and consume the factory reset request flag.
+    pub fn take_factory_reset(&self) -> bool {
+        self.factory_reset_requested.swap(false, Ordering::AcqRel)
     }
 
     /// Update form rendering config after provisioning.
@@ -530,6 +537,20 @@ pub fn start_http_server(
             return Ok(());
         }
         crate::ota::handle_ota(req, api_token);
+        Ok(())
+    })?;
+
+    // POST /api/factory-reset — Set force_portal flag and reboot into portal mode.
+    // Requires valid Bearer token. Clears WiFi config so the device enters
+    // captive portal on next boot, even with compile-time credentials.
+    let p = portal.clone();
+    server.fn_handler::<Infallible, _>("/api/factory-reset", Method::Post, move |req| {
+        if !check_bearer_auth(req.header("authorization"), api_token) {
+            send_response(req, 401, "Unauthorized", &[], b"Invalid or missing token");
+            return Ok(());
+        }
+        p.factory_reset_requested.store(true, Ordering::Release);
+        send_response(req, 200, "OK", &[], b"{\"ok\":true,\"message\":\"Rebooting into portal mode\"}");
         Ok(())
     })?;
 

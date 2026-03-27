@@ -65,7 +65,27 @@ mod esp_impl {
         ))?;
 
         wifi.start()?;
-        wifi.wait_netif_up()?;
+
+        // Set the AP interface IP to the expected 192.168.4.1.
+        // Without this, ESP-IDF may assign a different subnet in mixed mode.
+        unsafe {
+            use esp_idf_svc::sys::*;
+            let mut ip_info: esp_netif_ip_info_t = core::mem::zeroed();
+            ip_info.ip.addr = u32::from_le_bytes([192, 168, 4, 1]);
+            ip_info.netmask.addr = u32::from_le_bytes([255, 255, 255, 0]);
+            ip_info.gw.addr = u32::from_le_bytes([192, 168, 4, 1]);
+
+            let netif = esp_netif_get_handle_from_ifkey(b"WIFI_AP_DEF\0".as_ptr() as *const _);
+            if !netif.is_null() {
+                esp_netif_dhcps_stop(netif);
+                esp_netif_set_ip_info(netif, &ip_info);
+                esp_netif_dhcps_start(netif);
+            }
+        }
+
+        // Give the AP a moment to initialize (wait_netif_up waits for STA
+        // too, which would timeout in portal mode with no STA credentials).
+        std::thread::sleep(std::time::Duration::from_millis(500));
 
         info!("Soft-AP started on {}", AP_IP);
         Ok(())

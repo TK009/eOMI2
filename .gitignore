@@ -7,6 +7,10 @@ sdkconfig
 __pycache__/
 *.pyc
 tests/e2e/.venv/
+tests/e2e/bridge-fw/.embuild/
+tests/e2e/bridge-fw/Cargo.lock
+tests/e2e/bridge-fw/target/
+state.json
 .claude/
 /fuzz/artifacts/
 /fuzz/corpus/

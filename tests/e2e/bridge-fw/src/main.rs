@@ -3,13 +3,15 @@
 //! Connects to a DUT's soft-AP and forwards HTTP requests from the host
 //! over serial UART. Protocol: JSON lines in, `!`-prefixed JSON lines out.
 
-use std::io::{BufRead, BufReader, Write as _};
+use std::io::{Read as StdRead, Write as _};
 
 use embedded_svc::http::client::Client as HttpClient;
 use embedded_svc::io::{Read as EmbRead, Write as _};
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::hal::peripherals::Peripherals;
-use esp_idf_svc::http::client::{Configuration as HttpConfig, EspHttpConnection};
+use esp_idf_svc::http::client::{
+    Configuration as HttpConfig, EspHttpConnection, FollowRedirectsPolicy,
+};
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{
     AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi,
@@ -52,21 +54,36 @@ fn main() {
     respond_ok("ready", &[]);
 
     // Main command loop — read JSON lines from stdin.
-    let stdin = std::io::stdin();
-    let reader = BufReader::new(stdin.lock());
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
+    // We use a custom byte-at-a-time reader instead of BufReader::lines()
+    // because ESP-IDF's VFS UART returns EAGAIN (errno 11) on empty reads,
+    // which BufReader treats as a hard error — corrupting line boundaries
+    // and splitting JSON commands into fragments.
+    let mut stdin = std::io::stdin().lock();
+    let mut line_buf = Vec::with_capacity(512);
+    let mut byte = [0u8; 1];
+    loop {
+        match StdRead::read(&mut stdin, &mut byte) {
+            Ok(0) => break, // EOF
+            Ok(_) => {
+                if byte[0] == b'\n' {
+                    let line = String::from_utf8_lossy(&line_buf).trim().to_string();
+                    line_buf.clear();
+                    if !line.is_empty() {
+                        dispatch(&line, &mut wifi);
+                    }
+                } else if byte[0] != b'\r' {
+                    line_buf.push(byte[0]);
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                // EAGAIN — no data available yet, yield briefly and retry.
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
             Err(e) => {
                 error!("stdin read error: {}", e);
-                continue;
+                std::thread::sleep(std::time::Duration::from_millis(10));
             }
-        };
-        let line = line.trim().to_string();
-        if line.is_empty() {
-            continue;
         }
-        dispatch(&line, &mut wifi);
     }
 }
 
@@ -79,7 +96,10 @@ fn dispatch(line: &str, wifi: &mut BlockingWifi<EspWifi<'static>>) {
         Some("disconnect") => cmd_disconnect(wifi),
         Some("status") => cmd_status(wifi),
         Some("http") => cmd_http(line),
-        _ => respond_err("unknown command"),
+        _ => {
+            warn!("unknown command: line={}", &line[..line.len().min(120)]);
+            respond_err("unknown command");
+        }
     }
 }
 
@@ -218,6 +238,8 @@ fn cmd_http(line: &str) {
         buffer_size: Some(2048),
         buffer_size_tx: Some(1024),
         timeout: Some(std::time::Duration::from_secs(15)),
+        // Don't follow redirects — the test needs to see 302 responses.
+        follow_redirects_policy: FollowRedirectsPolicy::FollowNone,
         ..Default::default()
     };
 
@@ -229,12 +251,19 @@ fn cmd_http(line: &str) {
     let mut client = HttpClient::wrap(conn);
 
     // Build headers list from optional fields.
+    // Content-Length must live long enough for hdrs to borrow it.
+    let content_length_str = body.len().to_string();
     let mut hdrs: Vec<(&str, &str)> = Vec::new();
     if !content_type.is_empty() {
         hdrs.push(("Content-Type", &content_type));
     }
     if !authorization.is_empty() {
         hdrs.push(("Authorization", &authorization));
+    }
+    // POST bodies need an explicit Content-Length header — the DUT's
+    // embedded HTTP server requires it and rejects chunked encoding.
+    if method == "POST" && !body.is_empty() {
+        hdrs.push(("Content-Length", &content_length_str));
     }
 
     let result = match method.as_str() {

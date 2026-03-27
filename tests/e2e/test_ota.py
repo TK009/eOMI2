@@ -15,7 +15,15 @@ from helpers import omi_read, omi_status, omi_result, ota_upload, wait_for_devic
 pytestmark = pytest.mark.ota
 
 # The version string baked into firmware A is CARGO_PKG_VERSION.
-VERSION_A = "0.1.0"
+# Read it from Cargo.toml so the test stays in sync across version bumps.
+def _cargo_pkg_version():
+    import tomllib
+    from pathlib import Path
+    cargo_toml = Path(__file__).resolve().parents[2] / "Cargo.toml"
+    with open(cargo_toml, "rb") as f:
+        return tomllib.load(f)["package"]["version"]
+
+VERSION_A = _cargo_pkg_version()
 # Firmware B is built with FIRMWARE_VERSION=e2e-ota-test.
 VERSION_B = "e2e-ota-test"
 

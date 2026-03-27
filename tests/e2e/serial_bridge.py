@@ -5,9 +5,13 @@ forwarding HTTP requests to the DUT's soft-AP portal.
 """
 
 import json
+import re
 import time
 
 import serial
+
+# Strip ANSI escape sequences (ESP-IDF log colours) from serial output.
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 
 
 class SerialBridge:
@@ -41,19 +45,75 @@ class SerialBridge:
                 continue
             line = raw.decode("utf-8", errors="replace").strip()
             if line.startswith("!"):
-                return json.loads(line[1:])
+                # Strip ANSI escape codes that may leak from ESP-IDF log
+                # output interleaved with the JSON response on UART0.
+                clean = _ANSI_RE.sub('', line[1:])
+                # Extract the JSON object — log output may be appended.
+                brace = clean.find('{')
+                if brace < 0:
+                    continue
+                clean = clean[brace:]
+                depth = 0
+                end = 0
+                for i, c in enumerate(clean):
+                    if c == '{':
+                        depth += 1
+                    elif c == '}':
+                        depth -= 1
+                        if depth == 0:
+                            end = i + 1
+                            break
+                if end == 0:
+                    continue
+                try:
+                    return json.loads(clean[:end])
+                except json.JSONDecodeError:
+                    continue
         return None
 
-    def send_command(self, cmd_dict, timeout=15):
-        """Send a JSON command and return the response dict."""
+    def drain(self):
+        """Discard any stale data sitting in the host-side serial buffer.
+
+        Call this after a sequence of commands that may have timed out on the
+        host side while the bridge was still processing.  Without draining,
+        the next send_command would read a stale response from a previous
+        command instead of the new one.
+        """
+        self._ser.reset_input_buffer()
+
+    def send_command(self, cmd_dict, timeout=15, _retries=2):
+        """Send a JSON command and return the response dict.
+
+        Drains any stale data from the serial buffer before sending to
+        prevent reading a response from a previously timed-out command.
+        Retries once on 'unknown command' errors, which can occur when
+        UART data from a previous timed-out exchange corrupts the line.
+        """
+        # Discard stale responses from commands that timed out on our
+        # side but were still processed by the bridge.
+        self._ser.reset_input_buffer()
         line = json.dumps(cmd_dict, separators=(",", ":")) + "\n"
-        self._ser.write(line.encode("utf-8"))
-        self._ser.flush()
+        data = line.encode("utf-8")
+        # Send in chunks to avoid overflowing the ESP32's UART RX FIFO
+        # (128 bytes hardware) when the firmware is busy.
+        chunk = 64
+        for i in range(0, len(data), chunk):
+            self._ser.write(data[i:i + chunk])
+            self._ser.flush()
+            if i + chunk < len(data):
+                time.sleep(0.005)  # 5 ms between chunks
         resp = self._read_response(timeout=timeout)
         if resp is None:
             raise TimeoutError("No response from bridge")
         if not resp.get("ok"):
-            raise RuntimeError(f"Bridge error: {resp.get('error', 'unknown')}")
+            err = resp.get("error", "unknown")
+            if err == "unknown command" and _retries > 0:
+                # UART desync — drain and retry.
+                time.sleep(0.5)
+                self._ser.reset_input_buffer()
+                return self.send_command(cmd_dict, timeout=timeout,
+                                         _retries=_retries - 1)
+            raise RuntimeError(f"Bridge error: {err}")
         return resp
 
     def ping(self):
@@ -67,6 +127,14 @@ class SerialBridge:
         return self.send_command(
             {"cmd": "connect", "ssid": ssid, "pass": password}, timeout=20
         )
+
+    def connect_by_prefix(self, prefix, password="", timeout=20):
+        """Scan for an AP whose SSID starts with *prefix* and connect."""
+        networks = self.scan()
+        for net in networks:
+            if net.get("ssid", "").startswith(prefix):
+                return self.connect(net["ssid"], password)
+        raise RuntimeError(f"No AP found with prefix '{prefix}'")
 
     def disconnect(self):
         return self.send_command({"cmd": "disconnect"})

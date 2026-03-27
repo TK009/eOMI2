@@ -92,7 +92,12 @@ def wifi_pass_2():
 # ---------------------------------------------------------------------------
 
 def wait_for_portal(bridge, timeout=PORTAL_BOOT_TIMEOUT):
-    """Poll the portal landing page via bridge until it responds."""
+    """Poll the portal landing page via bridge until it responds.
+
+    After each failed attempt that times out on the host, the bridge may
+    still be processing the HTTP request.  We drain stale serial data
+    before retrying to prevent response-command desync.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -100,7 +105,11 @@ def wait_for_portal(bridge, timeout=PORTAL_BOOT_TIMEOUT):
             if resp.get("status") == 200 and "Device Setup" in resp.get("body", ""):
                 return
         except (RuntimeError, TimeoutError, OSError):
-            pass
+            # The bridge may still be processing — wait for it to finish
+            # and drain any stale response before retrying.
+            time.sleep(2)
+            bridge.drain()
+            continue
         time.sleep(1)
     raise TimeoutError(f"Portal did not become reachable within {timeout}s")
 
@@ -156,7 +165,9 @@ def poll_connection_status(bridge, target_state, timeout=30):
             if last.get("state") == target_state:
                 return last
         except (RuntimeError, TimeoutError, OSError):
-            pass
+            time.sleep(2)
+            bridge.drain()
+            continue
         time.sleep(2)
     raise TimeoutError(
         f"Connection did not reach '{target_state}' within {timeout}s; last={last}"
@@ -164,29 +175,34 @@ def poll_connection_status(bridge, target_state, timeout=30):
 
 
 def factory_reset_to_portal(device_port, bridge, base_url=None, token=None):
-    """Trigger a factory reset so the device reboots into portal mode.
+    """Force the device into captive portal mode.
 
-    Calls the /api/factory-reset endpoint which sets a force_portal NVS flag,
-    then reboots.  The bridge disconnects from any previous AP and connects
-    to the DUT's setup AP to reach the captive portal.
-
-    Falls back to NVS erase + reboot if the API endpoint is unreachable
-    (e.g. device is already in portal mode).
+    Uses the /api/factory-reset endpoint (which sets a force_portal NVS
+    flag) to bypass compile-time WiFi credentials.  Falls back to NVS
+    erase + reboot if the API endpoint is unreachable.
     """
     import subprocess
 
     # Fast path: if the bridge is already on the portal AP and the portal
     # is responsive, skip the full reset cycle.
+    # Use a 16s timeout — must exceed the bridge firmware's 15s HTTP
+    # timeout, otherwise the host gives up while the bridge is still
+    # blocking on the HTTP request and won't accept new commands.
     try:
-        resp = bridge.http_get(f"{PORTAL_URL}/", timeout=5)
+        resp = bridge.http_get(f"{PORTAL_URL}/", timeout=16)
         if resp.get("status") == 200 and "Device Setup" in resp.get("body", ""):
             return  # Already in portal mode — nothing to do.
     except (RuntimeError, TimeoutError, OSError):
+        # Bridge may still be finishing a long HTTP request — give it time
+        # then drain stale responses before proceeding.
+        time.sleep(2)
+        bridge.drain()
         pass
 
     api_triggered = False
 
-    # Try the clean API-driven factory reset first
+    # Try the clean API-driven factory reset first — this sets a
+    # force_portal NVS flag that bypasses compile-time credentials.
     if base_url and token:
         try:
             resp = requests.post(
@@ -196,13 +212,12 @@ def factory_reset_to_portal(device_port, bridge, base_url=None, token=None):
             )
             if resp.status_code == 200:
                 api_triggered = True
-                # Wait for the device to go down (confirms reboot started)
                 wait_for_device_down(base_url, timeout=10)
         except requests.RequestException:
             pass
 
     if not api_triggered:
-        # Fallback: erase NVS partition to force unconfigured state
+        # Fallback: erase NVS partition and reboot.
         subprocess.run(
             ["espflash", "erase-region", "--port", device_port,
              "0x9000", "0x6000"],
@@ -212,46 +227,49 @@ def factory_reset_to_portal(device_port, bridge, base_url=None, token=None):
         )
         reboot_device(device_port)
 
-    # Connect bridge to the DUT's setup AP (retry — the DUT needs time to
-    # boot, detect missing credentials, and start its soft-AP).
+    # Hardware-reset the bridge to clean up any stale WiFi state from
+    # a previously-vanished AP, then wait for DUT to boot into portal mode.
     try:
-        bridge.disconnect()
-    except (RuntimeError, TimeoutError, OSError):
-        pass
-
-    # Flush stale serial data so the next command gets a clean response.
-    bridge._ser.reset_input_buffer()
+        bridge.reset()
+    except (TimeoutError, OSError):
+        # If hardware reset fails, fall back to disconnect + drain.
+        try:
+            bridge.disconnect()
+        except (RuntimeError, TimeoutError, OSError):
+            pass
+        bridge.drain()
 
     time.sleep(8)  # Initial wait for DUT to reboot and start soft-AP
 
+    # Connect to any "setup-*" AP (the SSID includes the hostname, which
+    # may have been changed by a previous provisioning test).
     deadline = time.monotonic() + PORTAL_BOOT_TIMEOUT + 30
     last_err = None
     consecutive_timeouts = 0
     while time.monotonic() < deadline:
         try:
-            bridge.connect("setup-eOMI")
+            bridge.connect_by_prefix("setup-")
             break
         except TimeoutError as e:
             consecutive_timeouts += 1
             last_err = e
             if consecutive_timeouts >= 2:
-                # Bridge firmware is likely stuck in a blocking WiFi op —
-                # hardware-reset it so it can accept new commands.
                 try:
                     bridge.reset()
                 except (TimeoutError, OSError):
                     pass
                 consecutive_timeouts = 0
             else:
-                bridge._ser.reset_input_buffer()
+                bridge.drain()
             time.sleep(2)
         except (RuntimeError, OSError) as e:
             consecutive_timeouts = 0
             last_err = e
+            bridge.drain()
             time.sleep(2)
     else:
         raise TimeoutError(
-            f"Bridge could not connect to setup-eOMI within "
+            f"Bridge could not connect to setup AP within "
             f"{PORTAL_BOOT_TIMEOUT + 30}s: {last_err}"
         )
 
@@ -295,7 +313,8 @@ class TestFirstTimeProvisioning:
         status = get_portal_status(bridge)
         assert status["state"] == "idle"
 
-    def test_provision_and_connect(self, bridge, wifi_ssid, wifi_pass):
+    def test_provision_and_connect(self, bridge, wifi_ssid, wifi_pass,
+                                     base_url):
         """Submit credentials via the form and verify the device connects."""
         resp = submit_provision_form(
             bridge,
@@ -303,13 +322,15 @@ class TestFirstTimeProvisioning:
             api_key_action="generate",
         )
         # Should get a 200 with the success page (or 302 redirect)
-        assert resp["status"] in (200, 302)
+        assert resp["status"] in (200, 302), \
+            f"expected 200/302, got {resp['status']}: {resp.get('body', '')[:300]}"
 
-        # Poll /status until connected
-        status = poll_connection_status(bridge, "connected", timeout=30)
-        assert status.get("ip"), "Device should report its STA IP"
+        # After provisioning, the DUT connects to WiFi and closes the
+        # soft-AP — verify via the main network instead of the portal.
+        wait_for_device(base_url, timeout=30)
 
-    def test_provision_with_hostname(self, bridge, wifi_ssid, wifi_pass):
+    def test_provision_with_hostname(self, bridge, wifi_ssid, wifi_pass,
+                                     base_url):
         """Provisioning with a custom hostname is accepted."""
         resp = submit_provision_form(
             bridge,
@@ -318,8 +339,9 @@ class TestFirstTimeProvisioning:
             api_key_action="generate",
         )
         assert resp["status"] in (200, 302)
-        status = poll_connection_status(bridge, "connected", timeout=30)
-        assert status.get("ip")
+
+        # Verify device connected via the main network.
+        wait_for_device(base_url, timeout=30)
 
     def test_provision_empty_ssid_rejected(self, bridge):
         """Submitting an empty SSID returns an error."""
@@ -354,9 +376,8 @@ class TestReprovisioning:
             [(wifi_ssid, wifi_pass)],
             api_key_action="generate",
         )
-        poll_connection_status(bridge, "connected", timeout=30)
 
-        # Write user data that should survive re-provisioning
+        # DUT closes the soft-AP after connecting — verify via main network.
         wait_for_device(base_url, timeout=30)
         omi_write(base_url, "/UserData/ReproTest", "preserve-me", token=token)
         time.sleep(NVS_FLUSH_WAIT_S)
@@ -400,7 +421,7 @@ class TestMultiApFailover:
         factory_reset_to_portal(device_port, bridge, base_url, token)
 
     def test_provision_two_ssids(self, bridge, wifi_ssid, wifi_pass,
-                                 wifi_ssid_2, wifi_pass_2):
+                                 wifi_ssid_2, wifi_pass_2, base_url):
         """Provisioning with two SSIDs is accepted and device connects."""
         resp = submit_provision_form(
             bridge,
@@ -408,11 +429,10 @@ class TestMultiApFailover:
             api_key_action="generate",
         )
         assert resp["status"] in (200, 302)
-        status = poll_connection_status(bridge, "connected", timeout=30)
-        assert status.get("ip")
+        wait_for_device(base_url, timeout=30)
 
     def test_failover_to_second_ssid(self, bridge, wifi_ssid, wifi_pass,
-                                      wifi_ssid_2, wifi_pass_2):
+                                      wifi_ssid_2, wifi_pass_2, base_url):
         """When the first SSID is bogus, the device connects via the second."""
         resp = submit_provision_form(
             bridge,
@@ -423,8 +443,7 @@ class TestMultiApFailover:
         assert resp["status"] in (200, 302)
         # The device should fail on the first SSID and fall back to the second.
         # This may take longer due to connection timeout + backoff.
-        status = poll_connection_status(bridge, "connected", timeout=60)
-        assert status.get("ip")
+        wait_for_device(base_url, timeout=60)
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +464,8 @@ class TestPowerLossResilience:
             hostname="persist-test",
             api_key_action="generate",
         )
-        poll_connection_status(bridge, "connected", timeout=30)
+        # DUT closes the soft-AP after connecting — verify via main network.
+        wait_for_device(base_url, timeout=30)
         # Wait for NVS flush
         time.sleep(NVS_FLUSH_WAIT_S)
 
@@ -559,7 +579,8 @@ class TestPortalAutoClose:
             [(wifi_ssid, wifi_pass)],
             api_key_action="generate",
         )
-        poll_connection_status(bridge, "connected", timeout=30)
+        # DUT closes the soft-AP after connecting — verify via main network.
+        wait_for_device(base_url, timeout=30)
         time.sleep(NVS_FLUSH_WAIT_S)
 
         # Simulate "all SSIDs exhausted" by rebooting.

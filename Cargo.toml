@@ -1,7 +1,7 @@
 [package]
 name = "reconfigurable-device"
-version = "0.1.0"
-authors = ["Tuomas Keyriläinen <tuomas.keyrilainen@gmail.com>"]
+version = "0.1.0-alpha.1"
+authors = ["Tuomas Keyriläinen"]
 edition = "2021"
 resolver = "2"
 rust-version = "1.77"

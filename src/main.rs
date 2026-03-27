@@ -69,7 +69,7 @@ fn main() -> Result<()> {
     }
 
     info!("\n\n========================================");
-    info!("  Reconfigurable Device v0.1.0");
+    info!("  Reconfigurable Device v0.1.0-alpha.1");
     info!("  Serial port OK!");
     info!("========================================\n");
     info!("Reconfigurable device starting...");

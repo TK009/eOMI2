@@ -91,6 +91,21 @@ class SerialBridge:
             cmd["authorization"] = authorization
         return self.send_command(cmd, timeout=timeout)
 
+    def reset(self):
+        """Hardware-reset the bridge ESP32 via DTR/RTS toggle."""
+        # Flush any pending writes so they don't arrive after reboot.
+        self._ser.reset_output_buffer()
+        self._ser.dtr = False
+        self._ser.rts = True
+        time.sleep(0.1)
+        self._ser.rts = False
+        time.sleep(0.1)
+        self._ser.reset_input_buffer()
+        self._wait_ready(15)
+        # Drain any remaining boot output that arrives after the ready message.
+        time.sleep(0.5)
+        self._ser.reset_input_buffer()
+
     def close(self):
         if self._ser and self._ser.is_open:
             self._ser.close()

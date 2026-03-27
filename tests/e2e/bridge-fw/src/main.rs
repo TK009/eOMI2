@@ -127,6 +127,10 @@ fn cmd_connect(line: &str, wifi: &mut BlockingWifi<EspWifi<'static>>) {
     };
     let pass = json_str(line, "pass").unwrap_or_default();
 
+    // Always disconnect first to avoid blocking in connect() when the
+    // WiFi stack is still associated with a previous AP.
+    let _ = wifi.disconnect();
+
     // Quick scan to verify the target SSID is visible before attempting
     // a potentially long-blocking connect().
     match wifi.scan() {

@@ -175,6 +175,15 @@ def factory_reset_to_portal(device_port, bridge, base_url=None, token=None):
     """
     import subprocess
 
+    # Fast path: if the bridge is already on the portal AP and the portal
+    # is responsive, skip the full reset cycle.
+    try:
+        resp = bridge.http_get(f"{PORTAL_URL}/", timeout=5)
+        if resp.get("status") == 200 and "Device Setup" in resp.get("body", ""):
+            return  # Already in portal mode — nothing to do.
+    except (RuntimeError, TimeoutError, OSError):
+        pass
+
     api_triggered = False
 
     # Try the clean API-driven factory reset first
@@ -209,21 +218,41 @@ def factory_reset_to_portal(device_port, bridge, base_url=None, token=None):
         bridge.disconnect()
     except (RuntimeError, TimeoutError, OSError):
         pass
+
+    # Flush stale serial data so the next command gets a clean response.
+    bridge._ser.reset_input_buffer()
+
     time.sleep(8)  # Initial wait for DUT to reboot and start soft-AP
 
-    deadline = time.monotonic() + PORTAL_BOOT_TIMEOUT + 15
+    deadline = time.monotonic() + PORTAL_BOOT_TIMEOUT + 30
     last_err = None
+    consecutive_timeouts = 0
     while time.monotonic() < deadline:
         try:
             bridge.connect("setup-eOMI")
             break
-        except (RuntimeError, TimeoutError, OSError) as e:
+        except TimeoutError as e:
+            consecutive_timeouts += 1
+            last_err = e
+            if consecutive_timeouts >= 2:
+                # Bridge firmware is likely stuck in a blocking WiFi op —
+                # hardware-reset it so it can accept new commands.
+                try:
+                    bridge.reset()
+                except (TimeoutError, OSError):
+                    pass
+                consecutive_timeouts = 0
+            else:
+                bridge._ser.reset_input_buffer()
+            time.sleep(2)
+        except (RuntimeError, OSError) as e:
+            consecutive_timeouts = 0
             last_err = e
             time.sleep(2)
     else:
         raise TimeoutError(
             f"Bridge could not connect to setup-eOMI within "
-            f"{PORTAL_BOOT_TIMEOUT + 15}s: {last_err}"
+            f"{PORTAL_BOOT_TIMEOUT + 30}s: {last_err}"
         )
 
     # Wait for portal to come up

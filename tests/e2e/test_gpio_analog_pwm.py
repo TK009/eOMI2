@@ -83,8 +83,9 @@ def test_analog_in_value_has_timestamp(base_url):
     """analog_in values include a timestamp (FR-007)."""
     # Wait for at least one ADC poll cycle to produce a timestamped value
     # (initial value from tree registration has no timestamp).
-    values = wait_for_values(base_url, path=ANALOG_IN_PATH, min_count=1)
-    assert "t" in values[0], "value entry should include timestamp 't'"
+    values = wait_for_values(base_url, path=ANALOG_IN_PATH, min_count=2)
+    timestamped = [v for v in values if "t" in v]
+    assert timestamped, "at least one value entry should include timestamp 't'"
 
 
 # ---------------------------------------------------------------------------

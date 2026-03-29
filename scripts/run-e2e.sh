@@ -103,12 +103,8 @@ gzip -c "$FIRMWARE_B_BIN" > "$FIRMWARE_B_BIN.gz"
 
 export OTA_FIRMWARE_A_GZ="$FIRMWARE_A_BIN.gz"
 export OTA_FIRMWARE_B_GZ="$FIRMWARE_B_BIN.gz"
-# Raw (uncompressed) bin paths — preferred over gzip for ESP32-S2 OTA
-# because the gzip decompressor needs ~43 KB heap that may not be available.
-export OTA_FIRMWARE_A_BIN="$FIRMWARE_A_BIN"
-export OTA_FIRMWARE_B_BIN="$FIRMWARE_B_BIN"
-echo "OTA firmware A: $OTA_FIRMWARE_A_BIN"
-echo "OTA firmware B: $OTA_FIRMWARE_B_BIN"
+echo "OTA firmware A: $OTA_FIRMWARE_A_GZ"
+echo "OTA firmware B: $OTA_FIRMWARE_B_GZ"
 
 # ── 3. Memory budget check ──────────────────────────────────────────────
 echo "── Memory budget check ──"

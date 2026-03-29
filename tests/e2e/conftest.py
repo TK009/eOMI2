@@ -118,30 +118,35 @@ def device_ip(dut_lock):
         os.path.abspath(__file__))))
     partition_table = os.path.join(project_root, "partitions.csv")
 
-    # Erase otadata (0xd000, 0x2000) to reset OTA boot partition selection.
-    # NVS (0x10000) is intentionally preserved so Wi-Fi credentials and
-    # hostname survive between test runs — without credentials the device
-    # boots into AP mode and can't be reached over the network.
+    # Erase the region 0x9000–0xEFFF which covers:
+    #   - Default layout: NVS at 0x9000 (clears stale test data)
+    #   - Custom layout: otadata at 0xD000 (resets OTA boot selection)
+    # NVS at 0x10000 (custom layout) is preserved so Wi-Fi credentials
+    # survive — without them the device boots into AP mode.
     subprocess.run(
-        ["espflash", "erase-region", "--port", port, "0xd000", "0x2000"],
+        ["espflash", "erase-region", "--port", port, "0x9000", "0x6000"],
         check=True,
         timeout=30,
     )
 
-    # Write the custom partition table binary BEFORE flashing firmware.
-    # espflash always overwrites 0x8000 with a default (factory-only)
-    # layout, so we write our custom table after espflash to ensure OTA
-    # partitions are present when the device boots.
-    #
-    # Order: erase otadata → flash app (writes default PT) → overwrite
-    # PT with custom → device boots with correct layout on next reset.
+    # Use the custom partition table when the firmware fits in the OTA
+    # partition (0x1E0000 = 1,966,080 bytes).  Debug builds typically exceed
+    # this and need the default factory layout (larger single partition).
+    OTA_PARTITION_SIZE = 0x1E0000
+    firmware_size = os.path.getsize(firmware)
+    use_custom_pt = os.path.isfile(partition_table) and firmware_size <= OTA_PARTITION_SIZE
+
     flash_cmd = ["espflash", "flash", "--port", port]
-    if os.path.isfile(partition_table):
+    if use_custom_pt:
         flash_cmd += ["--partition-table", partition_table]
     flash_cmd.append(firmware)
     subprocess.run(flash_cmd, check=True, timeout=180)
 
-    if os.path.isfile(partition_table):
+    # espflash always overwrites the partition table at 0x8000 with a
+    # default (factory-only) layout, even when --partition-table is given.
+    # Write the custom partition table binary explicitly so the firmware
+    # can find OTA partitions at runtime.
+    if use_custom_pt:
         import tempfile
         pt_bin = os.path.join(tempfile.gettempdir(), "partitions.bin")
         subprocess.run(
@@ -194,18 +199,17 @@ def ws_url(device_ip):
 
 @pytest.fixture(scope="session")
 def ota_firmware_a_gz():
-    """Path to firmware version A (raw .bin preferred, .bin.gz fallback)."""
-    # Prefer raw .bin (no decompressor needed on device, saves ~43 KB heap).
-    path = os.environ.get("OTA_FIRMWARE_A_BIN") or os.environ.get("OTA_FIRMWARE_A_GZ")
+    """Path to gzip-compressed firmware version A (for restore)."""
+    path = os.environ.get("OTA_FIRMWARE_A_GZ")
     if not path:
-        pytest.skip("OTA_FIRMWARE_A_BIN / OTA_FIRMWARE_A_GZ not set")
+        pytest.skip("OTA_FIRMWARE_A_GZ not set")
     return path
 
 
 @pytest.fixture(scope="session")
 def ota_firmware_b_gz():
-    """Path to firmware version B (raw .bin preferred, .bin.gz fallback)."""
-    path = os.environ.get("OTA_FIRMWARE_B_BIN") or os.environ.get("OTA_FIRMWARE_B_GZ")
+    """Path to gzip-compressed firmware version B (for OTA test)."""
+    path = os.environ.get("OTA_FIRMWARE_B_GZ")
     if not path:
         pytest.skip("OTA_FIRMWARE_B_GZ not set")
     return path

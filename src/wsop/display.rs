@@ -206,6 +206,35 @@ impl OnboardDisplay {
         }
     }
 
+    /// Sleep for `ms` milliseconds while driving the digit-mode blink
+    /// pattern (FR-131). In non-digit modes this is a plain sleep.
+    ///
+    /// `tick_offset` is a monotonic counter preserved across calls so the
+    /// blink pattern stays smooth across multiple poll waits.
+    pub fn sleep_with_blink(&self, ms: u64, verify_byte: u8, tick_offset: &mut u32) {
+        if self.mode != DisplayMode::Digit || !self.active {
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+            return;
+        }
+
+        const TICK_MS: u64 = 250;
+        let num_ticks = ms / TICK_MS;
+        for _ in 0..num_ticks {
+            let on = self.blink_tick(*tick_offset, verify_byte);
+            if let Some(pin) = self.led_pin {
+                unsafe {
+                    esp_idf_svc::sys::gpio_set_level(pin as i32, on as u32);
+                }
+            }
+            *tick_offset += 1;
+            std::thread::sleep(std::time::Duration::from_millis(TICK_MS));
+        }
+        let remaining = ms % TICK_MS;
+        if remaining > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(remaining));
+        }
+    }
+
     /// Digit-mode blink tick (FR-131).
     ///
     /// Call this at a regular interval (e.g. 250ms). Returns `true` when

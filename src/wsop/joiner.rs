@@ -132,6 +132,8 @@ pub fn run_onboarding(
         let mut action = sm.initial_action();
         // Store the last approved response ciphertext for the Decrypt action
         let mut last_ciphertext: Vec<u8> = Vec::new();
+        // Monotonic tick counter for digit-mode blink pattern (FR-131)
+        let mut blink_tick: u32 = 0;
 
         loop {
             match action {
@@ -194,7 +196,7 @@ pub fn run_onboarding(
 
                 OnboardAction::WaitPoll { ms } => {
                     info!("WSOP: waiting {}ms before polling", ms);
-                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                    display.sleep_with_blink(ms, verify_code.byte, &mut blink_tick);
 
                     match poll_join_response(&nonce) {
                         Ok(Some(response)) => {

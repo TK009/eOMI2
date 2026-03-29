@@ -112,24 +112,49 @@ def device_ip(dut_lock):
     if not firmware:
         pytest.skip("FIRMWARE_PATH not set — cannot flash DUT")
 
-    # Erase NVS partition to remove stale data from previous runs.
-    # Without this, accumulated test data makes the tree too large for
-    # the HTTP response buffer and full-tree reads hang.
-    # We erase only the NVS region (not full flash) so the chip never
-    # boots without firmware — a full erase leaves GPIO 18 floating,
-    # which the WS2812 RGB LED latches as full white.
+    # Locate the partition table CSV next to Cargo.toml (three dirs up from
+    # tests/e2e/conftest.py → project root).
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    partition_table = os.path.join(project_root, "partitions.csv")
+
+    # Erase otadata (0xd000, 0x2000) to reset OTA boot partition selection.
+    # NVS (0x10000) is intentionally preserved so Wi-Fi credentials and
+    # hostname survive between test runs — without credentials the device
+    # boots into AP mode and can't be reached over the network.
     subprocess.run(
-        ["espflash", "erase-region", "--port", port, "0x9000", "0x6000"],
+        ["espflash", "erase-region", "--port", port, "0xd000", "0x2000"],
         check=True,
         timeout=30,
     )
 
-    # Flash (ESP32-S2 with 2 MB firmware takes ~2 min over USB)
-    subprocess.run(
-        ["espflash", "flash", "--port", port, firmware],
-        check=True,
-        timeout=180,
-    )
+    # Write the custom partition table binary BEFORE flashing firmware.
+    # espflash always overwrites 0x8000 with a default (factory-only)
+    # layout, so we write our custom table after espflash to ensure OTA
+    # partitions are present when the device boots.
+    #
+    # Order: erase otadata → flash app (writes default PT) → overwrite
+    # PT with custom → device boots with correct layout on next reset.
+    flash_cmd = ["espflash", "flash", "--port", port]
+    if os.path.isfile(partition_table):
+        flash_cmd += ["--partition-table", partition_table]
+    flash_cmd.append(firmware)
+    subprocess.run(flash_cmd, check=True, timeout=180)
+
+    if os.path.isfile(partition_table):
+        import tempfile
+        pt_bin = os.path.join(tempfile.gettempdir(), "partitions.bin")
+        subprocess.run(
+            ["espflash", "partition-table", partition_table,
+             "--to-binary", "-o", pt_bin],
+            check=True,
+            timeout=10,
+        )
+        subprocess.run(
+            ["espflash", "write-bin", "--port", port, "0x8000", pt_bin],
+            check=True,
+            timeout=30,
+        )
 
     # Discover IP from serial
     ip = _discover_ip(port, timeout=30)
@@ -169,17 +194,18 @@ def ws_url(device_ip):
 
 @pytest.fixture(scope="session")
 def ota_firmware_a_gz():
-    """Path to gzip-compressed firmware version A (for restore)."""
-    path = os.environ.get("OTA_FIRMWARE_A_GZ")
+    """Path to firmware version A (raw .bin preferred, .bin.gz fallback)."""
+    # Prefer raw .bin (no decompressor needed on device, saves ~43 KB heap).
+    path = os.environ.get("OTA_FIRMWARE_A_BIN") or os.environ.get("OTA_FIRMWARE_A_GZ")
     if not path:
-        pytest.skip("OTA_FIRMWARE_A_GZ not set")
+        pytest.skip("OTA_FIRMWARE_A_BIN / OTA_FIRMWARE_A_GZ not set")
     return path
 
 
 @pytest.fixture(scope="session")
 def ota_firmware_b_gz():
-    """Path to gzip-compressed firmware version B (for OTA test)."""
-    path = os.environ.get("OTA_FIRMWARE_B_GZ")
+    """Path to firmware version B (raw .bin preferred, .bin.gz fallback)."""
+    path = os.environ.get("OTA_FIRMWARE_B_BIN") or os.environ.get("OTA_FIRMWARE_B_GZ")
     if not path:
         pytest.skip("OTA_FIRMWARE_B_GZ not set")
     return path
@@ -221,8 +247,15 @@ def bridge(bridge_port):
     """
     firmware = os.environ.get("BRIDGE_FIRMWARE")
     if firmware and os.path.isfile(firmware):
+        bridge_pt = os.path.join(
+            os.path.dirname(os.path.abspath(firmware)), "..", "..", "partitions.csv"
+        )
+        bridge_cmd = ["espflash", "flash", "--port", bridge_port]
+        if os.path.isfile(bridge_pt):
+            bridge_cmd += ["--partition-table", bridge_pt]
+        bridge_cmd.append(firmware)
         subprocess.run(
-            ["espflash", "flash", "--port", bridge_port, firmware],
+            bridge_cmd,
             check=True,
             timeout=180,
         )

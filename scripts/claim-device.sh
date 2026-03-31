@@ -9,7 +9,7 @@
 #   CLAIM_DEVICES="/dev/ttyUSB0" . ./scripts/claim-device.sh     # pin device
 #
 # On success sets: DEVICE_PORT, LOCK_ID, HEARTBEAT_PID
-# On failure returns 1 (all devices locked) or 2 (no devices found).
+# On failure returns 1 (server/parse error), 2 (no devices found), or 3 (all devices busy).
 #
 # Release with:  . ./scripts/release-device.sh
 # Or just exit — the server will expire the lock after TTL (60 s).
@@ -66,6 +66,10 @@ EOF
         if [[ "$err" == *"no devices"* ]]; then
             echo "ERROR: no USB serial devices found" >&2
             return 2
+        fi
+        if [[ "$http_code" == "409" ]]; then
+            echo "BUSY: all devices locked ($err)" >&2
+            return 3
         fi
         echo "ERROR: $err" >&2
         return 1

@@ -226,8 +226,14 @@ class DeviceLock:
 
         Each heartbeat includes the current PID so the server can verify
         the holder is still alive via the OS process table.
+
+        Transient network errors are retried up to ``MAX_HEARTBEAT_FAILURES``
+        consecutive times before giving up — a single blip won't kill the
+        lock while the test is still running.
         """
+        MAX_HEARTBEAT_FAILURES = 3
         base_url = _lock_url()
+        consecutive_failures = 0
         while not stop_event.wait(HEARTBEAT_INTERVAL):
             try:
                 status, _ = _http_json(
@@ -236,7 +242,14 @@ class DeviceLock:
                     body={"pid": os.getpid()},
                     timeout=10,
                 )
-                if status != 200:
+                if status == 200:
+                    consecutive_failures = 0
+                    continue
+                if status == 404:
                     break  # Lock gone (expired or released), stop
+                # Other status — treat as transient
+                consecutive_failures += 1
             except Exception:
-                break  # Server unreachable, stop
+                consecutive_failures += 1
+            if consecutive_failures >= MAX_HEARTBEAT_FAILURES:
+                break  # Server persistently unreachable, stop

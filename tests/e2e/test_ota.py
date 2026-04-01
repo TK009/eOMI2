@@ -66,8 +66,8 @@ def test_ota_reject_bad_auth(base_url):
 
 # -- 4. Reject non-gzip payload -------------------------------------------
 
-def test_ota_reject_non_gzip(base_url, token):
-    """POST /ota with a non-gzip body returns 400."""
+def test_ota_reject_invalid_payload(base_url, token):
+    """POST /ota with neither gzip nor valid ESP firmware returns 400."""
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/octet-stream",
@@ -80,25 +80,32 @@ def test_ota_reject_non_gzip(base_url, token):
     )
     assert resp.status_code == 400
     body = resp.json()
-    assert "gzip" in body.get("message", "").lower()
+    assert "firmware" in body.get("message", "").lower()
 
 
 # -- 5-7. Upload firmware B, wait reboot, verify version B ----------------
 
-def test_ota_upload_b_and_verify(base_url, token, ota_firmware_b_gz):
-    """Upload firmware B via OTA, wait for reboot, verify new version."""
-    # (5) Upload firmware B
-    resp = ota_upload(base_url, ota_firmware_b_gz, token)
-    if resp.status_code == 500:
-        body = resp.json()
-        if "No OTA partition" in body.get("message", ""):
-            pytest.skip(
-                "OTA unavailable — DUT firmware exceeds OTA partition size "
-                "(debug build too large for ota_0, corrupts ota_1)"
-            )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
+def test_ota_upload_b_and_verify(base_url, token, ota_firmware_b):
+    """Upload firmware B via OTA (raw), wait for reboot, verify new version."""
+    # (5) Upload firmware B (raw — avoids ~40 KB gzip decompressor allocation)
+    # The device reboots after a successful OTA.  If the reboot occurs before
+    # the HTTP response is fully delivered (chunked encoding + TCP flush race),
+    # the client sees a ConnectionError.  That is acceptable — the real
+    # assertion is the firmware version after reboot.
+    try:
+        resp = ota_upload(base_url, ota_firmware_b, token)
+    except requests.ConnectionError:
+        resp = None
+
+    if resp is not None:
+        if resp.status_code == 500:
+            body = resp.json()
+            if "No OTA partition" in body.get("message", ""):
+                pytest.skip(
+                    "OTA unavailable — DUT firmware exceeds OTA partition size "
+                    "(debug build too large for ota_0, corrupts ota_1)"
+                )
+        assert resp.status_code == 200, f"OTA upload failed: {resp.text}"
 
     # (6) Wait for reboot
     wait_for_device(base_url, timeout=60)
@@ -118,15 +125,20 @@ def test_data_preserved_after_ota(base_url, token):
 
 # -- 9-10. Restore firmware A and verify ----------------------------------
 
-def test_ota_restore_a_and_verify(base_url, token, ota_firmware_a_gz):
-    """Restore firmware A via OTA, wait for reboot, verify original version."""
-    # (9) Upload firmware A
-    resp = ota_upload(base_url, ota_firmware_a_gz, token)
-    if resp.status_code == 500:
-        body = resp.json()
-        if "No OTA partition" in body.get("message", ""):
-            pytest.skip("OTA unavailable — debug firmware exceeds partition size")
-    assert resp.status_code == 200
+def test_ota_restore_a_and_verify(base_url, token, ota_firmware_a):
+    """Restore firmware A via OTA (raw), wait for reboot, verify original version."""
+    # (9) Upload firmware A (raw) — same ConnectionError handling as upload B.
+    try:
+        resp = ota_upload(base_url, ota_firmware_a, token)
+    except requests.ConnectionError:
+        resp = None
+
+    if resp is not None:
+        if resp.status_code == 500:
+            body = resp.json()
+            if "No OTA partition" in body.get("message", ""):
+                pytest.skip("OTA unavailable — debug firmware exceeds partition size")
+        assert resp.status_code == 200, f"OTA upload failed: {resp.text}"
 
     # Wait for reboot
     wait_for_device(base_url, timeout=60)

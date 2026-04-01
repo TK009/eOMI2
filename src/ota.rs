@@ -23,6 +23,9 @@ const OTA_TIMEOUT_US: i64 = 5 * 60 * 1_000_000;
 /// Gzip magic bytes (RFC 1952).
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
+/// ESP-IDF application image magic byte (first byte of a valid image).
+const ESP_IMAGE_MAGIC: u8 = 0xE9;
+
 /// Global OTA lock — only one update at a time.
 static OTA_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
@@ -69,7 +72,12 @@ fn abort_ota(handle: esp_idf_svc::sys::esp_ota_handle_t) {
     }
 }
 
-/// Write decompressed output from a single feed() call to OTA flash.
+/// Write output to OTA flash, yielding periodically.
+///
+/// Flash erase/write blocks the CPU; without yielding, the idle task starves
+/// and the task watchdog panics after ~5 s.  A short sleep after each write
+/// lets the scheduler run the WiFi stack, TCP ACK processing, and the
+/// watchdog feeder.
 fn write_decompressed(
     out: &[u8],
     handle: esp_idf_svc::sys::esp_ota_handle_t,
@@ -86,13 +94,153 @@ fn write_decompressed(
         return false;
     }
     *total_out += out.len();
+    // Yield so the idle task / WiFi stack can run (prevents watchdog timeout).
+    std::thread::sleep(std::time::Duration::from_millis(1));
     true
 }
 
-/// Handle a POST /ota request — streaming gzip firmware upload.
+/// Stream gzip-compressed firmware: read → decompress → write to OTA flash.
 ///
-/// Steps: (1) auth, (2) OTA lock, (3) Content-Length check, (4) gzip magic,
-/// (5-7) streaming read→decompress→write, (8) validate, (9) set boot, (10) reboot.
+/// Returns `true` on success. On failure, aborts the OTA handle and returns
+/// `false`.
+///
+/// `#[inline(never)]` keeps the ~12 KB stack frame (8 KB GzipStreamDecompressor
+/// + 4 KB read buffer) off `handle_ota`'s frame, which shares the 16 KB HTTP
+/// thread stack with ESP-IDF framework code.
+#[inline(never)]
+fn stream_gzip_ota(
+    req: &mut Req<'_, '_>,
+    magic: &[u8; 2],
+    handle: esp_idf_svc::sys::esp_ota_handle_t,
+    content_len: usize,
+    start_us: i64,
+    total_in: &mut usize,
+    total_out: &mut usize,
+) -> bool {
+    // Box the decompressor (~8 KB struct with inflate_buf) to keep it off the
+    // 16 KB HTTP thread stack — only an 8-byte pointer lives on the stack.
+    let mut gz = Box::new(GzipStreamDecompressor::new());
+    let mut buf = [0u8; OTA_READ_BUF];
+
+    // Feed the gzip magic bytes through decompressor
+    match gz.feed(magic) {
+        Ok(out) => {
+            if !write_decompressed(out, handle, total_out) {
+                abort_ota(handle);
+                return false;
+            }
+        }
+        Err(_) => {
+            abort_ota(handle);
+            return false;
+        }
+    }
+
+    // Stream remaining body
+    while *total_in < content_len {
+        let now = unsafe { esp_idf_svc::sys::esp_timer_get_time() };
+        if now - start_us > OTA_TIMEOUT_US {
+            warn!("OTA: timeout after {}s", (now - start_us) / 1_000_000);
+            abort_ota(handle);
+            return false;
+        }
+
+        let to_read = core::cmp::min(OTA_READ_BUF, content_len - *total_in);
+        let n = match req.read(&mut buf[..to_read]) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                warn!("OTA: read error: {}", e);
+                abort_ota(handle);
+                return false;
+            }
+        };
+        *total_in += n;
+
+        match gz.feed(&buf[..n]) {
+            Ok(out) => {
+                if !write_decompressed(out, handle, total_out) {
+                    abort_ota(handle);
+                    return false;
+                }
+            }
+            Err(e) => {
+                warn!("OTA: decompress: {:?}", e);
+                abort_ota(handle);
+                return false;
+            }
+        }
+    }
+
+    // Verify gzip stream completed
+    if let Err(e) = gz.finish() {
+        warn!("OTA: gzip finish: {:?}", e);
+        abort_ota(handle);
+        return false;
+    }
+
+    true
+}
+
+/// Stream raw (uncompressed) firmware directly to OTA flash.
+///
+/// Avoids allocating the ~40 KB gzip InflateState, which may exceed free heap
+/// on memory-constrained targets like the ESP32-S2.
+///
+/// Returns `true` on success. On failure, aborts the OTA handle and returns
+/// `false`.
+#[inline(never)]
+fn stream_raw_ota(
+    req: &mut Req<'_, '_>,
+    magic: &[u8; 2],
+    handle: esp_idf_svc::sys::esp_ota_handle_t,
+    content_len: usize,
+    start_us: i64,
+    total_in: &mut usize,
+    total_out: &mut usize,
+) -> bool {
+    let mut buf = [0u8; OTA_READ_BUF];
+
+    // Write the first 2 bytes (already read for format detection)
+    if !write_decompressed(magic, handle, total_out) {
+        abort_ota(handle);
+        return false;
+    }
+
+    // Stream remaining body directly to flash
+    while *total_in < content_len {
+        let now = unsafe { esp_idf_svc::sys::esp_timer_get_time() };
+        if now - start_us > OTA_TIMEOUT_US {
+            warn!("OTA: timeout after {}s", (now - start_us) / 1_000_000);
+            abort_ota(handle);
+            return false;
+        }
+
+        let to_read = core::cmp::min(OTA_READ_BUF, content_len - *total_in);
+        let n = match req.read(&mut buf[..to_read]) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                warn!("OTA: read error: {}", e);
+                abort_ota(handle);
+                return false;
+            }
+        };
+        *total_in += n;
+
+        if !write_decompressed(&buf[..n], handle, total_out) {
+            abort_ota(handle);
+            return false;
+        }
+    }
+
+    true
+}
+
+/// Handle a POST /ota request — streaming firmware upload (gzip or raw).
+///
+/// Steps: (1) auth, (2) OTA lock, (3) Content-Length check, (4) format detect,
+/// (5-7) streaming read→[decompress→]write, (8) validate, (9) set boot, (10) reboot.
 pub fn handle_ota(mut req: Req<'_, '_>, api_token: &str) {
     // (2) Auth check
     if !check_bearer_auth(req.header("authorization"), api_token) {
@@ -137,7 +285,7 @@ pub fn handle_ota(mut req: Req<'_, '_>, api_token: &str) {
         return;
     }
 
-    // (5) Read first 2 bytes for gzip magic
+    // (5) Read first 2 bytes to detect payload format
     let mut magic = [0u8; 2];
     let mut magic_pos = 0;
     while magic_pos < 2 {
@@ -151,17 +299,27 @@ pub fn handle_ota(mut req: Req<'_, '_>, api_token: &str) {
             }
         }
     }
-    if magic_pos < 2 || magic != GZIP_MAGIC {
+    if magic_pos < 2 {
+        send_json(req, 400, "Bad Request", &json_err("Payload too short"));
+        return;
+    }
+
+    let is_gzip = magic == GZIP_MAGIC;
+    if !is_gzip && magic[0] != ESP_IMAGE_MAGIC {
         send_json(
             req,
             400,
             "Bad Request",
-            &json_err("Payload must be gzip compressed"),
+            &json_err("Payload must be gzip-compressed or raw ESP firmware"),
         );
         return;
     }
 
-    info!("OTA: starting, compressed={}B", content_len);
+    info!(
+        "OTA: starting, {}={}B",
+        if is_gzip { "compressed" } else { "raw" },
+        content_len,
+    );
 
     // Get next OTA partition
     let partition = unsafe {
@@ -176,11 +334,19 @@ pub fn handle_ota(mut req: Req<'_, '_>, api_token: &str) {
         );
         return;
     }
-
-    // Begin OTA (size=0 → sequential writes, erase as needed)
+    // Begin OTA with sequential writes — erase sectors incrementally during
+    // esp_ota_write rather than erasing the entire ~2 MB partition upfront.
+    // Passing 0 or OTA_SIZE_UNKNOWN would erase the whole partition in a
+    // single blocking call (10–20 s), starving the WiFi stack and causing
+    // TCP timeouts / task-watchdog panics.
     let mut handle: esp_idf_svc::sys::esp_ota_handle_t = 0;
-    let err =
-        unsafe { esp_idf_svc::sys::esp_ota_begin(partition, 0, &mut handle) };
+    let err = unsafe {
+        esp_idf_svc::sys::esp_ota_begin(
+            partition,
+            esp_idf_svc::sys::OTA_WITH_SEQUENTIAL_WRITES as usize,
+            &mut handle,
+        )
+    };
     if err != esp_idf_svc::sys::ESP_OK {
         warn!("OTA: begin failed: {}", err);
         send_json(
@@ -192,94 +358,26 @@ pub fn handle_ota(mut req: Req<'_, '_>, api_token: &str) {
         return;
     }
 
-    // (6)+(7) Streaming read → GzipStreamDecompressor → esp_ota_write
     let start_us = unsafe { esp_idf_svc::sys::esp_timer_get_time() };
-    let mut gz = GzipStreamDecompressor::new();
-    let mut buf = [0u8; OTA_READ_BUF];
     let mut total_in: usize = 2; // magic bytes already read
     let mut total_out: usize = 0;
 
-    // Feed the gzip magic bytes through decompressor
-    match gz.feed(&magic) {
-        Ok(out) => {
-            if !write_decompressed(out, handle, &mut total_out) {
-                abort_ota(handle);
-                send_json(req, 500, "Internal Server Error", &json_err("OTA write failed"));
-                return;
-            }
-        }
-        Err(_) => {
-            abort_ota(handle);
-            send_json(req, 400, "Bad Request", &json_err("Decompression failed"));
-            return;
-        }
-    }
+    // Each streaming helper owns its 4 KB read buffer on its own stack
+    // frame; when it returns the frame is freed, leaving enough stack for
+    // esp_ota_end's image-validation calls (HTTP thread = 16 KB stack).
+    let ok = if is_gzip {
+        stream_gzip_ota(&mut req, &magic, handle, content_len, start_us, &mut total_in, &mut total_out)
+    } else {
+        stream_raw_ota(&mut req, &magic, handle, content_len, start_us, &mut total_in, &mut total_out)
+    };
 
-    // Stream remaining body
-    while total_in < content_len {
-        let now = unsafe { esp_idf_svc::sys::esp_timer_get_time() };
-        if now - start_us > OTA_TIMEOUT_US {
-            warn!("OTA: timeout after {}s", (now - start_us) / 1_000_000);
-            abort_ota(handle);
-            send_json(req, 408, "Request Timeout", &json_err("OTA timeout exceeded"));
-            return;
-        }
-
-        let to_read = core::cmp::min(OTA_READ_BUF, content_len - total_in);
-        let n = match req.read(&mut buf[..to_read]) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(e) => {
-                warn!("OTA: read error: {}", e);
-                abort_ota(handle);
-                send_json(
-                    req,
-                    500,
-                    "Internal Server Error",
-                    &json_err("Body read failed"),
-                );
-                return;
-            }
-        };
-        total_in += n;
-
-        match gz.feed(&buf[..n]) {
-            Ok(out) => {
-                if !write_decompressed(out, handle, &mut total_out) {
-                    abort_ota(handle);
-                    send_json(
-                        req,
-                        500,
-                        "Internal Server Error",
-                        &json_err("OTA write failed"),
-                    );
-                    return;
-                }
-            }
-            Err(e) => {
-                warn!("OTA: decompress: {:?}", e);
-                abort_ota(handle);
-                send_json(req, 400, "Bad Request", &json_err("Decompression failed"));
-                return;
-            }
-        }
-    }
-
-    // Verify gzip stream completed
-    if let Err(e) = gz.finish() {
-        warn!("OTA: gzip finish: {:?}", e);
-        abort_ota(handle);
-        let msg = match e {
-            GzipStreamError::Truncated => "Gzip stream truncated",
-            GzipStreamError::CrcMismatch => "Gzip CRC mismatch",
-            GzipStreamError::SizeMismatch => "Gzip size mismatch",
-            _ => "Decompression error",
-        };
-        send_json(req, 400, "Bad Request", &json_err(msg));
+    if !ok {
+        send_json(req, 500, "Internal Server Error", &json_err("OTA streaming failed"));
         return;
     }
 
-    info!("OTA: decompressed {}B from {}B", total_out, total_in);
+    info!("OTA: wrote {}B from {}B{}", total_out, total_in,
+        if is_gzip { " (gzip)" } else { " (raw)" });
 
     // (8) esp_ota_end — validates the written image
     let err = unsafe { esp_idf_svc::sys::esp_ota_end(handle) };

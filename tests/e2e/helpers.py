@@ -32,9 +32,9 @@ def run_async(coro):
     return asyncio.run(coro)
 
 
-def ota_upload(base_url, firmware_gz_path, token):
-    """Upload gzip-compressed firmware via POST /ota."""
-    with open(firmware_gz_path, "rb") as f:
+def ota_upload(base_url, firmware_path, token):
+    """Upload firmware via POST /ota (gzip-compressed or raw)."""
+    with open(firmware_path, "rb") as f:
         data = f.read()
     headers = {
         "Authorization": f"Bearer {token}",

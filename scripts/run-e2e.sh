@@ -83,16 +83,8 @@ FIRMWARE_A_BIN="$PROJECT_ROOT/target/xtensa-esp32s2-espidf/release/firmware-a.bi
 FIRMWARE_B_BIN="$PROJECT_ROOT/target/xtensa-esp32s2-espidf/release/firmware-b.bin"
 
 echo "── Building OTA binaries (release) ──"
-# Build release version "A" for OTA
-if ! (cd "$PROJECT_ROOT" && cargo build --release \
-    --no-default-features --features "$BUILD_FEATURES"); then
-    echo "ERROR: firmware A release build failed" >&2
-    exit 1
-fi
-espflash save-image --chip esp32s2 --format esp-idf "$OTA_FIRMWARE" "$FIRMWARE_A_BIN"
-gzip -c "$FIRMWARE_A_BIN" > "$FIRMWARE_A_BIN.gz"
-
-# Build release version "B" with a different FIRMWARE_VERSION for OTA test
+# Build B first so A is the final release ELF — FIRMWARE_PATH defaults to
+# the release ELF for the DUT flash, which must be firmware A.
 if ! (cd "$PROJECT_ROOT" && FIRMWARE_VERSION="e2e-ota-test" cargo build --release \
     --no-default-features --features "$BUILD_FEATURES"); then
     echo "ERROR: firmware B release build failed" >&2
@@ -101,10 +93,22 @@ fi
 espflash save-image --chip esp32s2 --format esp-idf "$OTA_FIRMWARE" "$FIRMWARE_B_BIN"
 gzip -c "$FIRMWARE_B_BIN" > "$FIRMWARE_B_BIN.gz"
 
+# Build release version "A" (normal version) — must be last so OTA_FIRMWARE
+# ELF is version A when used as FIRMWARE_PATH for DUT flashing.
+if ! (cd "$PROJECT_ROOT" && cargo build --release \
+    --no-default-features --features "$BUILD_FEATURES"); then
+    echo "ERROR: firmware A release build failed" >&2
+    exit 1
+fi
+espflash save-image --chip esp32s2 --format esp-idf "$OTA_FIRMWARE" "$FIRMWARE_A_BIN"
+gzip -c "$FIRMWARE_A_BIN" > "$FIRMWARE_A_BIN.gz"
+
 export OTA_FIRMWARE_A_GZ="$FIRMWARE_A_BIN.gz"
 export OTA_FIRMWARE_B_GZ="$FIRMWARE_B_BIN.gz"
-echo "OTA firmware A: $OTA_FIRMWARE_A_GZ"
-echo "OTA firmware B: $OTA_FIRMWARE_B_GZ"
+export OTA_FIRMWARE_A="$FIRMWARE_A_BIN"
+export OTA_FIRMWARE_B="$FIRMWARE_B_BIN"
+echo "OTA firmware A: $OTA_FIRMWARE_A (gz: $OTA_FIRMWARE_A_GZ)"
+echo "OTA firmware B: $OTA_FIRMWARE_B (gz: $OTA_FIRMWARE_B_GZ)"
 
 # ── 3. Memory budget check ──────────────────────────────────────────────
 echo "── Memory budget check ──"
@@ -133,7 +137,8 @@ fi
 
 # ── 5. Export paths and env vars for pytest ─────────────────────────────
 # FIRMWARE_PATH tells conftest.py where the DUT firmware binary is.
-# Respect existing FIRMWARE_PATH (e.g. to test with release firmware).
+# Default to debug firmware for the main test suite.  OTA tests run in a
+# separate pytest session with release firmware (see step 6b below).
 export FIRMWARE_PATH="${FIRMWARE_PATH:-$FIRMWARE}"
 
 # Locate .env: project root > repo root > rig root (Gas Town worktrees).
@@ -171,7 +176,32 @@ done
 unset _key _val
 
 # ── 6. Run pytest ────────────────────────────────────────────────────────
-echo "── Running e2e tests ──"
 cd "$PROJECT_ROOT/tests/e2e"
 uv sync --quiet
-exec uv run pytest "${PYTEST_ARGS[@]+"${PYTEST_ARGS[@]}"}"
+
+# If the user passed explicit pytest args (e.g. -k filter), run a single
+# session with whatever FIRMWARE_PATH is set.
+if [[ ${#PYTEST_ARGS[@]} -gt 0 ]]; then
+    echo "── Running e2e tests (custom args) ──"
+    exec uv run pytest "${PYTEST_ARGS[@]}"
+fi
+
+# Otherwise run two sessions:
+#   6a. Non-OTA tests with debug firmware (default FIRMWARE_PATH)
+#   6b. OTA tests with release firmware (needs OTA partition table)
+echo "── Running e2e tests (non-OTA, debug firmware) ──"
+NON_OTA_RC=0
+uv run pytest -k "not ota" || NON_OTA_RC=$?
+
+echo "── Running OTA e2e tests (release firmware) ──"
+OTA_RC=0
+FIRMWARE_PATH="$OTA_FIRMWARE" uv run pytest -k "ota" || OTA_RC=$?
+
+# Exit with failure if either session failed.
+if [[ $NON_OTA_RC -ne 0 ]]; then
+    echo "Non-OTA tests failed (exit $NON_OTA_RC)"
+fi
+if [[ $OTA_RC -ne 0 ]]; then
+    echo "OTA tests failed (exit $OTA_RC)"
+fi
+exit $(( NON_OTA_RC > OTA_RC ? NON_OTA_RC : OTA_RC ))

@@ -130,10 +130,23 @@ def device_ip(dut_lock):
     )
 
     # Use the custom partition table when the firmware fits in the OTA
-    # partition (0x1E0000 = 1,966,080 bytes).  Debug builds typically exceed
-    # this and need the default factory layout (larger single partition).
+    # partition (0x1E0000 = 1,966,080 bytes).  The ELF file size overstates
+    # the flash image (includes debug info, symbol tables), so convert to
+    # binary first for an accurate check.
     OTA_PARTITION_SIZE = 0x1E0000
-    firmware_size = os.path.getsize(firmware)
+    import tempfile as _tmpmod
+    _fw_bin = os.path.join(_tmpmod.gettempdir(), "firmware-size-check.bin")
+    try:
+        subprocess.run(
+            ["espflash", "save-image", "--chip", "esp32s2",
+             "--format", "esp-idf", firmware, _fw_bin],
+            check=True, timeout=30, capture_output=True,
+        )
+        firmware_size = os.path.getsize(_fw_bin)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # Fallback: use ELF size (conservative — may reject firmware that
+        # would actually fit, but never falsely accepts oversized firmware).
+        firmware_size = os.path.getsize(firmware)
     use_custom_pt = os.path.isfile(partition_table) and firmware_size <= OTA_PARTITION_SIZE
 
     flash_cmd = ["espflash", "flash", "--port", port]
@@ -212,6 +225,24 @@ def ota_firmware_b_gz():
     path = os.environ.get("OTA_FIRMWARE_B_GZ")
     if not path:
         pytest.skip("OTA_FIRMWARE_B_GZ not set")
+    return path
+
+
+@pytest.fixture(scope="session")
+def ota_firmware_a():
+    """Path to raw (uncompressed) firmware version A (for restore)."""
+    path = os.environ.get("OTA_FIRMWARE_A")
+    if not path:
+        pytest.skip("OTA_FIRMWARE_A not set")
+    return path
+
+
+@pytest.fixture(scope="session")
+def ota_firmware_b():
+    """Path to raw (uncompressed) firmware version B (for OTA test)."""
+    path = os.environ.get("OTA_FIRMWARE_B")
+    if not path:
+        pytest.skip("OTA_FIRMWARE_B not set")
     return path
 
 

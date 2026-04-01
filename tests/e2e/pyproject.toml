@@ -12,5 +12,5 @@ markers = [
     "stress: long-running stress and stability tests",
     "provisioning: WiFi provisioning flow tests (portal, form submit, reconnect)",
     "mdns: mDNS and DNS-SD discovery tests",
-    "ota: OTA firmware update tests (requires OTA_FIRMWARE_A_GZ and OTA_FIRMWARE_B_GZ)",
+    "ota: OTA firmware update tests (requires OTA_FIRMWARE_A and OTA_FIRMWARE_B)",
 ]

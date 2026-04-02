@@ -147,6 +147,9 @@ def device_ip(dut_lock):
         # Fallback: use ELF size (conservative — may reject firmware that
         # would actually fit, but never falsely accepts oversized firmware).
         firmware_size = os.path.getsize(firmware)
+    finally:
+        if os.path.exists(_fw_bin):
+            os.unlink(_fw_bin)
     use_custom_pt = os.path.isfile(partition_table) and firmware_size <= OTA_PARTITION_SIZE
 
     flash_cmd = ["espflash", "flash", "--port", port]

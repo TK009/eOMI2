@@ -182,6 +182,17 @@ uv sync --quiet
 # If the user passed explicit pytest args (e.g. -k filter), run a single
 # session with whatever FIRMWARE_PATH is set.
 if [[ ${#PYTEST_ARGS[@]} -gt 0 ]]; then
+    # Warn if args look like they target OTA tests — the automatic
+    # debug/release firmware split only applies to the two-session path.
+    for _arg in "${PYTEST_ARGS[@]}"; do
+        if [[ "$_arg" == *ota* ]]; then
+            echo "WARNING: OTA tests via custom args use FIRMWARE_PATH=$FIRMWARE_PATH"
+            echo "         Release firmware is only auto-selected in the default two-session mode."
+            echo "         To use release firmware: FIRMWARE_PATH=<release-elf> ./scripts/run-e2e.sh -- -k ota"
+            break
+        fi
+    done
+    unset _arg
     echo "── Running e2e tests (custom args) ──"
     exec uv run pytest "${PYTEST_ARGS[@]}"
 fi
